@@ -102,6 +102,10 @@ class LlamaCppBackend(BaseBackend):
                 {"role": "user", "content": _build_user_prompt(anchors)},
             ],
             "temperature": 0,
+            # Qwen3.5 預設開啟 thinking，會先吐數千字推理才給答案，
+            # 常常在輸出 JSON 之前就撞到長度上限（finish_reason=length）。
+            # 本任務是分類題，不需要推理，一律關掉。
+            "chat_template_kwargs": {"enable_thinking": False},
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
