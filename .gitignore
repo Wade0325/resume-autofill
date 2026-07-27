@@ -56,11 +56,15 @@ env/
 htmlcov/
 coverage.xml
 
-# ---- 模型 / 大型檔案 ----
+# ---- 模型 / 執行檔 / 大型檔案 ----
 *.gguf
 *.bin
 *.safetensors
 models/
+bin/
+llama-server*
+*.exe
+!launcher/**/*.cs
 
 # ---- 環境變數 ----
 .env

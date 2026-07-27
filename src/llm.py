@@ -7,11 +7,11 @@
 把 JSON Schema 交給推論引擎，引擎在每一步只允許符合 schema 的 token 被取樣，
 所以「輸出不是合法 JSON」或「模型自己發明欄位名稱」在機制上就不可能發生。
 
-  * Ollama    → 傳 format=<JSON Schema>          （docs.ollama.com/capabilities/structured-outputs）
-  * llama.cpp → 傳 response_format.json_schema   （llama-server 的 OpenAI 相容端點）
+推論引擎固定使用 llama.cpp：對 llama-server 的 OpenAI 相容端點傳
+response_format.json_schema，llama.cpp 會把它編成 GBNF grammar 來約束取樣。
 
-因為輸出被鎖死成一個 enum 選擇題，這件事 2B~4B 的模型就做得很好，
-不需要 70B 等級的模型。
+因為輸出被鎖死成一個 enum 選擇題，這件事 4B 的模型就做得很好，
+不需要 70B 等級的模型（預設 Qwen3.5-4B-Instruct-Q4_K_M）。
 """
 
 from __future__ import annotations
@@ -78,40 +78,6 @@ class BaseBackend:
         return False
 
 
-class OllamaBackend(BaseBackend):
-    name = "ollama"
-
-    def __init__(self, model: str = "qwen3.5:4b",
-                 host: str = "http://localhost:11434",
-                 timeout: int = 180, num_ctx: int = 8192):
-        self.model, self.host, self.timeout, self.num_ctx = model, host, timeout, num_ctx
-
-    def available(self) -> bool:
-        try:
-            r = requests.get(f"{self.host}/api/tags", timeout=3)
-            return r.status_code == 200
-        except Exception:
-            return False
-
-    def map_anchors(self, anchors):
-        if not anchors:
-            return []
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": _build_user_prompt(anchors)},
-            ],
-            "stream": False,
-            "format": _build_schema([a["id"] for a in anchors]),
-            "options": {"temperature": 0, "num_ctx": self.num_ctx},
-        }
-        r = requests.post(f"{self.host}/api/chat", json=payload, timeout=self.timeout)
-        r.raise_for_status()
-        content = r.json()["message"]["content"]
-        return json.loads(content).get("mappings", [])
-
-
 class LlamaCppBackend(BaseBackend):
     """llama-server --jinja -m model.gguf ；OpenAI 相容端點。"""
     name = "llamacpp"
@@ -165,13 +131,9 @@ class NullBackend(BaseBackend):
 
 
 def get_backend(cfg: Dict[str, Any]) -> BaseBackend:
-    kind = (cfg.get("backend") or "ollama").lower()
-    if kind == "ollama":
-        b = OllamaBackend(cfg.get("model", "qwen3.5:4b"),
-                          cfg.get("host", "http://localhost:11434"))
-    elif kind in ("llamacpp", "llama.cpp"):
-        b = LlamaCppBackend(cfg.get("model", "local"),
-                            cfg.get("host", "http://localhost:8080"))
-    else:
+    kind = (cfg.get("backend") or "llamacpp").lower()
+    if kind == "null":
         return NullBackend()
+    b = LlamaCppBackend(cfg.get("model", "local"),
+                        cfg.get("host", "http://localhost:8080"))
     return b if b.available() else NullBackend()
