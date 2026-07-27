@@ -155,16 +155,20 @@ AI 只用來收尾少數比對不到的，所以速度快、成本低，第二�
 5. **有無痛升級路徑** — 覺得 4B 判斷不夠準，換成同系列的 `Qwen3.5-9B`（約 7 GB，8 GB VRAM 剛好塞得下），只要換 GGUF 檔案路徑，程式一行都不用改。
 
 ```bash
-# 取得模型（GGUF 格式，放進發佈資料夾的 models/）
-huggingface-cli download Qwen/Qwen3.5-4B-Instruct-GGUF \
-    Qwen3.5-4B-Instruct-Q4_K_M.gguf --local-dir models/
+# 1) llama.cpp 二進位檔（Windows + NVIDIA）
+#    llama-b<build>-bin-win-cuda-13.3-x64.zip 與 cudart-llama-bin-win-cuda-13.3-x64.zip
+#    都解壓到 bin/          https://github.com/ggml-org/llama.cpp/releases
 
-# 啟動推論服務（正式版由 ResumeAutoFill.exe 在背景執行）
-llama-server -m models/Qwen3.5-4B-Instruct-Q4_K_M.gguf \
-    --port 8080 --ctx-size 8192 --jinja
+# 2) 模型（官方 Qwen/Qwen3.5-4B 未提供 GGUF，使用 unsloth 的量化版）
+curl -L -o models/Qwen3.5-4B-Q4_K_M.gguf \
+  https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf
+
+# 3) 啟動推論服務（正式版由 ResumeAutoFill.exe 在背景執行）
+.\scripts\start-llama-server.ps1
 ```
 
 上下文開 8192 就夠——本專案一次只丟幾個標籤給模型看，不需要長上下文。
+`--temp 0` 讓分類結果可重現，`--n-gpu-layers 999` 把整個模型放上 GPU。
 
 ### 其他評估過的選項
 

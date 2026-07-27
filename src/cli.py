@@ -150,7 +150,7 @@ def build_parser():
     s.add_argument("file")
     s.add_argument("-o", "--output")
     s.add_argument("--profile", help="指定個人資料檔")
-    s.add_argument("--model", help="覆寫模型名稱，例如 Qwen3.5-9B-Instruct-Q4_K_M")
+    s.add_argument("--model", help="覆寫模型名稱，例如 Qwen3.5-9B-Q4_K_M")
     s.add_argument("--backend", choices=["llamacpp", "null"])
     s.add_argument("--dry-run", action="store_true", help="只列出計畫不寫檔")
     s.add_argument("--allow-sensitive", action="store_true",

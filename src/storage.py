@@ -26,7 +26,7 @@ HOME = Path(os.environ.get("RESUME_AUTOFILL_HOME",
 
 DEFAULT_CONFIG = {
     "backend": "llamacpp",               # llamacpp | null
-    "model": "Qwen3.5-4B-Instruct-Q4_K_M",
+    "model": "Qwen3.5-4B-Q4_K_M",
     "host": "http://localhost:8080",
     "min_confidence": 0.60,
     "allow_sensitive": False,            # 身分證字號等，預設不自動填
@@ -101,11 +101,17 @@ def init_home() -> Path:
     return HOME
 
 
+def _read_json(path: Path) -> Dict[str, Any]:
+    # utf-8-sig：Windows 的記事本、PowerShell Out-File 都會寫入 BOM，
+    # 用 utf-8 讀會直接炸掉。utf-8-sig 有無 BOM 都能正確處理。
+    return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
 def load_config() -> Dict[str, Any]:
     p = HOME / "config.json"
     cfg = dict(DEFAULT_CONFIG)
     if p.exists():
-        cfg.update(json.loads(p.read_text(encoding="utf-8")))
+        cfg.update(_read_json(p))
     return cfg
 
 
@@ -113,7 +119,7 @@ def load_profile(path: Optional[str] = None) -> Dict[str, Any]:
     p = Path(path) if path else HOME / "profile.json"
     if not p.exists():
         raise FileNotFoundError(f"找不到個人資料檔 {p}，請先執行 `resume-autofill init`")
-    return json.loads(p.read_text(encoding="utf-8"))
+    return _read_json(p)
 
 
 # ---------------- 範本快取 ----------------
@@ -125,7 +131,7 @@ def load_template(fingerprint: str) -> Dict[str, str]:
     p = template_path(fingerprint)
     if not p.exists():
         return {}
-    return json.loads(p.read_text(encoding="utf-8")).get("mapping", {})
+    return _read_json(p).get("mapping", {})
 
 
 def save_template(fingerprint: str, mapping: Dict[str, str],
