@@ -4,6 +4,9 @@ profile.json
 config.json
 .resume_autofill/
 *.profile.json
+*.db
+*.db-wal
+*.db-shm
 
 # 使用者放入 / 產出的履歷檔案
 input/*
