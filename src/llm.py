@@ -83,7 +83,7 @@ class LlamaCppBackend(BaseBackend):
     name = "llamacpp"
 
     def __init__(self, model: str = "local",
-                 host: str = "http://localhost:8080", timeout: int = 180):
+                 host: str = "http://localhost:8085", timeout: int = 180):
         self.model, self.host, self.timeout = model, host, timeout
 
     def available(self) -> bool:
@@ -139,5 +139,5 @@ def get_backend(cfg: Dict[str, Any]) -> BaseBackend:
     if kind == "null":
         return NullBackend()
     b = LlamaCppBackend(cfg.get("model", "local"),
-                        cfg.get("host", "http://localhost:8080"))
+                        cfg.get("host", "http://localhost:8085"))
     return b if b.available() else NullBackend()

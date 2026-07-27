@@ -1,4 +1,4 @@
-<#
+﻿<#
     開發用：啟動 llama-server（正式版由 ResumeAutoFill.exe 在背景執行）
 
     用法：  .\scripts\start-llama-server.ps1
@@ -6,7 +6,7 @@
 #>
 param(
     [string]$Model   = "models\Qwen3.5-4B-Q4_K_M.gguf",
-    [int]   $Port    = 8080,
+    [int]   $Port    = 8085,
     [int]   $CtxSize = 8192,
     [int]   $NGpuLayers = 999          # 999 = 全部丟給 GPU；純 CPU 跑改成 0
 )
