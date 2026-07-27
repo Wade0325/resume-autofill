@@ -1,0 +1,81 @@
+# ---- 個人資料（本專案最重要的一條）----
+# 履歷內含姓名、身分證字號、電話、地址，絕對不能進版控
+profile.json
+config.json
+.resume_autofill/
+*.profile.json
+
+# 使用者放入 / 產出的履歷檔案
+input/*
+output/*
+!input/.gitkeep
+!output/.gitkeep
+!output/範例_自動填寫成果.docx
+
+# Word / LibreOffice 暫存檔
+~$*.docx
+~$*.doc
+.~lock.*#
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# 虛擬環境
+.venv/
+venv/
+ENV/
+env/
+
+# 測試 / 型別檢查快取
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# ---- 模型 / 大型檔案 ----
+*.gguf
+*.bin
+*.safetensors
+models/
+
+# ---- 環境變數 ----
+.env
+.env.*
+!.env.example
+
+# ---- 編輯器 / 作業系統 ----
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Claude Code 本機設定 ----
+.claude/settings.local.json
+.claude/*.local.json
