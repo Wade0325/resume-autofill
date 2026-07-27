@@ -14,10 +14,13 @@
 from __future__ import annotations
 
 import difflib
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from .schema import (ALIAS_INDEX, BY_KEY, SENSITIVE_KEYS, normalize_label)
+
+log = logging.getLogger(__name__)
 
 LLM_BATCH_SIZE = 12          # 一次丟給模型的空格數，太多會降低準確率
 FUZZY_CUTOFF = 0.86          # 模糊比對門檻
@@ -59,19 +62,16 @@ def rule_match(label: str) -> Tuple[Optional[str], float, str]:
 # --------------------------------------------------------------------------
 # 主流程
 # --------------------------------------------------------------------------
-def resolve(anchors: List[Dict[str, Any]],
-            profile: Dict[str, Any],
-            backend,
-            cached_map: Optional[Dict[str, str]] = None,
-            min_confidence: float = 0.60,
-            allow_sensitive: bool = False) -> Tuple[List[FillOp], List[FillOp]]:
-    """
-    回傳 (ops, skipped)
-      ops     : 準備寫入的操作（仍建議讓使用者過目）
-      skipped : 沒填的空格與原因，方便使用者手動補
+def decide(anchors: List[Dict[str, Any]], backend,
+           cached_map: Optional[Dict[str, str]] = None
+           ) -> Dict[str, Tuple[str, float, str]]:
+    """三層比對，決定每個 anchor 對到哪個欄位。回傳 anchor_id -> (key, conf, source)。
+
+    與 build_plan 分開的理由：使用者事後修正某一格時，只需要改 decided 再重跑
+    build_plan，不必重新解析檔案、更不必再呼叫模型。
     """
     cached_map = cached_map or {}
-    decided: Dict[str, Tuple[str, float, str]] = {}      # anchor_id -> (key, conf, source)
+    decided: Dict[str, Tuple[str, float, str]] = {}
     pending: List[Dict[str, Any]] = []
 
     for a in anchors:
@@ -86,6 +86,11 @@ def resolve(anchors: List[Dict[str, Any]],
         else:
             pending.append(a)
 
+    log.info("快取 %d 格，規則層解出 %d 格，剩 %d 格交給模型",
+             sum(1 for v in decided.values() if v[2] == "cache"),
+             sum(1 for v in decided.values() if v[2] in ("rule", "fuzzy")),
+             len(pending))
+
     # 第 3 層：LLM，分批處理
     for i in range(0, len(pending), LLM_BATCH_SIZE):
         batch = pending[i:i + LLM_BATCH_SIZE]
@@ -94,7 +99,7 @@ def resolve(anchors: List[Dict[str, Any]],
         except Exception as e:                       # 模型掛掉不該讓整個流程失敗
             results = [{"anchor_id": b["id"], "field_key": "__UNKNOWN__",
                         "confidence": 0.0} for b in batch]
-            print(f"[warn] LLM 呼叫失敗，該批改為人工處理：{e}")
+            log.warning("模型呼叫失敗，該批 %d 格改為人工處理：%s", len(batch), e)
         valid_ids = {b["id"] for b in batch}
         for r in results:
             aid = r.get("anchor_id")
@@ -102,8 +107,21 @@ def resolve(anchors: List[Dict[str, Any]],
             # 白名單驗證：模型只能選我們給的欄位，其餘一律丟掉
             if aid in valid_ids and (key in BY_KEY or key in ("__SKIP__", "__UNKNOWN__")):
                 decided[aid] = (key, float(r.get("confidence", 0.0)), "llm")
+            else:
+                log.warning("模型輸出被白名單擋下 anchor=%s key=%s", aid, key)
+    return decided
 
-    # 產生填寫計畫
+
+def build_plan(anchors: List[Dict[str, Any]],
+               profile: Dict[str, Any],
+               decided: Dict[str, Tuple[str, float, str]],
+               min_confidence: float = 0.60,
+               allow_sensitive: bool = False) -> Tuple[List[FillOp], List[FillOp]]:
+    """
+    回傳 (ops, skipped)
+      ops     : 準備寫入的操作（仍建議讓使用者過目）
+      skipped : 沒填的空格與原因，方便使用者手動補
+    """
     ops: List[FillOp] = []
     skipped: List[FillOp] = []
     ordinals = _assign_ordinals(anchors, decided)
@@ -136,6 +154,13 @@ def resolve(anchors: List[Dict[str, Any]],
 
     ops.sort(key=lambda o: o.anchor["id"])
     skipped.sort(key=lambda o: o.anchor["id"])
+
+    # 「個人資料為空」是正常情形（表格列數多於實際學經歷），不值得 WARNING；
+    # 其餘略過原因代表判斷有疑慮，要能在 log 直接看到。
+    for s in skipped:
+        emit = log.debug if s.note == "個人資料中此欄位為空" else log.warning
+        emit("略過 %s「%s」→ %s：%s", s.anchor["id"], s.anchor["label"],
+             s.field_key, s.note)
     return ops, skipped
 
 

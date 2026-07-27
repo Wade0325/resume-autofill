@@ -51,7 +51,7 @@
 │ · 檢視 / 修正  │  │        · 個人資料     │  │  GBNF 受限解碼    │
 │ · 下載成果     │  │        · 格式對映快取 │  │                  │
 └───────────────┘  └──────────────────────┘  └──────────────────┘
-   打包成靜態檔        localhost:8000              localhost:8085
+   打包成靜態檔        localhost:8090              localhost:8085
    由 FastAPI 托管                                  （僅本機）
 ```
 
@@ -226,30 +226,46 @@ llama.cpp 會把 schema 轉成 **GBNF grammar**，在生成的每一步只允許
 
 ## 6. 目前狀態
 
-核心處理邏輯已經有 Python 實作（CLI 版本），Web 化與打包尚未開始。
+後端已完成並通過端到端驗證，前端與打包尚未開始。
 
 ```
-src/
-  schema.py      標準欄位定義 + 別名表        ✅ 可直接沿用
-  extractor.py   docx → 空格清單（結構解析）   ✅ 可直接沿用
-  matcher.py     三層比對引擎                 ✅ 可直接沿用
-  llm.py         llama.cpp 後端，受限解碼     ✅ 可直接沿用
-  writer.py      保留格式寫回 docx            ✅ 可直接沿用
-  storage.py     本地儲存                     ⚠️ 需改寫成 SQLite
-  cli.py         命令列介面                   ⚠️ 將由 FastAPI 取代
-  make_sample.py 產生測試用履歷表             ✅ 測試工具
+backend/
+  main.py            app 組裝、request_id middleware、例外處理   ✅
+  config.py          路徑與環境變數                              ✅
+  logging_setup.py   log 格式、輪替、敏感值遮蔽                   ✅
+  db.py              SQLite（kv / template / job 三張表）        ✅
+  schemas.py         Pydantic 請求回應模型                       ✅
+  service.py         流程編排 extract → decide → plan → write    ✅
+  api/               health、fields、profile、settings、jobs     ✅
+  core/              解析、比對、模型、寫回（演算法層）            ✅
+tools/
+  make_sample.py     產生測試用履歷表                            ✅
+scripts/
+  start-llama-server.ps1                                        ✅
 
 規劃中
-  backend/       FastAPI 服務層
   frontend/      React + Tailwind
   launcher/      C# 啟動器
-  models/        Qwen3.5-4B-Instruct-Q4_K_M.gguf（不進版控）
+  models/        Qwen3.5-4B-Q4_K_M.gguf（不進版控）
   bin/           llama-server.exe（不進版控）
 ```
 
-> 後端只保留 `LlamaCppBackend` 與 `NullBackend`。
-> llama-server 沒起來時會自動降級成 `NullBackend`——不會壞掉，
-> 只是所有 AI 判斷的欄位都標成待人工確認，規則比對與快取照常運作。
+### 啟動後端
+
+```powershell
+.\scripts\start-llama-server.ps1                    # 推論引擎，port 8085
+python -m uvicorn backend.main:app --port 8090      # API，port 8090
+```
+
+開 `http://localhost:8090/docs` 就有完整的互動介面（前端做好之前用這個操作）。
+
+**降級行為**：llama-server 沒起來時會自動退回 `NullBackend`——請求仍回 200，
+回應帶 `llm_available: false`，規則比對與範本快取照常運作，只是模型判斷不到的欄位
+標成待人工確認。這是刻意的：模型沒開不該讓整個工具停擺。
+
+**Log**：`~/.resume_autofill/logs/app.log`（UTF-8，5 MB × 5 輪替）。
+同一次請求的所有記錄共用一個 request_id，回應標頭 `X-Request-Id` 也帶著它。
+**log 永遠不寫入 profile 的值**——這是履歷工具，log 可能被附在問題回報裡送出。
 
 `output/範例_自動填寫成果.docx` 是目前引擎的實際產出（內容為虛構的假資料），可以直接打開看效果。
 

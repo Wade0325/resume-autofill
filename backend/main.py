@@ -1,0 +1,69 @@
+"""FastAPI 應用組裝。"""
+from __future__ import annotations
+
+import logging
+import time
+import uuid
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+from . import config, db
+from .api import jobs, meta, profile
+from .logging_setup import request_id_var, setup_logging
+
+log = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    setup_logging(config.LOG_DIR, config.LOG_LEVEL)
+    db.init()
+    purged = db.purge_old_jobs()
+    if purged:
+        log.info("已清除 %d 筆過期上傳檔（超過 %d 小時）", purged, config.JOB_RETENTION_HOURS)
+    log.info("服務啟動 http://%s:%d 　推論引擎 %s",
+             config.API_HOST, config.API_PORT, config.LLM_HOST)
+    yield
+    log.info("服務關閉")
+
+
+app = FastAPI(title="Resume AutoFill", version="0.1.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    """產生 request_id 串起同一次請求的所有 log，並記錄耗時。
+
+    uvicorn 的 access log 已停用，改在這裡記，才帶得到 request_id。
+    """
+    rid = uuid.uuid4().hex[:8]
+    token = request_id_var.set(rid)
+    t0 = time.perf_counter()
+    # reset 必須包住所有 log 呼叫，否則收尾那行會拿不到 request_id
+    try:
+        try:
+            response = await call_next(request)
+        except Exception:
+            elapsed = int((time.perf_counter() - t0) * 1000)
+            log.exception("未攔截例外 %s %s 耗時=%dms",
+                          request.method, request.url.path, elapsed)
+            # 把 request_id 回給使用者，回報問題時可以直接對到 log
+            return JSONResponse(status_code=500,
+                                content={"detail": "伺服器內部錯誤", "request_id": rid},
+                                headers={"X-Request-Id": rid})
+
+        elapsed = int((time.perf_counter() - t0) * 1000)
+        level = logging.WARNING if response.status_code >= 400 else logging.INFO
+        log.log(level, "%s %s → %d 耗時=%dms",
+                request.method, request.url.path, response.status_code, elapsed)
+        response.headers["X-Request-Id"] = rid
+        return response
+    finally:
+        request_id_var.reset(token)
+
+
+app.include_router(meta.router, prefix="/api")
+app.include_router(profile.router, prefix="/api")
+app.include_router(jobs.router, prefix="/api")

@@ -17,11 +17,15 @@ response_format.json_schema，llama.cpp 會把它編成 GBNF grammar 來約束�
 from __future__ import annotations
 
 import json
+import logging
+import time
 from typing import Any, Dict, List
 
 import requests
 
 from .schema import FIELD_KEYS, describe_fields_for_llm
+
+log = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """你是履歷表單的欄位對映器。使用者會給你一份 Word 履歷表中「待填空格」的清單。
 你的工作：為每一個空格，從給定的欄位代碼清單中挑出唯一正確的一個。
@@ -115,10 +119,23 @@ class LlamaCppBackend(BaseBackend):
                 },
             },
         }
+        t0 = time.perf_counter()
         r = requests.post(f"{self.host}/v1/chat/completions",
                           json=payload, timeout=self.timeout)
         r.raise_for_status()
-        content = r.json()["choices"][0]["message"]["content"]
+        choice = r.json()["choices"][0]
+        elapsed = int((time.perf_counter() - t0) * 1000)
+        finish = choice.get("finish_reason")
+        content = choice["message"]["content"] or ""
+
+        log.info("模型呼叫 batch=%d finish=%s 回應=%d字 耗時=%dms",
+                 len(anchors), finish, len(content), elapsed)
+        # finish=length 幾乎都代表 thinking 沒關成功：模型把預算燒在推理上，
+        # content 是空的。沒有這條 log 就只會看到一個難解的 JSON 解析錯誤。
+        if finish == "length" or not content:
+            raise RuntimeError(
+                f"模型未產生有效輸出（finish_reason={finish}，content 長度 {len(content)}）"
+                "，請確認 thinking 已關閉")
         return json.loads(content).get("mappings", [])
 
 
@@ -138,6 +155,10 @@ def get_backend(cfg: Dict[str, Any]) -> BaseBackend:
     kind = (cfg.get("backend") or "llamacpp").lower()
     if kind == "null":
         return NullBackend()
-    b = LlamaCppBackend(cfg.get("model", "local"),
-                        cfg.get("host", "http://localhost:8085"))
-    return b if b.available() else NullBackend()
+    host = cfg.get("host", "http://localhost:8085")
+    b = LlamaCppBackend(cfg.get("model", "local"), host)
+    if b.available():
+        return b
+    # 模型沒開不該擋住整個流程：規則層與快取仍能解掉大部分欄位。
+    log.warning("llama-server 無法連線 host=%s，降級為人工模式", host)
+    return NullBackend()
