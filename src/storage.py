@@ -25,9 +25,9 @@ HOME = Path(os.environ.get("RESUME_AUTOFILL_HOME",
                            Path.home() / ".resume_autofill"))
 
 DEFAULT_CONFIG = {
-    "backend": "ollama",                 # ollama | llamacpp | null
-    "model": "qwen3.5:4b",
-    "host": "http://localhost:11434",
+    "backend": "llamacpp",               # llamacpp | null
+    "model": "Qwen3.5-4B-Instruct-Q4_K_M",
+    "host": "http://localhost:8080",
     "min_confidence": 0.60,
     "allow_sensitive": False,            # 身分證字號等，預設不自動填
     "highlight_filled": True,            # 填入的字加黃底，方便人工複核

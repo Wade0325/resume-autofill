@@ -1,187 +1,286 @@
-# resume-autofill
+# Resume AutoFill
 
-**本地端、開源、AI 輔助的 Word 履歷表自動填寫工具。**
+**自動把你的個人資料填進各家公司的履歷表。**
 
-你的個人資料只填一次，之後每家公司寄來的不同格式 `.docx` 履歷表，都能自動辨識欄位並填入，
-且完整保留原始版面與字型。全程離線，沒有任何資料離開你的電腦。
+你的資料只需要建立一次。之後不管收到哪一間公司的履歷表格式，程式都會自動辨識每一格該填什麼，
+然後填進去，並完整保留原始版面與字型。
 
 ---
 
-## 1. 設計核心：AI 只做「一題選擇題」
+## 1. 為什麼需要 AI
 
-多數人的第一直覺是「把整份 Word 丟給大模型，叫它輸出填好的檔案」。這條路在實務上會壞掉：
+如果每家公司的履歷表格式都一樣，這個專案根本不需要 AI，寫死座標就好。
 
-| 全交給 LLM 生成 | 本專案的作法 |
-|---|---|
-| 需要 30B 以上模型才勉強穩定 | 2B～4B 小模型就夠 |
-| 版面、字型、表格常被破壞 | 只改 `<w:t>` 文字節點，版面 100% 原封不動 |
-| 每次結果不一樣，無法稽核 | 每一格都有 anchor→欄位 的對映紀錄，可審可改 |
-| 每次都要重跑，很慢 | 同一份範本第二次起走快取，0 次模型呼叫 |
-| 模型可能捏造你的學經歷 | 值一律取自 `profile.json`，模型碰不到值 |
+問題是每一間都不一樣：A 公司寫「姓　名」，B 公司寫「應徵者姓名」，C 公司寫「Name」，
+有的用表格、有的用底線填空、有的用 Word 內容控制項。**欄位長什麼樣子無法窮舉。**
 
-**分工原則：結構問題交給程式，語意問題交給 AI。**
+所以分工是這樣切的：
+
+| 工作 | 誰做 | 為什麼 |
+|---|---|---|
+| 解析 docx 結構、找出所有可填的空格 | 程式 | 結構是確定的，XML 解析就夠，不需要 AI |
+| **判斷「這一格對應到我的哪個欄位」** | **AI 模型** | 語意問題，格式千變萬化，只有這步需要理解力 |
+| 從資料庫取值、填回 docx、保留格式 | 程式 | 值必須精確，交給 AI 會被竄改或捏造 |
+
+**AI 只負責回答一題選擇題：「這個標籤屬於哪個欄位？」**
+它看不到你的資料值，也不負責生成任何文字，所以不可能填錯或編造你的學經歷。
+
+這也讓模型需求變得很低——不是「生成一份履歷」，而是「分類」，小模型就能勝任。
+
+---
+
+## 2. 系統架構
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  ResumeAutoFill.exe   ← 使用者只需要點這個                     │
+│  (C# / csc.exe 編譯的啟動器)                                  │
+│    1. 背景啟動 llama-server（載入 qwen3.5-4b）                 │
+│    2. 背景啟動 FastAPI                                        │
+│    3. 等兩者都 ready → 自動開啟瀏覽器                          │
+│    4. 視窗關閉時一併收掉這兩個 process                          │
+└────────┬──────────────────┬───────────────────────┬──────────┘
+         ▼                  ▼                       ▼
+┌───────────────┐  ┌──────────────────────┐  ┌──────────────────┐
+│  前端          │  │  後端                 │  │  推論引擎         │
+│  React         │◄►│  FastAPI             │─►│  llama-server    │
+│  + Tailwind    │  │   ├─ docx 結構解析    │  │  (llama.cpp)     │
+│                │  │   ├─ 欄位比對         │  │                  │
+│ · 個人資料表單 │  │   ├─ 填寫並輸出 docx  │  │  qwen3.5-4b      │
+│ · 上傳履歷     │  │   └─ SQLite          │  │  Q4_K_M ~2.5 GB  │
+│ · 檢視 / 修正  │  │        · 個人資料     │  │  GBNF 受限解碼    │
+│ · 下載成果     │  │        · 格式對映快取 │  │                  │
+└───────────────┘  └──────────────────────┘  └──────────────────┘
+   打包成靜態檔        localhost:8000              localhost:8080
+   由 FastAPI 托管                                  （僅本機）
+```
+
+### 為什麼這樣選
+
+**前端 React + Tailwind** — 個人資料是結構化的多層表單（學歷、經歷可以有很多筆），
+填寫過程需要即時預覽和逐格修正，這是典型的狀態管理需求，用網頁比原生 GUI 好寫也好改。
+正式版會 build 成靜態檔交給 FastAPI 托管，所以使用者端只會看到一個 port。
+
+**後端 FastAPI + SQLite** — docx 處理在 Python 生態最順（`python-docx` 加上直接操作 XML）。
+SQLite 不需要安裝、不需要設定，整個資料庫就是一個檔案，符合「單機工具」的定位。
+
+**推論引擎 llama.cpp** — 選它而不選 Ollama 的關鍵是**打包**：
+Ollama 要求使用者另外安裝一套服務並自己 `pull` 模型，這跟「點兩下就能用」的目標衝突。
+llama.cpp 編出來的 `llama-server.exe` 是一個獨立執行檔，可以直接跟模型檔一起放進發佈資料夾，
+使用者完全不需要知道底下跑著什麼。另外它的 **GBNF grammar** 是本專案的核心依賴（見第 5 節）。
+
+**啟動器 C# + csc.exe** — 一般人不會裝 Python、不會開終端機、不會自己打網址。
+啟動器把這些全部藏起來：**點兩下，瀏覽器就開好了。**
+用 `csc.exe` 是因為它內建於 Windows 的 .NET Framework，
+編譯不需要裝 Visual Studio 或 .NET SDK，產出就是一個乾淨的單一 exe。
+它同時負責兩個子 process 的生命週期——這是選 llama.cpp 之後多出來的責任，
+llama-server 載入模型需要數秒，啟動器必須等它真的 ready 才開瀏覽器，否則第一次呼叫會失敗。
+
+---
+
+## 3. 使用流程（使用者視角）
+
+```
+第一次使用
+  點擊 ResumeAutoFill.exe
+      ↓
+  瀏覽器自動開啟
+      ↓
+  填寫個人資料（姓名、學歷、經歷、證照……）→ 存入 SQLite，只需要這一次
+
+之後每次
+  上傳公司給的空白履歷 .docx
+      ↓
+  系統自動辨識所有欄位並填入
+      ↓
+  畫面顯示「填了什麼／哪幾格不確定」，可以手動修正
+      ↓
+  下載填好的 .docx
+      ↓
+  修正過的對映會被記住，下次遇到同一份格式直接套用
+```
+
+---
+
+## 4. 處理流程（技術視角）
 
 ```
    .docx
      │
      ▼
-[1] 結構解析（純 Python，零 AI）
-     偵測：內容控制項 / 舊式表單欄位 / 表格空白格 / 段落填空 / 勾選框
-     產出：42 個 anchor，每個帶「標籤文字 + 精確座標」
+[1] 結構解析（純程式，零 AI）
+     掃描：內容控制項 / 表單欄位 / 表格空白格 / 底線填空 / 勾選框
+     產出：每個空格的「標籤文字 + 精確座標」
      │
      ▼
-[2] 三層比對（成本由低到高）
-     ├─ 範本快取   這份表格看過 → 直接沿用          0 成本
-     ├─ 規則比對   別名表：「姓　名」「Name」→ basic.name_zh   0 成本
-     └─ LLM 語意   只剩下 3~10 個怪標籤才呼叫模型
-                   受 JSON Schema + enum 約束，模型只能「選」不能「編」
+[2] 欄位比對（成本由低到高）
+     ├─ 格式快取   這份格式看過 → 直接沿用          0 次 AI 呼叫
+     ├─ 規則比對   別名表：「姓　名」「Name」→ 姓名   0 次 AI 呼叫
+     └─ AI 語意    只有剩下的少數怪標籤才送給模型
      │
      ▼
 [3] 保留格式寫回
-     合併 run → 只替換目標文字 → 填入處加黃底供人工複核
+     只替換文字節點，版面、字型、表格完全不動
      │
      ▼
-   完成.docx  ＋ 一份「填了什麼／略過什麼」的稽核清單
+   完成的 .docx ＋ 一份稽核清單（填了什麼、略過什麼、哪裡不確定）
 ```
 
-在內建的測試範本上，**光靠第 1、2 層就解掉 42 格中的 33 格**，LLM 只是用來收尾。
-這就是為什麼小模型足夠：它面對的不是「生成一份履歷」，而是「這個標籤屬於哪個欄位」的選擇題。
+第 2 層的三段式設計是為了**盡量不呼叫 AI**：快取和規則能解掉大部分欄位，
+AI 只用來收尾少數比對不到的，所以速度快、成本低，第二次處理同一份格式甚至完全不需要模型。
 
 ---
 
-## 2. 安裝
+## 5. AI 模型：Qwen3.5-4B
+
+**已定案：`Qwen3.5-4B` + `Q4_K_M` 量化，跑在 llama.cpp 上。**
+
+本專案對模型的需求非常特殊，這決定了選型方向：
+
+| 需要 | 不需要 |
+|---|---|
+| 繁體中文語意理解（看懂「戶籍地址」和「通訊地址」的差別） | 長文生成 |
+| 穩定遵守 JSON Schema（只能從固定選項裡挑） | 數學、程式能力 |
+| 反應快（一份表格可能要問十幾次） | 深度推理 / thinking 模式 |
+| 短上下文就夠（一次只看幾個標籤） | 百萬 token 上下文 |
+
+所以要挑的是「**同等參數下最聰明的小模型**」，硬上大模型只是浪費 VRAM 和時間。
+
+### 選它的理由
+
+1. **中文最強** — Qwen 系列在中文語境的表現在同尺寸級距內沒有對手，而本專案面對的正是「姓　名」「應徵職務」這類中文標籤。
+2. **授權乾淨** — Apache 2.0，可商用、可散布，不像 Llama 系衍生模型有附帶條款。這點很重要：模型要跟著 exe 一起發佈。
+3. **記憶體有餘裕** — 只吃約 2.5 GB，8 GB VRAM 還剩很多，前後端和瀏覽器同時開著也不卡。
+4. **原生多模態** — 未來要支援「掃描件履歷」時，同一個模型直接吃頁面截圖就能做版面理解，不用換模型也不用改架構。
+5. **有無痛升級路徑** — 覺得 4B 判斷不夠準，換成同系列的 `Qwen3.5-9B`（約 7 GB，8 GB VRAM 剛好塞得下），只要換 GGUF 檔案路徑，程式一行都不用改。
 
 ```bash
-# 1) 取得程式
-git clone <your-repo> resume-autofill && cd resume-autofill
-python3 -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
-pip install -e .
+# 取得模型（GGUF 格式，放進發佈資料夾的 models/）
+huggingface-cli download Qwen/Qwen3.5-4B-Instruct-GGUF \
+    Qwen3.5-4B-Instruct-Q4_K_M.gguf --local-dir models/
 
-# 2) 安裝本地模型（擇一，見第 4 節）
-#    Ollama 路線（最簡單）
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen3.5:4b
-
-# 3) 初始化
-resume-autofill init
-#    然後編輯 ~/.resume_autofill/profile.json 填入你自己的資料
+# 啟動推論服務（正式版由 ResumeAutoFill.exe 在背景執行）
+llama-server -m models/Qwen3.5-4B-Instruct-Q4_K_M.gguf \
+    --port 8080 --ctx-size 8192 --jinja
 ```
 
-## 3. 使用
+上下文開 8192 就夠——本專案一次只丟幾個標籤給模型看，不需要長上下文。
 
-```bash
-# 先看它認出哪些欄位（不改任何檔案）
-resume-autofill inspect 台積電應徵表.docx
+### 其他評估過的選項
 
-# 試填，只印計畫不寫檔
-resume-autofill fill 台積電應徵表.docx --dry-run
+以 Q4_K_M 量化估算，記憶體為概略值。留著這張表是為了日後要換模型時不必重查：
 
-# 正式填寫
-resume-autofill fill 台積電應徵表.docx -o 台積電_已填寫.docx
+| 模型 | 出處 | 參數 | 約需 VRAM | 授權 | 適用性 |
+|---|---|---|---|---|---|
+| **Qwen3.5-4B** | 阿里巴巴 🇨🇳 | 4B | ~2.5 GB | Apache 2.0 | ⭐ **已採用** |
+| **Qwen3.5-9B** | 阿里巴巴 🇨🇳 | 9B | ~7 GB（含 32K 上下文） | Apache 2.0 | 備案，遇到極端怪格式時的保險 |
+| Qwen3.5-2B / 0.8B | 阿里巴巴 🇨🇳 | 2B / 0.8B | ~1.5 GB / ~0.7 GB | Apache 2.0 | 無獨顯、純 CPU 跑的退路 |
+| Hunyuan dense 7B / 4B | 騰訊 🇨🇳 | 7B / 4B | ~4.5 GB / ~2.5 GB | 騰訊自訂條款 | 中文可用，原生 256K 上下文 |
+| MiniCPM 4.1 / 5 系列 | 面壁智能 OpenBMB 🇨🇳 | 1B～8B | ~1～5 GB | Apache 2.0 | 端側特化，低階硬體上速度優勢明顯 |
+| ERNIE 4.5 小型版 | 百度 🇨🇳 | 0.3B 起 | <1 GB | Apache 2.0 | 極輕量，能力較弱，當保底 |
+| Gemma 4 E4B | Google 🇺🇸 | 有效 4B | ~3 GB | Gemma 條款 | 非中國模型的替代選項，中文略遜於 Qwen |
+| Breeze 2 8B | 聯發創新基地 🇹🇼 | 8B | ~5 GB | 受 Llama 3.2 授權約束 | 繁中在地化最強，但授權較綁手 |
 
-# 有一格對錯了？手動修正，之後這份範本就永遠記得
-resume-autofill map 台積電應徵表.docx tbl0.r3.c1=contact.address_mailing
+**不適用的模型**（避免走冤枉路）：
 
-# 列出所有支援欄位代碼
-resume-autofill fields
+* **GLM-5.2**（智譜 🇨🇳）— 744B MoE，即使 2-bit 量化也要約 239 GB，消費級顯卡完全跑不動。舊的 GLM-4-9B 雖然塞得下，但已是 2024 年的模型，被 Qwen3.5-9B 全面超越。
+* **DeepSeek** 🇨🇳 — 主力都是超大 MoE，沒有適合本專案的小型 dense 模型。
+* **MR Breeze 3**（聯發科 🇹🇼，2026/02）— 是台語語音辨識、語音合成與內容安全防護模型，不是本專案要的文字分類模型。
+
+### 關鍵：受限解碼（constrained decoding）
+
+程式**不是**用 prompt 拜託模型「請回傳 JSON」，而是把 JSON Schema 交給 llama.cpp：
+
+```jsonc
+// 送給 llama-server 的請求（節錄）
+{
+  "messages": [ ... ],
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "field_key": { "enum": ["basic.name", "contact.phone", ...] },  // ← 鎖死
+          "confidence": { "type": "number" }
+        },
+        "required": ["field_key", "confidence"]
+      }
+    }
+  }
+}
 ```
 
-舊的 `.doc` 檔請先轉檔（LibreOffice 是開源的）：
+llama.cpp 會把 schema 轉成 **GBNF grammar**，在生成的每一步只允許符合文法的 token 被取樣。
+所以「輸出不是合法 JSON」或「模型發明了一個不存在的欄位名稱」**在機制上就不可能發生**——
+不是靠模型乖乖聽話，是取樣層面根本生不出來。
 
-```bash
-soffice --headless --convert-to docx 舊表格.doc
-```
+`field_key` 被鎖成 enum，模型只能從既有選項裡挑一個，
+這把「開放式生成」壓縮成「封閉式分類」——**這才是 4B 小模型足以勝任的真正原因。**
 
 ---
 
-## 4. 本地模型怎麼選
+## 6. 目前狀態
 
-本工具的模型需求只有兩項：**中文語意理解**、**遵守 JSON Schema**。不需要長文生成、不需要推理。
-所以應該挑「同等參數下最聰明」的小模型，而不是硬上大模型。
+核心處理邏輯已經有 Python 實作（CLI 版本），Web 化與打包尚未開始。
 
-| 硬體條件 | 建議模型 | 量化 | 約需記憶體 | 說明 |
-|---|---|---|---|---|
-| 8 GB RAM、無獨顯 | `qwen3.5:2b` | Q4_K_M | ~2 GB | 分類任務表現穩，能跑就能用 |
-| **16 GB RAM 或 8 GB VRAM（預設推薦）** | **`qwen3.5:4b`** | Q4_K_M | ~3 GB | 中文強、原生多模態，5B 以下最佳選擇 |
-| 16 GB+ VRAM / Apple Silicon 24 GB+ | `qwen3.5:9b` | Q4_K_M | ~6 GB | 遇到極端怪格式時的保險 |
-| 偏好 Google 生態 | `gemma4:e4b` | QAT | ~3 GB | 邊緣裝置取向，中文略遜於 Qwen |
-| 完全不想裝模型 | `--backend null` | — | 0 | 只跑規則層，剩下的手動補 |
-
-切換模型只要改 `~/.resume_autofill/config.json` 的 `model` 欄位，或加 `--model qwen3.5:9b`。
-
-### 為什麼用受限解碼（constrained decoding）
-
-程式不是用 prompt 拜託模型「請回傳 JSON」，而是把 JSON Schema 交給推論引擎：
-
-* Ollama → `format` 參數帶 JSON Schema
-* llama.cpp → `response_format.json_schema`（或 `--grammar` GBNF）
-
-引擎在每一步只允許符合 schema 的 token 被取樣，所以「輸出不是合法 JSON」或
-「模型發明了 `basic.favorite_food` 這種不存在的欄位」在機制上就不可能發生。
-`field_key` 被鎖成 enum，這也是 2B 模型就能勝任的關鍵。
-
-搭配 llama.cpp 時：
-
-```bash
-llama-server -m qwen3.5-4b-instruct-Q4_K_M.gguf -c 8192 --port 8080 --jinja
-resume-autofill fill 表格.docx --backend llamacpp
 ```
+src/
+  schema.py      標準欄位定義 + 別名表        ✅ 可直接沿用
+  extractor.py   docx → 空格清單（結構解析）   ✅ 可直接沿用
+  matcher.py     三層比對引擎                 ✅ 可直接沿用
+  llm.py         llama.cpp 後端，受限解碼     ✅ 可直接沿用
+  writer.py      保留格式寫回 docx            ✅ 可直接沿用
+  storage.py     本地儲存                     ⚠️ 需改寫成 SQLite
+  cli.py         命令列介面                   ⚠️ 將由 FastAPI 取代
+  make_sample.py 產生測試用履歷表             ✅ 測試工具
+
+規劃中
+  backend/       FastAPI 服務層
+  frontend/      React + Tailwind
+  launcher/      C# 啟動器
+  models/        Qwen3.5-4B-Instruct-Q4_K_M.gguf（不進版控）
+  bin/           llama-server.exe（不進版控）
+```
+
+> 後端只保留 `LlamaCppBackend` 與 `NullBackend`。
+> llama-server 沒起來時會自動降級成 `NullBackend`——不會壞掉，
+> 只是所有 AI 判斷的欄位都標成待人工確認，規則比對與快取照常運作。
+
+`output/範例_自動填寫成果.docx` 是目前引擎的實際產出（內容為虛構的假資料），可以直接打開看效果。
 
 ---
 
-## 5. 隱私與資料保護
+## 7. 隱私
 
-* 全程離線，除了你自己啟動的 `localhost` 推論服務外沒有任何網路連線
-* `~/.resume_autofill/` 目錄權限 `0700`，內部檔案 `0600`
-* **身分證字號、身高體重、婚姻狀況、身心障礙等欄位預設不自動填**
-  （見 `schema.py` 的 `SENSITIVE_KEYS`），需要時才加 `--allow-sensitive`
-* 想要靜態加密，兩個開源選項：
-  * [`age`](https://github.com/FiloSottile/age)：`age -p profile.json > profile.json.age`，使用前解密
-  * SQLCipher：把 `profile.json` 換成加密 SQLite，適合做成長期產品
+這是一個**單機工具**，不是網路服務。
 
----
-
-## 6. 專案結構
-
-```
-src/resume_autofill/
-  schema.py      標準欄位定義＋別名表（要擴充欄位改這裡就好）
-  extractor.py   docx → anchor 清單（純結構解析，不含 AI）
-  matcher.py     三層比對引擎，產出可審核的填寫計畫
-  llm.py         Ollama / llama.cpp 後端，JSON Schema 受限解碼
-  writer.py      保留格式寫回 docx
-  storage.py     本地設定、個人資料、範本快取
-  cli.py         命令列介面
-tools/
-  make_sample.py 產生一份仿台灣公司格式的測試履歷表
-```
-
-### 擴充欄位
-
-在 `schema.py` 的 `FIELDS` 加一筆即可，比對、白名單、LLM prompt 會自動跟上：
-
-```python
-FieldSpec("basic.nationality", "國籍",
-          ["國籍", "Nationality", "國別"]),
-```
+* 所有資料存在本機的 SQLite，不上傳任何伺服器
+* 前端、FastAPI、llama-server 三者都只綁 `localhost`，只有你自己的電腦連得到
+* 模型跑在你自己的機器上，履歷內容不會送到任何第三方 API
+* 身分證字號、身高體重、婚姻狀況這類敏感欄位預設不自動填，需要時才手動開啟
+* 除了下載模型那一次，**全程不需要網路連線**
 
 ---
 
-## 7. 已知限制
+## 8. 待討論
 
-* 掃描件、圖片格式的履歷表不支援（需要 OCR 或視覺模型，見 Roadmap）
-* 極度不規則的版面（用空白字元排版、用文字方塊排版）辨識率會下降
-* 表格內的巢狀表格目前只解析第一層
-* 「自傳」這類長文只會原封不動填入，不會替你改寫（刻意的：履歷造假風險）
+已定案：**MIT 授權**、**llama.cpp** 推論引擎、**Qwen3.5-4B Q4_K_M** 模型。
 
-## 8. Roadmap
+以下細節尚未定案：
 
-* [ ] 圖形介面（Tauri 或 PySide6），給非工程師使用
-* [ ] 掃描件支援：`qwen3.5:4b` 原生多模態，可直接吃頁面截圖做版面理解
-* [ ] xlsx / pdf 表單支援（`openpyxl` / `pypdf`）
-* [ ] 內建範本社群包：常見大公司表格的對映檔可分享匯入
+* SQLite 資料表設計（個人資料的多筆結構、格式對映快取的儲存方式）
+* 前後端 API 介面定義
+* 啟動器細節：port 衝突處理、如何判斷 llama-server 真的 ready、關閉時確保不留孤兒 process
+* 打包方式：Python 端要不要凍結成 exe；模型 2.5 GB 要隨附還是首次啟動時下載
+* 沒有獨顯的使用者怎麼辦（CPU 推論會慢，是否降級到 Qwen3.5-2B 或純規則模式）
+
+---
 
 ## 9. 授權
 
-建議採用 **AGPL-3.0**（避免被包成閉源 SaaS）或 **MIT**（求最大採用率）。
-注意所選模型本身的授權與本專案的授權是兩回事，商用前請各自確認模型卡上的條款。
+[MIT License](LICENSE)。
+
+注意：**模型的授權和本專案的授權是兩回事。**
+Qwen3.5、MiniCPM、ERNIE 4.5 是 Apache 2.0（最寬鬆），Gemma 有自己的使用條款，
+Breeze 2 受 Llama 3.2 授權約束。商用前請各自確認你所選模型的模型卡條款。
