@@ -31,7 +31,8 @@ export default function ProfilePage() {
   useEffect(() => {
     Promise.all([api.fields(), api.getProfile()])
       .then(([f, p]) => {
-        setFields(f)
+        // 合成欄位（就學期間＝入學＋畢業）不需要使用者填
+        setFields(f.filter((x) => !x.derived))
         setProfile(p)
       })
       .catch((e) => setError(e.message))

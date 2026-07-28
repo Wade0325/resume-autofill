@@ -15,6 +15,7 @@ class FieldSpec:
     kind: str = "text"       # text | date | money | choice | longtext | list
     choices: List[str] = field(default_factory=list)
     hint: str = ""           # 給模型的一句話說明
+    derived: bool = False    # 值由其他欄位合成，不出現在個人資料表單
 
 
 FIELDS: List[FieldSpec] = [
@@ -47,13 +48,18 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("education[].school", "學校名稱", kind="list"),
     FieldSpec("education[].department", "科系", kind="list"),
     FieldSpec("education[].degree", "學位", kind="list"),
-    FieldSpec("education[].period", "就學期間", kind="list"),
+    FieldSpec("education[].start", "入學年月", kind="list"),
+    FieldSpec("education[].end", "畢業年月", kind="list"),
+    # 只印一欄「就學期間」的表格用這個，值由入學與畢業合成
+    FieldSpec("education[].period", "就學期間", kind="list", derived=True),
     FieldSpec("education[].status", "畢業狀態", kind="list"),
 
     # ---------- 經歷 ----------
     FieldSpec("experience[].company", "公司名稱", kind="list"),
     FieldSpec("experience[].title", "職稱", kind="list"),
-    FieldSpec("experience[].period", "任職期間", kind="list"),
+    FieldSpec("experience[].start", "到職年月", kind="list"),
+    FieldSpec("experience[].end", "離職年月", kind="list"),
+    FieldSpec("experience[].period", "任職期間", kind="list", derived=True),
     FieldSpec("experience[].description", "工作內容", kind="list"),
     FieldSpec("experience[].salary", "薪資", kind="list"),
     FieldSpec("experience[].leave_reason", "離職原因", kind="list"),
@@ -96,3 +102,11 @@ def describe_fields(include_special: bool = True) -> str:
         lines.append("- __SKIP__: 這個位置不是求職者要填的（表頭、說明文字、公司自用欄）")
         lines.append("- __UNKNOWN__: 是欄位，但清單裡沒有對應項目")
     return "\n".join(lines)
+
+
+# 由起訖兩欄合成的欄位。表格有時印一欄「就學期間」，有時印「入學年月／畢業年月」，
+# 使用者只需要填後者。
+DERIVED_FROM = {
+    "education[].period": ("education[].start", "education[].end"),
+    "experience[].period": ("experience[].start", "experience[].end"),
+}

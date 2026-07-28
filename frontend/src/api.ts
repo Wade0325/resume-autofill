@@ -6,6 +6,7 @@ export type FieldSpec = {
   kind: string // text | date | money | choice | longtext | list
   choices: string[]
   sensitive: boolean
+  derived: boolean
 }
 
 export type Health = {
