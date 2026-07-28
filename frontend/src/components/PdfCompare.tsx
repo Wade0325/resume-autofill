@@ -26,22 +26,24 @@ export default function PdfCompare({
   const rightRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    let cancelled = false
+    // StrictMode 會把 effect 跑兩次；沒有這個 token，兩輪渲染會把
+    // 同一份 PDF 的頁面各塞一次進容器，畫面就重複了
+    const token = { cancelled: false }
     setLoading(true)
     setError('')
     Promise.all([
-      renderPdf(`/api/jobs/${jobId}/preview.pdf?which=original`, leftRef.current!),
-      renderPdf(`/api/jobs/${jobId}/preview.pdf?which=filled&v=${version}`, rightRef.current!),
+      renderPdf(`/api/jobs/${jobId}/preview.pdf?which=original`, leftRef.current!, token),
+      renderPdf(`/api/jobs/${jobId}/preview.pdf?which=filled&v=${version}`, rightRef.current!, token),
     ])
       .catch((e: any) => {
-        if (cancelled) return
+        if (token.cancelled) return
         // 503 = 沒有 LibreOffice，這台機器永遠做不出 PDF，交給上層退回結構化預覽
         if (e.status === 503) onUnavailable(e.message)
         else setError(e.message)
       })
-      .finally(() => !cancelled && setLoading(false))
+      .finally(() => !token.cancelled && setLoading(false))
     return () => {
-      cancelled = true
+      token.cancelled = true
     }
   }, [jobId, version, onUnavailable])
 
@@ -72,7 +74,11 @@ export default function PdfCompare({
   )
 }
 
-async function renderPdf(url: string, container: HTMLDivElement) {
+async function renderPdf(
+  url: string,
+  container: HTMLDivElement,
+  token: { cancelled: boolean },
+) {
   const res = await fetch(url)
   if (!res.ok) {
     let detail = `HTTP ${res.status}`
@@ -87,10 +93,12 @@ async function renderPdf(url: string, container: HTMLDivElement) {
   }
   const data = await res.arrayBuffer()
   const doc = await pdfjs.getDocument({ data }).promise
+  if (token.cancelled) return
 
   container.replaceChildren()
   for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i)
+    if (token.cancelled) return
     // 2 倍解析度再縮到欄寬，文字才不會糊
     const viewport = page.getViewport({ scale: 2 })
     const canvas = document.createElement('canvas')
