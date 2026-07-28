@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -211,6 +212,16 @@ def analyze_import(filename: str, content: bytes) -> ImportPreviewOut:
     return ImportPreviewOut(import_id=import_id, filename=filename, rows=rows)
 
 
+def get_import(import_id: str) -> Optional[ImportPreviewOut]:
+    """重新取回匯入預覽。使用者切到別頁再切回來時要能接續，不必重傳檔案。"""
+    job = db.get_job(import_id)
+    if not job:
+        return None
+    decided = {k: tuple(v) for k, v in job["decided"].items()}
+    return ImportPreviewOut(import_id=import_id, filename=job["filename"],
+                            rows=_import_rows(job["anchors"], decided))
+
+
 def apply_import(import_id: str, anchor_ids: List[str]) -> Optional[int]:
     job = db.get_job(import_id)
     if not job:
@@ -261,4 +272,11 @@ def _import_rows(anchors: List[Dict[str, Any]],
             current=current, incoming=value, default_checked=not current))
 
     rows.sort(key=lambda r: r.anchor_id)
+
+    # 好幾格搶同一個欄位時，全部預設勾選一定是錯的：寫入順序任意，
+    # 後面的會蓋掉前面的。一律取消預設，逼使用者自己挑一個。
+    slots = Counter((r.field_key, r.ordinal) for r in rows)
+    for row in rows:
+        if slots[(row.field_key, row.ordinal)] > 1:
+            row.default_checked = False
     return rows

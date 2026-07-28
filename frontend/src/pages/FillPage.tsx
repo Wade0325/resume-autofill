@@ -1,16 +1,26 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type FieldSpec, type Plan, type PlanItem } from '../api'
-import Dropzone from '../components/Dropzone'
+import Dropzone, { type UploadPhase } from '../components/Dropzone'
+
+// 切到別頁再切回來時要能接續，不必重傳檔案重跑一次模型
+const KEY_JOB = 'fill.jobId'
 
 export default function FillPage() {
   const [fields, setFields] = useState<FieldSpec[]>([])
   const [plan, setPlan] = useState<Plan | null>(null)
+  const [phase, setPhase] = useState<UploadPhase>({ kind: 'idle' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
     api.fields().then(setFields).catch((e) => setError(e.message))
+  }, [])
+
+  useEffect(() => {
+    const jobId = sessionStorage.getItem(KEY_JOB)
+    if (!jobId) return
+    api.getJob(jobId).then(setPlan).catch(() => sessionStorage.removeItem(KEY_JOB))
   }, [])
 
   async function run<T>(work: () => Promise<T>): Promise<T | undefined> {
@@ -26,8 +36,30 @@ export default function FillPage() {
   }
 
   async function upload(file: File) {
-    const result = await run(() => api.analyze(file))
-    if (result) setPlan(result)
+    setError('')
+    setPhase({ kind: 'uploading', percent: 0 })
+    const started = Date.now()
+    let ticker: ReturnType<typeof setInterval> | undefined
+    try {
+      const result = await api.analyze(file, (percent) => {
+        if (percent < 100) {
+          setPhase({ kind: 'uploading', percent })
+          return
+        }
+        setPhase({ kind: 'analyzing', seconds: 0 })
+        ticker ??= setInterval(
+          () => setPhase({ kind: 'analyzing', seconds: Math.round((Date.now() - started) / 1000) }),
+          1000,
+        )
+      })
+      setPlan(result)
+      sessionStorage.setItem(KEY_JOB, result.job_id)
+    } catch (e: any) {
+      setError(e.requestId ? `${e.message}（追蹤碼 ${e.requestId}）` : e.message)
+    } finally {
+      if (ticker) clearInterval(ticker)
+      setPhase({ kind: 'idle' })
+    }
   }
 
   async function remap(anchorId: string, fieldKey: string) {
@@ -55,8 +87,7 @@ export default function FillPage() {
         <Dropzone
           title="把空白履歷表拖到這裡"
           hint="或點擊選擇檔案"
-          busy={busy}
-          busyText="解析中，第一次遇到的格式需要呼叫模型，請稍候…"
+          phase={phase}
           onFile={upload}
         />
       </div>
@@ -99,7 +130,10 @@ export default function FillPage() {
 
       <div className="flex items-center justify-between pb-8">
         <button
-          onClick={() => setPlan(null)}
+          onClick={() => {
+            sessionStorage.removeItem(KEY_JOB)
+            setPlan(null)
+          }}
           className="text-sm text-slate-500 hover:text-slate-800"
         >
           ← 換一份檔案

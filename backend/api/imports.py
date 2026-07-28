@@ -31,6 +31,14 @@ async def create_import(file: UploadFile = File(...)) -> ImportPreviewOut:
         raise HTTPException(400, f"無法解析這份 docx：{e}")
 
 
+@router.get("/{import_id}", response_model=ImportPreviewOut)
+def read_import(import_id: str) -> ImportPreviewOut:
+    preview = service.get_import(import_id)
+    if preview is None:
+        raise HTTPException(404, "找不到這次匯入")
+    return preview
+
+
 @router.post("/{import_id}/apply", response_model=ImportApplyOut)
 def apply_import(import_id: str, body: ImportApplyIn) -> ImportApplyOut:
     applied = service.apply_import(import_id, body.anchor_ids)
