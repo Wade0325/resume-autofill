@@ -8,10 +8,11 @@ type Props = {
   specs: FieldSpec[] // 例如 education[].school、education[].department …
   items: Item[]
   onChange: (items: Item[]) => void
+  isHighlighted?: (specKey: string, index: number) => boolean
 }
 
 /** 學歷／經歷這種可以有很多筆的區塊。列的順序就是填進表格的順序。 */
-export default function RepeatList({ title, specs, items, onChange }: Props) {
+export default function RepeatList({ title, specs, items, onChange, isHighlighted }: Props) {
   function update(index: number, key: string, value: string) {
     const next = items.map((it, i) => (i === index ? { ...it, [key]: value } : it))
     onChange(next)
@@ -71,12 +72,16 @@ export default function RepeatList({ title, specs, items, onChange }: Props) {
               {specs.map((spec) => {
                 const sub = spec.key.split('[].')[1]
                 return (
-                  <Field
+                  <div
                     key={spec.key}
-                    spec={spec}
-                    value={item[sub] ?? ''}
-                    onChange={(v) => update(i, sub, v)}
-                  />
+                    className={isHighlighted?.(spec.key, i) ? 'ring-2 ring-sky-400 rounded-md' : ''}
+                  >
+                    <Field
+                      spec={spec}
+                      value={item[sub] ?? ''}
+                      onChange={(v) => update(i, sub, v)}
+                    />
+                  </div>
                 )
               })}
             </div>

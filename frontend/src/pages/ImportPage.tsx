@@ -35,9 +35,10 @@ export default function ImportPage() {
     setError('')
     try {
       await api.applyImport(preview.import_id, [...picked])
+      // 帶上 ordinal，我的資料頁才知道是第幾筆學歷／經歷被改到
       const changed = preview.rows
         .filter((r) => picked.has(r.anchor_id))
-        .map((r) => r.field_key)
+        .map((r) => `${r.field_key}#${r.ordinal}`)
       navigate('/profile', { state: { changed } })
     } catch (e: any) {
       setError(e.message)

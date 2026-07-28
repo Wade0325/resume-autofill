@@ -179,19 +179,12 @@ def _nonblank_above(grid, r: int, c: int) -> str:
 
 
 def _label_for_cell(grid, r: int, c: int) -> str:
-    """空白格的標籤：先看左邊，再看上面（台灣履歷表兩種都很常見）。"""
-    return _nonblank_left(grid, r, c) or _nonblank_above(grid, r, c)
+    """找出這一格的標籤：先在同列往左、再在同欄往上，優先採用「看起來像欄位名稱」的格子。
 
-
-def _label_for_filled_cell(grid, r: int, c: int) -> str:
-    """已填寫格子的標籤：鄰格必須「看起來像欄位名稱」才採用。
-
-    填寫模式可以無腦取左邊那格，因為值格是空的。匯入模式不行：學歷表的
-    「資訊工程學系」左邊是「國立臺灣大學」，那是另一個值不是標籤，
-    直接拿來用會讓整列標籤往右錯位一格。
-
-    而且要「一路找到欄位名稱為止」，不能取第一個非空格：學歷表第 2 列的正上方
-    是第 1 列的值（國立臺灣大學），要再往上一列才會碰到表頭（學校名稱）。
+    不能單純取最近的非空格。學歷表這種多列表格裡，一格的左邊與上面往往是
+    另一筆資料的「值」（「資訊工程學系」左邊是「國立臺灣大學」），
+    拿來當標籤會讓整列往右錯位；而第 2 列的正上方是第 1 列的值，
+    要再往上才碰得到表頭。所以先掃過整列整欄找欄位名稱，找不到才退回最近的鄰格。
     """
     for cc in range(c - 1, -1, -1):
         cell = grid[r][cc]
@@ -206,8 +199,8 @@ def _label_for_filled_cell(grid, r: int, c: int) -> str:
                 t = cell_text(cell).replace("\n", " ")
                 if _is_label_cell(t):
                     return t
-    # 整欄整列都找不到已知欄位名稱時，退回鄰格規則讓 LLM 去判斷
-    return _nonblank_above(grid, r, c) or _nonblank_left(grid, r, c)
+    # 別名表裡沒有的自訂標籤走這條：台灣履歷表以「標籤在左」最常見
+    return _nonblank_left(grid, r, c) or _nonblank_above(grid, r, c)
 
 
 def _is_label_cell(text: str) -> bool:
@@ -316,7 +309,7 @@ def extract_tables(doc, prefix="tbl", include_filled: bool = False) -> List[Anch
                                  "value_end": inline.end("value")},
                             existing=inline.group("value").strip()))
                         continue
-                    label = (_label_for_filled_cell(grid, r, c)
+                    label = (_label_for_cell(grid, r, c)
                              or _clean_heading(pre_labels.get(ti, "")))
                     if label:
                         anchors.append(Anchor(
@@ -450,13 +443,31 @@ def extract(path: str, include_filled: bool = False) -> Dict[str, Any]:
     uniq: Dict[str, Anchor] = {}
     for a in anchors:
         uniq.setdefault(a.id, a)
-    anchors = list(uniq.values())
+    anchors = _drop_label_cells(list(uniq.values()))
 
     return {
         "path": path,
         "fingerprint": fingerprint(anchors),
         "anchors": [a.to_dict() for a in anchors],
     }
+
+
+def _drop_label_cells(anchors: List[Anchor]) -> List[Anchor]:
+    """踢掉「內容正好是別人標籤」的儲存格——那是標籤格，不是值格。
+
+    include_filled 會把所有非空的格子都收進來。_is_label_cell 靠別名表過濾，
+    擋得掉「出生年月日」，擋不掉「日間可聯絡之電話」這種各家自訂的寫法。
+    但只要有另一個 anchor 正拿這段文字當標籤，就能確定它是標籤格。
+
+    非做不可：把值寫進標籤格會直接洗掉表格的欄位名稱，產出一份沒人看得懂的履歷。
+    """
+    labels = {normalize_label(a.label) for a in anchors if a.label}
+    kept = []
+    for a in anchors:
+        if a.kind == "cell" and a.existing and normalize_label(a.existing) in labels:
+            continue
+        kept.append(a)
+    return kept
 
 
 def fingerprint(anchors: List[Anchor]) -> str:
