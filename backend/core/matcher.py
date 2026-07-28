@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 
 LLM_BATCH_SIZE = 12          # 一次丟給模型的空格數，太多會降低準確率
 FUZZY_CUTOFF = 0.86          # 模糊比對門檻
+SUBSTRING_MIN_COVERAGE = 0.5 # 包含比對時，短的一方至少要佔長的一方多少
 
 
 @dataclass
@@ -47,8 +48,16 @@ def rule_match(label: str) -> Tuple[Optional[str], float, str]:
     if n in ALIAS_INDEX:
         return ALIAS_INDEX[n], 0.99, "rule"
 
-    # 包含比對：「姓名(必填)」→「姓名」；用最長的別名優先，避免「電話」蓋掉「緊急聯絡電話」
-    hits = [(a, k) for a, k in ALIAS_INDEX.items() if a and (a in n or n in a)]
+    # 包含比對：「姓名(必填)」→「姓名」；用最長的別名優先，避免「電話」蓋掉「緊急聯絡電話」。
+    # 但兩邊長度必須相近：「地址」只佔「電子郵遞地址」的三分之一，那其實是 email。
+    # 沒有這道門檻的話，錯誤對映會帶著 0.90 信心直接跳過模型那一層，把錯的值寫進履歷。
+    hits = []
+    for alias, key in ALIAS_INDEX.items():
+        if not alias or not (alias in n or n in alias):
+            continue
+        coverage = min(len(alias), len(n)) / max(len(alias), len(n))
+        if coverage >= SUBSTRING_MIN_COVERAGE:
+            hits.append((alias, key))
     if hits:
         alias, key = max(hits, key=lambda x: len(x[0]))
         return key, 0.90, "rule"

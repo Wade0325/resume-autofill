@@ -31,8 +31,9 @@ export default function ProfilePage() {
   const [error, setError] = useState('')
   const location = useLocation()
 
-  // 剛從匯入頁跳過來時，把被改動的欄位高亮一下，讓使用者確認結果
-  const highlighted: string[] = location.state?.changed ?? []
+  // 剛從匯入頁跳過來時，把被改動的欄位高亮一下，讓使用者確認結果。
+  // 格式是 "欄位代碼#序號"，學歷／經歷才分得出是第幾筆被改到。
+  const highlighted = new Set<string>(location.state?.changed ?? [])
 
   useEffect(() => {
     Promise.all([api.fields(), api.getProfile()])
@@ -95,7 +96,7 @@ export default function ProfilePage() {
               {specs.map((spec) => (
                 <div
                   key={spec.key}
-                  className={highlighted.includes(spec.key) ? 'ring-2 ring-sky-400 rounded-md' : ''}
+                  className={highlighted.has(`${spec.key}#0`) ? 'ring-2 ring-sky-400 rounded-md' : ''}
                 >
                   <Field
                     spec={spec}
@@ -116,6 +117,7 @@ export default function ProfilePage() {
           specs={fields.filter((f) => f.key.startsWith(rep.prefix))}
           items={profile[rep.root] ?? []}
           onChange={(items) => edit((d) => (d[rep.root] = items))}
+          isHighlighted={(specKey, index) => highlighted.has(`${specKey}#${index}`)}
         />
       ))}
 
