@@ -82,10 +82,38 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
-function upload<T>(path: string, file: File): Promise<T> {
+/**
+ * 用 XHR 而非 fetch：fetch 拿不到上傳進度。
+ * 注意進度只涵蓋「檔案送到伺服器」，送達後的解析與模型判斷沒有進度可回報。
+ */
+function upload<T>(path: string, file: File, onProgress?: (pct: number) => void): Promise<T> {
   const form = new FormData()
   form.append('file', file)
-  return request<T>(path, { method: 'POST', body: form })
+
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `/api${path}`)
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress?.(Math.round((e.loaded / e.total) * 100))
+    }
+    xhr.onload = () => {
+      const requestId = xhr.getResponseHeader('X-Request-Id') ?? ''
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(JSON.parse(xhr.responseText) as T)
+        return
+      }
+      let detail = `HTTP ${xhr.status}`
+      try {
+        detail = JSON.parse(xhr.responseText).detail ?? detail
+      } catch {
+        // 回應不是 JSON，沿用狀態碼當訊息
+      }
+      reject(new ApiError(detail, requestId))
+    }
+    xhr.onerror = () => reject(new ApiError('連線失敗，請確認服務是否還在執行', ''))
+    xhr.send(form)
+  })
 }
 
 function putJson<T>(path: string, body: unknown): Promise<T> {
@@ -111,7 +139,9 @@ export const api = {
   getProfile: () => request<Profile>('/profile'),
   saveProfile: (profile: Profile) => putJson<{ ok: boolean }>('/profile', profile),
 
-  analyze: (file: File) => upload<Plan>('/jobs', file),
+  analyze: (file: File, onProgress?: (pct: number) => void) =>
+    upload<Plan>('/jobs', file, onProgress),
+  getJob: (jobId: string) => request<Plan>(`/jobs/${jobId}`),
   fixMappings: (jobId: string, fixes: { anchor_id: string; field_key: string }[]) =>
     request<Plan>(`/jobs/${jobId}/mappings`, {
       method: 'PATCH',
@@ -125,7 +155,9 @@ export const api = {
     ),
   downloadUrl: (jobId: string) => `/api/jobs/${jobId}/output`,
 
-  analyzeImport: (file: File) => upload<ImportPreview>('/imports', file),
+  analyzeImport: (file: File, onProgress?: (pct: number) => void) =>
+    upload<ImportPreview>('/imports', file, onProgress),
+  getImport: (importId: string) => request<ImportPreview>(`/imports/${importId}`),
   applyImport: (importId: string, anchorIds: string[]) =>
     postJson<{ applied: number }>(`/imports/${importId}/apply`, { anchor_ids: anchorIds }),
 }

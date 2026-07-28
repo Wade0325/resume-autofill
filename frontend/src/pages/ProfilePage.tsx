@@ -1,26 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { api, type FieldSpec, type Profile } from '../api'
+import { SECTIONS, type Section } from '../sections'
 import Field from '../components/Field'
 import RepeatList from '../components/RepeatList'
-
-type Section = {
-  id: string
-  title: string
-  prefix: string // 對應 backend/core/schema.py 的欄位命名
-  repeatRoot?: string // 有值代表這一區是可增減的多筆資料
-}
-
-const SECTIONS: Section[] = [
-  { id: 'basic', title: '基本資料', prefix: 'basic.' },
-  { id: 'contact', title: '聯絡方式', prefix: 'contact.' },
-  { id: 'job', title: '應徵資訊', prefix: 'job.' },
-  { id: 'education', title: '學歷', prefix: 'education[].', repeatRoot: 'education' },
-  { id: 'experience', title: '工作經歷', prefix: 'experience[].', repeatRoot: 'experience' },
-  { id: 'skills', title: '專長技能', prefix: 'skills.' },
-  { id: 'emergency', title: '緊急聯絡人', prefix: 'emergency.' },
-  { id: 'autobiography', title: '自傳', prefix: 'autobiography' },
-]
 
 export default function ProfilePage() {
   const [fields, setFields] = useState<FieldSpec[]>([])
