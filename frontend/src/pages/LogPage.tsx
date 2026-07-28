@@ -10,19 +10,18 @@ const LEVELS = [
 export default function LogPage() {
   const [entries, setEntries] = useState<LogEntry[]>([])
   const [level, setLevel] = useState('')
-  const [requestId, setRequestId] = useState('')
   const [live, setLive] = useState(true)
   const [error, setError] = useState('')
 
   const load = useCallback(() => {
     api
-      .logs({ level, requestId })
+      .logs({ level })
       .then((rows) => {
         setEntries(rows)
         setError('')
       })
       .catch((e) => setError(e.message))
-  }, [level, requestId])
+  }, [level])
 
   useEffect(() => {
     load()
@@ -35,9 +34,7 @@ export default function LogPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-xl font-semibold text-slate-900">日誌</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          程式在處理過程中留下的紀錄。同一次操作的每一行共用一個追蹤碼，點它可以只看那一次。
-        </p>
+        <p className="text-sm text-slate-500 mt-1">程式在處理過程中留下的紀錄。</p>
       </div>
 
       {error && (
@@ -62,15 +59,6 @@ export default function LogPage() {
             </button>
           ))}
         </div>
-
-        {requestId && (
-          <button
-            onClick={() => setRequestId('')}
-            className="text-xs px-3 py-1.5 rounded-full bg-slate-100 border border-slate-300 text-slate-700"
-          >
-            追蹤碼 {requestId} ✕
-          </button>
-        )}
 
         <label className="flex items-center gap-2 text-sm text-slate-600 ml-auto">
           <input
@@ -104,7 +92,6 @@ export default function LogPage() {
                 <tr>
                   <th className="text-left px-4 py-3 font-medium whitespace-nowrap">時間</th>
                   <th className="text-left px-4 py-3 font-medium">等級</th>
-                  <th className="text-left px-4 py-3 font-medium">追蹤碼</th>
                   <th className="text-left px-4 py-3 font-medium">來源</th>
                   <th className="text-left px-4 py-3 font-medium">訊息</th>
                 </tr>
@@ -119,19 +106,6 @@ export default function LogPage() {
                       <span className={`text-xs px-1.5 py-0.5 rounded ${levelTone(e.level)}`}>
                         {e.level}
                       </span>
-                    </td>
-                    <td className="px-4 py-2">
-                      {e.request_id === '-' ? (
-                        <span className="text-slate-300">—</span>
-                      ) : (
-                        <button
-                          onClick={() => setRequestId(e.request_id)}
-                          className="text-xs text-sky-600 hover:underline tabular-nums"
-                          title="只看這一次操作"
-                        >
-                          {e.request_id}
-                        </button>
-                      )}
                     </td>
                     <td className="px-4 py-2 text-xs text-slate-500 whitespace-nowrap">
                       {e.module.replace(/^backend\./, '')}
