@@ -62,10 +62,10 @@ export default function FillPage() {
     }
   }
 
-  async function remap(anchorId: string, fieldKey: string) {
+  async function remap(slotId: string, fieldKey: string) {
     if (!plan) return
     const result = await run(() =>
-      api.fixMappings(plan.job_id, [{ anchor_id: anchorId, field_key: fieldKey }]),
+      api.fixMappings(plan.job_id, [{ slot_id: slotId, field_key: fieldKey }]),
     )
     if (result) setPlan(result)
   }
@@ -104,7 +104,7 @@ export default function FillPage() {
       {error && <ErrorBox message={error} />}
 
       <div className="flex flex-wrap items-center gap-3">
-        <Stat label="偵測到" value={plan.stats.anchors} unit="個位置" />
+        <Stat label="偵測到" value={plan.stats.slots} unit="個位置" />
         <Stat label="將填入" value={plan.stats.fill} unit="格" tone="sky" />
         <Stat label="略過" value={plan.stats.skip} unit="格" />
         {plan.template_cached && (
@@ -114,7 +114,7 @@ export default function FillPage() {
         )}
         {!plan.llm_available && (
           <span className="text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded-full px-3 py-1">
-            模型未啟動，僅規則比對
+            模型未啟動
           </span>
         )}
       </div>
@@ -160,7 +160,7 @@ function PlanTable({
   plan: Plan
   fields: FieldSpec[]
   busy: boolean
-  onRemap: (anchorId: string, fieldKey: string) => void
+  onRemap: (slotId: string, fieldKey: string) => void
 }) {
   return (
     <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
@@ -178,7 +178,7 @@ function PlanTable({
           <tbody className="divide-y divide-slate-100">
             {plan.items.map((item) => (
               <Row
-                key={item.anchor_id}
+                key={item.slot_id}
                 item={item}
                 fields={fields}
                 busy={busy}
@@ -201,24 +201,24 @@ function Row({
   item: PlanItem
   fields: FieldSpec[]
   busy: boolean
-  onRemap: (anchorId: string, fieldKey: string) => void
+  onRemap: (slotId: string, fieldKey: string) => void
 }) {
   const skipped = item.status === 'skip'
   // 模型判斷的、或信心不高的，值得使用者優先看一眼
-  const needsReview = !skipped && (item.source === 'llm' || item.confidence < 0.8)
+  const needsReview = !skipped && (item.source === 'model' || item.confidence < 0.8)
 
   return (
     <tr className={skipped ? 'bg-slate-50/60' : needsReview ? 'bg-amber-50/40' : ''}>
       <td className="px-4 py-2.5">
         <span className={skipped ? 'text-slate-400' : 'text-slate-800'}>{item.label || '—'}</span>
-        <span className="block text-xs text-slate-400">{item.anchor_id}</span>
+        <span className="block text-xs text-slate-400">{item.slot_id}</span>
       </td>
 
       <td className="px-4 py-2.5">
         <select
           value={item.field_key}
           disabled={busy}
-          onChange={(e) => onRemap(item.anchor_id, e.target.value)}
+          onChange={(e) => onRemap(item.slot_id, e.target.value)}
           className="text-sm border border-slate-300 rounded px-2 py-1 max-w-56
                      focus:outline-none focus:ring-2 focus:ring-sky-500"
         >
@@ -281,9 +281,7 @@ function SkipReason({ note }: { note: string }) {
 function sourceLabel(source: string) {
   const names: Record<string, string> = {
     cache: '快取',
-    rule: '規則',
-    fuzzy: '近似',
-    llm: '模型',
+    model: '模型',
     manual: '手動',
   }
   return names[source] ?? source

@@ -11,7 +11,6 @@ class FieldSpecOut(BaseModel):
     label: str
     kind: str
     choices: List[str] = []
-    aliases: List[str] = []
     sensitive: bool = False
 
 
@@ -35,21 +34,22 @@ class SettingsIn(BaseModel):
 
 
 class PlanItem(BaseModel):
-    anchor_id: str
-    label: str
+    slot_id: str
+    label: str = ""                   # 表格上印在這格旁邊的字，由模型抄回來
     kind: str
     options: List[str] = []
     field_key: str
+    ordinal: int = 0                  # 第幾筆學歷／經歷
     value: str
     existing: str = ""                # 文件原本就有的內容，非空代表這一格會被覆蓋
     confidence: float
-    source: str                       # cache | rule | fuzzy | llm | manual
+    source: str                       # cache | model | manual
     status: Literal["fill", "skip"]
     note: str = ""
 
 
 class PlanStats(BaseModel):
-    anchors: int
+    slots: int
     fill: int
     skip: int
     by_source: Dict[str, int]
@@ -66,7 +66,7 @@ class PlanOut(BaseModel):
 
 
 class MappingFix(BaseModel):
-    anchor_id: str
+    slot_id: str
     field_key: str
 
 

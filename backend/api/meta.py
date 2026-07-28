@@ -6,7 +6,7 @@ import logging
 from fastapi import APIRouter
 
 from .. import config, db
-from ..core.llm import LlamaCppBackend
+from ..core import llm
 from ..core.schema import FIELDS, SENSITIVE_KEYS
 from ..schemas import FieldSpecOut, HealthOut, LlmStatus
 
@@ -16,8 +16,7 @@ router = APIRouter(tags=["meta"])
 
 @router.get("/health", response_model=HealthOut)
 def health() -> HealthOut:
-    backend = LlamaCppBackend(config.LLM_MODEL, config.LLM_HOST)
-    available = backend.available()
+    available = llm.available(config.LLM_HOST)
     try:
         db.get_kv("settings")
         db_ok = True
@@ -35,6 +34,5 @@ def health() -> HealthOut:
 def fields() -> list[FieldSpecOut]:
     """給前端的下拉選單用；也是模型能選的完整白名單。"""
     return [FieldSpecOut(key=f.key, label=f.label, kind=f.kind,
-                         choices=f.choices, aliases=f.aliases,
-                         sensitive=f.key in SENSITIVE_KEYS)
+                         choices=f.choices, sensitive=f.key in SENSITIVE_KEYS)
             for f in FIELDS]

@@ -23,8 +23,8 @@ from docx import Document
 from docx.oxml.ns import qn
 from docx.table import Table
 
-from .extractor import (BLANK_RUN_RE, CHECKBOX_CHARS, CHECKED_CHARS,
-                        _grid, cell_text, iter_block_items)
+from .document import (BLANK_RUN_RE, CHECKBOX_CHARS, CHECKED_CHARS,
+                       _grid, cell_text, iter_block_items)
 
 CHECK_MAP = {"□": "■", "☐": "☑", "▢": "■", "◻": "◼", "○": "●", "〇": "●", "◯": "●"}
 
@@ -232,12 +232,12 @@ def apply_ops(src_path: str, out_path: str, ops: List[Any],
 
     # 同一段落有多個填空時，必須由後往前寫，
     # 否則填完第 1 個空格後，後面空格的字元位置就跑掉了。
-    ops = sorted(ops, key=lambda o: -o.anchor.get("loc", {}).get("blank_index", 0))
+    ops = sorted(ops, key=lambda o: -o.slot.loc.get("blank_index", 0))
 
     for op in ops:
-        a = op.anchor
-        loc = a.get("loc", {})
-        kind = a["kind"]
+        slot = op.slot
+        loc = slot.loc
+        kind = slot.kind
         done = False
         try:
             if kind == "sdt":
@@ -269,11 +269,11 @@ def apply_ops(src_path: str, out_path: str, ops: List[Any],
                             done = True
                             break
         except Exception as e:                    # 單一格失敗不影響其他欄位
-            fail.append({"anchor": a["id"], "error": str(e)})
+            fail.append({"slot": slot.id, "error": str(e)})
             continue
         (ok if done else fail).append(
-            {"anchor": a["id"], "field": op.field_key, "value": op.value}
-            if done else {"anchor": a["id"], "error": "定位失敗"})
+            {"slot": slot.id, "field": op.field_key}
+            if done else {"slot": slot.id, "error": "定位失敗"})
 
     doc.save(out_path)
     return {"written": len(ok), "failed": len(fail), "ok": ok, "fail": fail}
