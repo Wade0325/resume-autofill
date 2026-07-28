@@ -20,7 +20,6 @@ const SECTIONS: Section[] = [
   { id: 'skills', title: '專長技能', prefix: 'skills.' },
   { id: 'emergency', title: '緊急聯絡人', prefix: 'emergency.' },
   { id: 'autobiography', title: '自傳', prefix: 'autobiography' },
-  { id: 'motivation', title: '應徵動機', prefix: 'motivation' },
 ]
 
 export default function ProfilePage() {
@@ -34,11 +33,17 @@ export default function ProfilePage() {
   const location = useLocation()
 
   // 剛從匯入頁跳過來時要高亮被改動的欄位。格式是「欄位代碼#序號」，
-  // 學歷／經歷才分得出是第幾筆。
-  const highlighted = useMemo(
-    () => new Set<string>(location.state?.changed ?? []),
-    [location.key],
-  )
+  // 學歷／經歷才分得出是第幾筆。這只是提示「剛剛動到這些」，
+  // 所以是短暫閃示——不清掉的話藍框會一直卡在畫面上。
+  const [highlighted, setHighlighted] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    const changed: string[] = location.state?.changed ?? []
+    if (changed.length === 0) return
+    setHighlighted(new Set(changed))
+    const timer = setTimeout(() => setHighlighted(new Set()), 5000)
+    return () => clearTimeout(timer)
+  }, [location.key])
 
   useEffect(() => {
     Promise.all([api.fields(), api.getProfile()])
@@ -65,6 +70,8 @@ export default function ProfilePage() {
       return draft
     })
     setDirty(true)
+    // 開始編輯就代表使用者看到了，提示可以收掉
+    if (highlighted.size > 0) setHighlighted(new Set())
   }
 
   async function save() {

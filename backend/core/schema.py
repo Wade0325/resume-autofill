@@ -19,7 +19,7 @@ class FieldSpec:
     key: str                 # 正規欄位路徑，例如 "contact.mobile"
     label: str               # 人類可讀名稱
     aliases: List[str] = field(default_factory=list)   # 表單上可能出現的寫法
-    kind: str = "text"       # text | date | choice | longtext | list
+    kind: str = "text"       # text | date | money | choice | longtext | list
     choices: List[str] = field(default_factory=list)   # kind == "choice" 時的選項
     hint: str = ""           # 給 LLM 的一句話說明
 
@@ -53,30 +53,24 @@ FIELDS: List[FieldSpec] = [
               ["行動電話", "手機", "手機號碼", "行動電話號碼", "Mobile", "Cell Phone"]),
     FieldSpec("contact.phone_home", "住家電話",
               ["住家電話", "戶籍電話", "家用電話", "室內電話", "Home Phone"]),
-    FieldSpec("contact.phone_contact", "聯絡電話",
-              ["聯絡電話", "日間聯絡電話", "白天電話", "Tel", "電話"]),
     FieldSpec("contact.email", "電子郵件",
               ["電子郵件", "電子信箱", "E-mail", "Email", "電郵", "信箱"]),
-    FieldSpec("contact.line_id", "LINE ID", ["LINE ID", "Line", "通訊軟體帳號"]),
-    FieldSpec("contact.address_registered", "戶籍地址",
-              ["戶籍地址", "戶籍住址", "戶籍", "Registered Address"]),
-    FieldSpec("contact.address_mailing", "通訊地址",
+    # 地址只留一個。履歷表常見「戶籍地址」與「通訊地址」兩格，兩格都對映到這裡，
+    # 對絕大多數人來說填的本來就是同一個地址。
+    FieldSpec("contact.address_mailing", "地址",
               ["通訊地址", "聯絡地址", "現居地址", "郵寄地址", "住址", "地址",
-               "Mailing Address", "Address"]),
+               "戶籍地址", "戶籍住址", "戶籍", "Mailing Address", "Address"]),
 
     # ---------- 應徵資訊 ----------
     FieldSpec("job.applied_position", "應徵職務",
               ["應徵職務", "應徵職位", "應徵部門", "申請職務", "希望職務", "職務名稱",
                "Position Applied"]),
     FieldSpec("job.expected_salary", "希望待遇",
-              ["希望待遇", "期望待遇", "希望薪資", "要求待遇", "Expected Salary"]),
+              ["希望待遇", "期望待遇", "希望薪資", "要求待遇", "Expected Salary"],
+              kind="money", hint="月薪金額"),
     FieldSpec("job.available_date", "可到職日",
               ["可到職日", "可上班日", "最快到職日", "預計到職日", "Available Date"],
               kind="date"),
-    FieldSpec("job.source", "應徵管道",
-              ["應徵管道", "得知管道", "訊息來源", "資料來源", "如何得知本職缺"]),
-    FieldSpec("job.referrer", "介紹人",
-              ["介紹人", "推薦人", "內部推薦人", "Referrer"]),
 
     # ---------- 學歷（list，會展開成 education[0].xxx） ----------
     FieldSpec("education[].school", "學校名稱",
@@ -114,7 +108,10 @@ FIELDS: List[FieldSpec] = [
               ["電腦技能", "電腦專長", "資訊能力", "軟體專長", "Computer Skills"],
               kind="longtext"),
     FieldSpec("skills.driver_license", "駕照",
-              ["駕照", "駕駛執照", "Driver License"]),
+              ["駕照", "駕駛執照", "Driver License"],
+              kind="choice",
+              choices=["無", "普通重型機車", "普通小型車", "普通小型車＋普通重型機車",
+                       "職業小型車", "職業大貨車", "職業大客車"]),
     FieldSpec("skills.specialty", "專長",
               ["專長", "個人專長", "技能", "Skills"], kind="longtext"),
 
@@ -130,8 +127,6 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("autobiography", "自傳",
               ["自傳", "個人簡介", "自我介紹", "Autobiography", "Self Introduction"],
               kind="longtext"),
-    FieldSpec("motivation", "應徵動機",
-              ["應徵動機", "求職動機", "為何應徵本公司"], kind="longtext"),
 ]
 
 # 給 LLM 用的白名單。SKIP 代表「這格不是要填的空白」，NONE 代表「找不到對應資料」。

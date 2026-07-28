@@ -143,6 +143,10 @@ def build_plan(anchors: List[Dict[str, Any]],
         if key in ("__SKIP__", "__UNKNOWN__"):
             skipped.append(FillOp(a, key, "", conf, src, "模型判定非可填欄位或找不到對應"))
             continue
+        if key not in BY_KEY:
+            # 範本快取存的是舊的欄位代碼，schema 移除欄位後會殘留無效對映
+            skipped.append(FillOp(a, key, "", conf, src, "此欄位已不存在，請重新指定"))
+            continue
         if key in SENSITIVE_KEYS and not allow_sensitive:
             skipped.append(FillOp(a, key, "", conf, src, "敏感欄位，預設不自動填"))
             continue
