@@ -300,6 +300,15 @@ python -m uvicorn backend.main:app --port 8090      # 服務，port 8090
 開 `http://localhost:8090/` 就是完整介面。開發前端時改用 `npm run dev`
 （port 5173，已設好 proxy）。`http://localhost:8090/docs` 仍是 API 的互動文件。
 
+開發後端時加上 `--reload`，改 `.py` 檔會自動重啟服務，不用手動重開：
+
+```powershell
+python -m uvicorn backend.main:app --port 8090 --reload
+```
+
+（`--reload` 是整個行程重啟，不像 Vite 只換模組——資料都在 SQLite 與檔案裡，
+所以沒有影響。正式啟動不要帶這個參數。）
+
 ### 三個頁面
 
 | 頁面 | 做什麼 |
