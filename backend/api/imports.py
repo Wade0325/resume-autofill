@@ -32,18 +32,18 @@ async def create_import(file: UploadFile = File(...)) -> ImportPreviewOut:
             log.info("轉檔 .doc → .docx %s", name)
         except ConversionError as e:
             log.warning("轉檔失敗 %s：%s", name, e)
-            actions.problem("上傳「%s」失敗：%s", name, e)
+            actions.problem("上傳履歷「%s」失敗：%s", name, e)
             raise HTTPException(400, str(e))
 
     try:
         return service.analyze_import(name, content)
     except LlmUnavailable as e:
         log.warning("匯入失敗 %s：%s", name, e)
-        actions.problem("上傳「%s」失敗：模型還沒啟動，無法讀取內容", name)
+        actions.problem("上傳履歷「%s」失敗：模型還沒啟動", name)
         raise HTTPException(503, f"模型未就緒：{e}")
     except Exception as e:
         log.exception("匯入失敗 %s：無法解析", name)
-        actions.problem("上傳「%s」失敗：檔案無法解析", name)
+        actions.problem("上傳履歷「%s」失敗：檔案無法解析", name)
         raise HTTPException(400, f"無法解析這份 docx：{e}")
 
 

@@ -22,7 +22,7 @@ def put_profile(profile: ProfileIn) -> dict:
     db.put_kv("profile", profile)
     # 只記結構規模，不記內容——profile 裡全是個資
     log.info("個人資料已更新 top_level_keys=%d", len(profile))
-    actions.record("儲存我的資料")
+    actions.record("修改欄位成功")
     return {"ok": True}
 
 
@@ -35,8 +35,5 @@ def get_settings() -> SettingsIn:
 def put_settings(settings: SettingsIn) -> SettingsIn:
     db.put_kv("settings", settings.model_dump())
     log.info("設定已更新 %s", settings.model_dump())
-    actions.record("更新設定：信心門檻 %.2f、敏感欄位%s、%s標示填入的內容",
-                   settings.min_confidence,
-                   "允許填入" if settings.allow_sensitive else "不填",
-                   "會" if settings.highlight_filled else "不")
+    actions.record("修改設定成功")
     return settings

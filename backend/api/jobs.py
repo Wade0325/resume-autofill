@@ -33,7 +33,7 @@ async def create_job(file: UploadFile = File(...)) -> PlanOut:
             log.info("轉檔 .doc → .docx %s", name)
         except ConversionError as e:
             log.warning("轉檔失敗 %s：%s", name, e)
-            actions.problem("上傳「%s」失敗：%s", name, e)
+            actions.problem("上傳履歷「%s」失敗：%s", name, e)
             raise HTTPException(400, str(e))
 
     try:
@@ -42,12 +42,12 @@ async def create_job(file: UploadFile = File(...)) -> PlanOut:
         # 沒有模型就沒有辦法判斷欄位，只有看過的格式能靠快取離線運作。
         # 原因要進 log，否則日誌上只剩一行 503 看不出發生什麼事
         log.warning("填寫失敗 %s：%s", name, e)
-        actions.problem("上傳「%s」失敗：模型還沒啟動，無法辨識欄位", name)
+        actions.problem("上傳履歷「%s」失敗：模型還沒啟動", name)
         raise HTTPException(503, f"模型未就緒：{e}")
     except Exception as e:
         # 壞掉的 docx 是使用者輸入問題，不該回 500
         log.exception("填寫失敗 %s：無法解析", name)
-        actions.problem("上傳「%s」失敗：檔案無法解析", name)
+        actions.problem("上傳履歷「%s」失敗：檔案無法解析", name)
         raise HTTPException(400, f"無法解析這份 docx：{e}")
 
 
@@ -85,7 +85,7 @@ def download_output(job_id: str) -> FileResponse:
         raise HTTPException(404, "尚未產生成果檔，請先呼叫 POST /output")
     job = db.get_job(job_id)
     stem = (job["filename"].rsplit(".", 1)[0] if job else "resume")
-    actions.record("下載成果檔「%s_已填寫.docx」", stem)
+    actions.record("下載履歷「%s_已填寫.docx」成功", stem)
     return FileResponse(
         path, filename=f"{stem}_已填寫.docx",
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
