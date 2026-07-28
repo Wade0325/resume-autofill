@@ -83,12 +83,11 @@ class OutputOut(BaseModel):
 
 
 class ImportRow(BaseModel):
-    anchor_id: str
-    label: str                        # docx 上印的標籤，讓使用者確認對映合不合理
+    row_id: str                       # "欄位代碼#序號"，模型每欄只給一個值所以必定唯一
     field_key: str
     ordinal: int                      # 第幾筆學歷／經歷
     current: str                      # 我的資料現在的值
-    incoming: str                     # 從履歷抽到的值
+    incoming: str                     # 從履歷讀到的值
     default_checked: bool             # current 為空才預設勾選
 
 
@@ -99,7 +98,7 @@ class ImportPreviewOut(BaseModel):
 
 
 class ImportApplyIn(BaseModel):
-    anchor_ids: List[str]
+    row_ids: List[str]
 
 
 class ImportApplyOut(BaseModel):

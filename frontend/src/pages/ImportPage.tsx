@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, type FieldSpec, type ImportPreview, type ImportRow } from '../api'
 import { SECTIONS } from '../sections'
@@ -66,7 +66,7 @@ export default function ImportPage() {
         )
       })
       setPreview(result)
-      const defaults = new Set(result.rows.filter((r) => r.default_checked).map((r) => r.anchor_id))
+      const defaults = new Set(result.rows.filter((r) => r.default_checked).map((r) => r.row_id))
       sessionStorage.setItem(KEY_ID, result.import_id)
       remember(defaults)
       const first = SECTIONS.find((s) => result.rows.some((r) => r.field_key.startsWith(s.prefix)))
@@ -86,7 +86,7 @@ export default function ImportPage() {
     try {
       await api.applyImport(preview.import_id, [...picked])
       const changed = preview.rows
-        .filter((r) => picked.has(r.anchor_id))
+        .filter((r) => picked.has(r.row_id))
         .map((r) => `${r.field_key}#${r.ordinal}`)
       clearSaved()
       navigate('/profile', { state: { changed } })
@@ -96,22 +96,12 @@ export default function ImportPage() {
     }
   }
 
-  function toggle(anchorId: string) {
+  function toggle(rowId: string) {
     const next = new Set(picked)
-    if (next.has(anchorId)) next.delete(anchorId)
-    else next.add(anchorId)
+    if (next.has(rowId)) next.delete(rowId)
+    else next.add(rowId)
     remember(next)
   }
-
-  // 同一個欄位＋序號被多列搶：使用者必須自己挑一個，否則後寫的會蓋掉先寫的
-  const contested = useMemo(() => {
-    const seen = new Map<string, number>()
-    for (const row of preview?.rows ?? []) {
-      const slot = `${row.field_key}#${row.ordinal}`
-      seen.set(slot, (seen.get(slot) ?? 0) + 1)
-    }
-    return new Set([...seen].filter(([, n]) => n > 1).map(([slot]) => slot))
-  }, [preview])
 
   if (!preview) {
     return (
@@ -143,10 +133,10 @@ export default function ImportPage() {
           已勾選 <strong className="text-sky-700 text-base">{picked.size}</strong> 個
         </span>
         <div className="flex gap-2 ml-auto">
-          <Chip onClick={() => remember(new Set(preview.rows.map((r) => r.anchor_id)))}>全選</Chip>
+          <Chip onClick={() => remember(new Set(preview.rows.map((r) => r.row_id)))}>全選</Chip>
           <Chip
             onClick={() =>
-              remember(new Set(preview.rows.filter((r) => !r.current.trim()).map((r) => r.anchor_id)))
+              remember(new Set(preview.rows.filter((r) => !r.current.trim()).map((r) => r.row_id)))
             }
           >
             只選空白的
@@ -159,7 +149,7 @@ export default function ImportPage() {
         <nav className="sticky top-6 space-y-1">
           {SECTIONS.map((s) => {
             const rows = rowsOf(s.prefix)
-            const chosen = rows.filter((r) => picked.has(r.anchor_id)).length
+            const chosen = rows.filter((r) => picked.has(r.row_id)).length
             return (
               <button
                 key={s.id}
@@ -196,12 +186,11 @@ export default function ImportPage() {
               <tbody className="divide-y divide-slate-100">
                 {shown.map((row) => (
                   <Row
-                    key={row.anchor_id}
+                    key={row.row_id}
                     row={row}
                     label={labelOf(row.field_key)}
-                    checked={picked.has(row.anchor_id)}
-                    contested={contested.has(`${row.field_key}#${row.ordinal}`)}
-                    onToggle={() => toggle(row.anchor_id)}
+                    checked={picked.has(row.row_id)}
+                    onToggle={() => toggle(row.row_id)}
                   />
                 ))}
               </tbody>
@@ -238,13 +227,11 @@ function Row({
   row,
   label,
   checked,
-  contested,
   onToggle,
 }: {
   row: ImportRow
   label: string
   checked: boolean
-  contested: boolean
   onToggle: () => void
 }) {
   const willOverwrite = checked && row.current.trim() !== ''
@@ -260,16 +247,9 @@ function Row({
       </td>
       <td className="px-4 py-2.5">
         <span className="text-slate-800">{label}</span>
-        {row.ordinal > 0 && <span className="ml-1 text-xs text-slate-400">第 {row.ordinal + 1} 筆</span>}
-        {contested && (
-          <span
-            className="ml-2 text-xs bg-slate-100 text-slate-600 border border-slate-200 rounded px-1.5 py-0.5"
-            title="這份履歷有好幾格都對到同一個欄位，勾選多個的話後面的會蓋掉前面的，建議只留一個"
-          >
-            多個候選
-          </span>
+        {row.ordinal > 0 && (
+          <span className="ml-1 text-xs text-slate-400">第 {row.ordinal + 1} 筆</span>
         )}
-        <span className="block text-xs text-slate-400">表格標籤：{row.label}</span>
       </td>
       <td className="px-4 py-2.5">
         {row.current.trim() ? (

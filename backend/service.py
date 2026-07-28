@@ -7,12 +7,11 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import config, db
-from .core import extractor, matcher, writer
+from .core import extractor, matcher, reader, writer
 from .core.llm import get_backend
 from .core.schema import BY_KEY
 from .schemas import (ImportPreviewOut, ImportRow, PlanItem, PlanOut, PlanStats)
@@ -189,6 +188,12 @@ def _item(op, status: str) -> PlanItem:
 # 匯入：已填寫的履歷 → 我的資料
 # --------------------------------------------------------------------------
 def analyze_import(filename: str, content: bytes) -> ImportPreviewOut:
+    """整份文件交給模型讀。
+
+    不走 extractor 的結構解析：那套是為了「知道要寫回哪一格」而存在的，
+    匯入不需要座標，卻要付出配對錯誤的代價——實測 16 欄合併儲存格的履歷會把
+    「聯絡電話」當成姓名的值。模型直接讀整列反而準得多。
+    """
     import_id = uuid.uuid4().hex[:12]
     d = job_dir(import_id)
     d.mkdir(parents=True, exist_ok=True)
@@ -197,42 +202,36 @@ def analyze_import(filename: str, content: bytes) -> ImportPreviewOut:
     log.info("匯入上傳 %s (%.1f KB) import=%s", filename, len(content) / 1024, import_id)
 
     t0 = time.perf_counter()
-    data = extractor.extract(str(src), include_filled=True)
-    anchors, fingerprint = data["anchors"], data["fingerprint"]
+    text = reader.serialize(str(src))
+    extracted = reader.read_profile(text, config.LLM_HOST, config.LLM_MODEL)
+    db.create_import(import_id, filename, extracted)
 
-    decided = matcher.decide(anchors, _backend(),
-                             cached_map=db.get_template(fingerprint))
-    db.create_job(import_id, filename, fingerprint, anchors,
-                  {k: list(v) for k, v in decided.items()})
-
-    rows = _import_rows(anchors, decided)
-    log.info("匯入解析完成 anchors=%d 可匯入=%d 需覆蓋=%d 耗時=%dms",
-             len(anchors), len(rows), sum(1 for r in rows if not r.default_checked),
+    rows = _import_rows(extracted)
+    log.info("匯入讀取完成 全文=%d字 欄位=%d 需覆蓋=%d 耗時=%dms",
+             len(text), len(rows), sum(1 for r in rows if not r.default_checked),
              int((time.perf_counter() - t0) * 1000))
     return ImportPreviewOut(import_id=import_id, filename=filename, rows=rows)
 
 
 def get_import(import_id: str) -> Optional[ImportPreviewOut]:
     """重新取回匯入預覽。使用者切到別頁再切回來時要能接續，不必重傳檔案。"""
-    job = db.get_job(import_id)
-    if not job:
+    record = db.get_import(import_id)
+    if not record:
         return None
-    decided = {k: tuple(v) for k, v in job["decided"].items()}
-    return ImportPreviewOut(import_id=import_id, filename=job["filename"],
-                            rows=_import_rows(job["anchors"], decided))
+    return ImportPreviewOut(import_id=import_id, filename=record["filename"],
+                            rows=_import_rows(record["extracted"]))
 
 
-def apply_import(import_id: str, anchor_ids: List[str]) -> Optional[int]:
-    job = db.get_job(import_id)
-    if not job:
+def apply_import(import_id: str, row_ids: List[str]) -> Optional[int]:
+    record = db.get_import(import_id)
+    if not record:
         return None
-    decided = {k: tuple(v) for k, v in job["decided"].items()}
-    rows = {r.anchor_id: r for r in _import_rows(job["anchors"], decided)}
+    rows = {r.row_id: r for r in _import_rows(record["extracted"])}
 
     profile = db.get_kv("profile") or {}
     applied = []
-    for aid in anchor_ids:
-        row = rows.get(aid)
+    for row_id in row_ids:
+        row = rows.get(row_id)
         if row is None:
             continue
         matcher.set_value(profile, row.field_key, row.incoming, row.ordinal)
@@ -244,39 +243,27 @@ def apply_import(import_id: str, anchor_ids: List[str]) -> Optional[int]:
     return len(applied)
 
 
-def _import_rows(anchors: List[Dict[str, Any]],
-                 decided: Dict[str, Any]) -> List[ImportRow]:
-    """把「anchor 的既有內容」轉成可匯入的欄位列表。"""
+def _import_rows(extracted: Dict[str, Any]) -> List[ImportRow]:
+    """把模型讀到的資料攤成一列一個欄位，並和目前的 profile 比對。"""
     profile = db.get_kv("profile") or {}
-    ordinals = matcher.assign_ordinals(anchors, decided)
-    by_id = {a["id"]: a for a in anchors}
-
     rows: List[ImportRow] = []
-    for aid, (key, _conf, _src) in decided.items():
-        anchor = by_id.get(aid)
-        if anchor is None or key not in BY_KEY:
-            continue                       # __SKIP__ / __UNKNOWN__ 不匯入
 
-        raw = anchor.get("existing", "").strip()
-        if not raw:
-            continue
-        # 勾選題存的是整串「■男　□女」，要取出被勾的那一項
-        value = extractor.checked_option(raw) if anchor["kind"] == "checkbox" else raw
-        if not value:
-            continue
-
-        ordinal = ordinals.get(aid, 0)
-        current = str(matcher.get_value(profile, key, ordinal) or "")
+    def add(field_key: str, ordinal: int, value: str) -> None:
+        if field_key not in BY_KEY or not str(value).strip():
+            return
+        current = str(matcher.get_value(profile, field_key, ordinal) or "")
         rows.append(ImportRow(
-            anchor_id=aid, label=anchor["label"], field_key=key, ordinal=ordinal,
-            current=current, incoming=value, default_checked=not current))
+            row_id=f"{field_key}#{ordinal}", field_key=field_key, ordinal=ordinal,
+            current=current, incoming=str(value).strip(), default_checked=not current))
 
-    rows.sort(key=lambda r: r.anchor_id)
+    for key, value in extracted.items():
+        if isinstance(value, list):
+            for index, item in enumerate(value):
+                if isinstance(item, dict):
+                    for sub, sub_value in item.items():
+                        add(f"{key}[].{sub}", index, sub_value)
+        else:
+            add(key, 0, value)
 
-    # 好幾格搶同一個欄位時，全部預設勾選一定是錯的：寫入順序任意，
-    # 後面的會蓋掉前面的。一律取消預設，逼使用者自己挑一個。
-    slots = Counter((r.field_key, r.ordinal) for r in rows)
-    for row in rows:
-        if slots[(row.field_key, row.ordinal)] > 1:
-            row.default_checked = False
+    rows.sort(key=lambda r: (r.field_key, r.ordinal))
     return rows

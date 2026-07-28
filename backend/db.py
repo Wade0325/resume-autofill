@@ -38,6 +38,14 @@ CREATE TABLE IF NOT EXISTS job (
     decided     TEXT NOT NULL,
     created_at  TEXT NOT NULL
 );
+-- 匯入與填寫存的東西已經不一樣了：填寫要 anchor 座標才寫得回去，
+-- 匯入只要模型讀出來的值。與其把 job 塞成兩用，不如分開。
+CREATE TABLE IF NOT EXISTS import_job (
+    id         TEXT PRIMARY KEY,
+    filename   TEXT NOT NULL,
+    extracted  TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -147,14 +155,33 @@ def delete_job(job_id: str) -> None:
         conn.execute("DELETE FROM job WHERE id = ?", (job_id,))
 
 
+# ---------------- import_job：一次匯入讀到的資料 ----------------
+def create_import(import_id: str, filename: str, extracted: Dict[str, Any]) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO import_job (id, filename, extracted, created_at) VALUES (?, ?, ?, ?)",
+            (import_id, filename, json.dumps(extracted, ensure_ascii=False), _now()))
+
+
+def get_import(import_id: str) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM import_job WHERE id = ?", (import_id,)).fetchone()
+    if not row:
+        return None
+    out = dict(row)
+    out["extracted"] = json.loads(out["extracted"])
+    return out
+
+
 def purge_old_jobs(hours: int = config.JOB_RETENTION_HOURS) -> int:
     """啟動時清掉過期的上傳檔。履歷是個資，不該無限期留在磁碟上。"""
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(timespec="seconds")
     with connect() as conn:
-        rows = conn.execute("SELECT id FROM job WHERE created_at < ?", (cutoff,)).fetchall()
-        ids = [r["id"] for r in rows]
-        if ids:
-            conn.executemany("DELETE FROM job WHERE id = ?", [(i,) for i in ids])
+        ids = [r["id"] for table in ("job", "import_job")
+               for r in conn.execute(
+                   f"SELECT id FROM {table} WHERE created_at < ?", (cutoff,)).fetchall()]
+        for table in ("job", "import_job"):
+            conn.execute(f"DELETE FROM {table} WHERE created_at < ?", (cutoff,))
     for jid in ids:
         _rmtree(config.JOBS_DIR / jid)
     return len(ids)
