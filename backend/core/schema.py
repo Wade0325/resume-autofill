@@ -38,22 +38,15 @@ FIELDS: List[FieldSpec] = [
               ["出生年月日", "生日", "出生日期", "出生", "Date of Birth", "DOB"],
               kind="date", hint="西元 YYYY-MM-DD"),
     FieldSpec("basic.age", "年齡", ["年齡", "實歲", "Age"]),
-    FieldSpec("basic.birthplace", "出生地", ["出生地", "籍貫", "出生地點"]),
-    FieldSpec("basic.id_number", "身分證字號",
-              ["身分證字號", "身份證字號", "身分證統一編號", "國民身分證號碼", "ID No"],
-              hint="高敏感欄位，預設不自動填，需使用者明確允許"),
-    FieldSpec("basic.blood_type", "血型", ["血型", "Blood Type"]),
-    FieldSpec("basic.height", "身高", ["身高"]),
-    FieldSpec("basic.weight", "體重", ["體重"]),
     FieldSpec("basic.marital_status", "婚姻狀況",
               ["婚姻狀況", "婚姻", "已婚未婚", "Marital Status"],
               kind="choice", choices=["未婚", "已婚"]),
     FieldSpec("basic.military", "兵役狀況",
               ["兵役", "兵役狀況", "服役情形", "役別", "兵役狀態"],
               kind="choice", choices=["役畢", "免役", "未役", "替代役", "不適用"]),
-    FieldSpec("basic.disability", "身心障礙",
-              ["身心障礙", "身障手冊", "是否具身心障礙身分"],
-              kind="choice", choices=["否", "是"]),
+    # 出生地、身分證字號、血型、身高、體重、身心障礙刻意不收：
+    # 履歷表就算印了這些格子也不填。欄位不存在 → 白名單裡沒有 → 模型無從對映，
+    # 比「收了再靠設定擋住」更徹底。
 
     # ---------- 聯絡方式 ----------
     FieldSpec("contact.mobile", "行動電話",
@@ -148,8 +141,7 @@ FIELD_KEYS = [f.key for f in FIELDS] + SPECIAL_KEYS
 BY_KEY = {f.key: f for f in FIELDS}
 
 # 高敏感欄位：預設不自動填，除非 config 明確開啟
-SENSITIVE_KEYS = {"basic.id_number", "basic.height", "basic.weight",
-                  "basic.blood_type", "basic.disability", "basic.marital_status"}
+SENSITIVE_KEYS = {"basic.marital_status"}
 
 
 def normalize_label(text: str) -> str:
