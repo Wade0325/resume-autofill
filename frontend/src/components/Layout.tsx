@@ -6,6 +6,7 @@ const TABS = [
   { to: '/profile', label: '我的資料', hint: '只需填一次' },
   { to: '/fill', label: '填寫履歷', hint: '空白表格自動填' },
   { to: '/import', label: '匯入履歷', hint: '從舊履歷抓資料' },
+  { to: '/logs', label: '日誌', hint: '處理過程紀錄' },
 ]
 
 export default function Layout() {

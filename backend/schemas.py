@@ -106,4 +106,12 @@ class ImportApplyOut(BaseModel):
     applied: int
 
 
+class LogEntry(BaseModel):
+    time: str                         # 年月日時分秒
+    level: str
+    request_id: str                   # 同一次操作的所有紀錄共用一個
+    module: str
+    message: str
+
+
 ProfileIn = Dict[str, Any]      # profile 結構由 core.schema 定義，這層不重複驗證

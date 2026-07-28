@@ -3,6 +3,7 @@ import Layout from './components/Layout'
 import ProfilePage from './pages/ProfilePage'
 import FillPage from './pages/FillPage'
 import ImportPage from './pages/ImportPage'
+import LogPage from './pages/LogPage'
 
 export default function App() {
   return (
@@ -12,6 +13,7 @@ export default function App() {
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/fill" element={<FillPage />} />
         <Route path="/import" element={<ImportPage />} />
+        <Route path="/logs" element={<LogPage />} />
       </Route>
     </Routes>
   )

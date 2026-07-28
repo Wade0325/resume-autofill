@@ -1,0 +1,163 @@
+import { useCallback, useEffect, useState } from 'react'
+import { api, type LogEntry } from '../api'
+
+const LEVELS = [
+  { id: '', label: '全部' },
+  { id: 'WARNING', label: '警告以上' },
+  { id: 'ERROR', label: '只看錯誤' },
+]
+
+export default function LogPage() {
+  const [entries, setEntries] = useState<LogEntry[]>([])
+  const [level, setLevel] = useState('')
+  const [requestId, setRequestId] = useState('')
+  const [live, setLive] = useState(true)
+  const [error, setError] = useState('')
+
+  const load = useCallback(() => {
+    api
+      .logs({ level, requestId })
+      .then((rows) => {
+        setEntries(rows)
+        setError('')
+      })
+      .catch((e) => setError(e.message))
+  }, [level, requestId])
+
+  useEffect(() => {
+    load()
+    if (!live) return
+    const timer = setInterval(load, 3000)
+    return () => clearInterval(timer)
+  }, [load, live])
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-xl font-semibold text-slate-900">日誌</h1>
+        <p className="text-sm text-slate-500 mt-1">
+          程式在處理過程中留下的紀錄。同一次操作的每一行共用一個追蹤碼，點它可以只看那一次。
+        </p>
+      </div>
+
+      {error && (
+        <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-md px-4 py-3 text-sm">
+          {error}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex gap-1">
+          {LEVELS.map((l) => (
+            <button
+              key={l.id}
+              onClick={() => setLevel(l.id)}
+              className={`text-xs px-3 py-1.5 rounded-md border transition ${
+                level === l.id
+                  ? 'bg-sky-50 border-sky-200 text-sky-800 font-medium'
+                  : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              {l.label}
+            </button>
+          ))}
+        </div>
+
+        {requestId && (
+          <button
+            onClick={() => setRequestId('')}
+            className="text-xs px-3 py-1.5 rounded-full bg-slate-100 border border-slate-300 text-slate-700"
+          >
+            追蹤碼 {requestId} ✕
+          </button>
+        )}
+
+        <label className="flex items-center gap-2 text-sm text-slate-600 ml-auto">
+          <input
+            type="checkbox"
+            checked={live}
+            onChange={(e) => setLive(e.target.checked)}
+            className="w-4 h-4 accent-sky-600"
+          />
+          每 3 秒自動更新
+        </label>
+        <button
+          onClick={load}
+          className="text-xs px-3 py-1.5 rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50"
+        >
+          立即重新整理
+        </button>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+        {entries.length > 0 && (
+          <div className="px-4 py-2 text-xs text-slate-500 border-b border-slate-100">
+            最新 {entries.length} 筆，由新到舊
+          </div>
+        )}
+        {entries.length === 0 ? (
+          <p className="text-sm text-slate-400 text-center py-12">沒有符合條件的紀錄</p>
+        ) : (
+          <div className="overflow-auto max-h-[70vh]">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-slate-600 text-xs sticky top-0 z-10">
+                <tr>
+                  <th className="text-left px-4 py-3 font-medium whitespace-nowrap">時間</th>
+                  <th className="text-left px-4 py-3 font-medium">等級</th>
+                  <th className="text-left px-4 py-3 font-medium">追蹤碼</th>
+                  <th className="text-left px-4 py-3 font-medium">來源</th>
+                  <th className="text-left px-4 py-3 font-medium">訊息</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {entries.map((e, i) => (
+                  <tr key={i} className={rowTone(e.level)}>
+                    <td className="px-4 py-2 text-slate-500 whitespace-nowrap tabular-nums">
+                      {e.time}
+                    </td>
+                    <td className="px-4 py-2">
+                      <span className={`text-xs px-1.5 py-0.5 rounded ${levelTone(e.level)}`}>
+                        {e.level}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2">
+                      {e.request_id === '-' ? (
+                        <span className="text-slate-300">—</span>
+                      ) : (
+                        <button
+                          onClick={() => setRequestId(e.request_id)}
+                          className="text-xs text-sky-600 hover:underline tabular-nums"
+                          title="只看這一次操作"
+                        >
+                          {e.request_id}
+                        </button>
+                      )}
+                    </td>
+                    <td className="px-4 py-2 text-xs text-slate-500 whitespace-nowrap">
+                      {e.module.replace(/^backend\./, '')}
+                    </td>
+                    <td className="px-4 py-2 text-slate-800 whitespace-pre-wrap break-all">
+                      {e.message}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function levelTone(level: string) {
+  if (level === 'ERROR') return 'bg-rose-100 text-rose-700'
+  if (level === 'WARNING') return 'bg-amber-100 text-amber-800'
+  return 'bg-slate-100 text-slate-600'
+}
+
+function rowTone(level: string) {
+  if (level === 'ERROR') return 'bg-rose-50/50'
+  if (level === 'WARNING') return 'bg-amber-50/40'
+  return ''
+}
