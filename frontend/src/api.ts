@@ -40,6 +40,12 @@ export type Plan = {
   items: PlanItem[]
 }
 
+/** 上傳後的分析在背景跑，用這個輪詢進度 */
+export type JobState =
+  | { status: 'processing'; stage: string; filename: string }
+  | { status: 'failed'; error: string; filename: string }
+  | { status: 'ready'; plan: Plan }
+
 export type PreviewSeg = { t: string; s?: string }
 export type PreviewCell = { colspan: number; segs: PreviewSeg[] }
 export type PreviewBlock =
@@ -174,8 +180,8 @@ export const api = {
   saveProfile: (profile: Profile) => putJson<{ ok: boolean }>('/profile', profile),
 
   analyze: (file: File, onProgress?: (pct: number) => void) =>
-    upload<Plan>('/jobs', file, onProgress),
-  getJob: (jobId: string) => request<Plan>(`/jobs/${jobId}`),
+    upload<{ job_id: string; status: string; filename: string }>('/jobs', file, onProgress),
+  getJob: (jobId: string) => request<JobState>(`/jobs/${jobId}`),
   getPreview: (jobId: string) => request<PreviewOut>(`/jobs/${jobId}/preview`),
   fixMappings: (jobId: string, fixes: { slot_id: string; field_key: string }[]) =>
     request<Plan>(`/jobs/${jobId}/mappings`, {

@@ -23,11 +23,52 @@ export default function FillPage() {
     api.fields().then(setFields).catch((e) => setError(e.message))
   }, [])
 
+  // 分析在後端背景執行，這裡輪詢進度；切頁再回來會憑 sessionStorage 接上
+  const [trackingId, setTrackingId] = useState<string | null>(() =>
+    sessionStorage.getItem(KEY_JOB),
+  )
   useEffect(() => {
-    const jobId = sessionStorage.getItem(KEY_JOB)
-    if (!jobId) return
-    api.getJob(jobId).then(setPlan).catch(() => sessionStorage.removeItem(KEY_JOB))
-  }, [])
+    if (!trackingId || plan) return
+    let stopped = false
+    let fails = 0
+    const started = Date.now()
+    const giveUp = () => {
+      sessionStorage.removeItem(KEY_JOB)
+      setTrackingId(null)
+      setPhase({ kind: 'idle' })
+    }
+    const poll = () => {
+      api
+        .getJob(trackingId)
+        .then((st) => {
+          if (stopped) return
+          fails = 0
+          if (st.status === 'ready') {
+            setPlan(st.plan)
+            setPhase({ kind: 'idle' })
+          } else if (st.status === 'failed') {
+            setError(st.error)
+            giveUp()
+          } else {
+            setPhase({
+              kind: 'analyzing',
+              seconds: Math.round((Date.now() - started) / 1000),
+              stage: st.stage,
+            })
+          }
+        })
+        .catch(() => {
+          // 後端 --reload 重啟時會斷幾秒，別因為一次失敗就放棄
+          if (!stopped && ++fails >= 5) giveUp()
+        })
+    }
+    poll()
+    const timer = setInterval(poll, 2000)
+    return () => {
+      stopped = true
+      clearInterval(timer)
+    }
+  }, [trackingId, plan])
 
   // 預覽抓不到就退回只有清單，不擋主流程
   const jobId = plan?.job_id
@@ -62,26 +103,15 @@ export default function FillPage() {
   async function upload(file: File) {
     setError('')
     setPhase({ kind: 'uploading', percent: 0 })
-    const started = Date.now()
-    let ticker: ReturnType<typeof setInterval> | undefined
     try {
-      const result = await api.analyze(file, (percent) => {
-        if (percent < 100) {
-          setPhase({ kind: 'uploading', percent })
-          return
-        }
-        setPhase({ kind: 'analyzing', seconds: 0 })
-        ticker ??= setInterval(
-          () => setPhase({ kind: 'analyzing', seconds: Math.round((Date.now() - started) / 1000) }),
-          1000,
-        )
-      })
-      setPlan(result)
-      sessionStorage.setItem(KEY_JOB, result.job_id)
+      const accepted = await api.analyze(file, (percent) =>
+        setPhase({ kind: 'uploading', percent }),
+      )
+      sessionStorage.setItem(KEY_JOB, accepted.job_id)
+      setPhase({ kind: 'analyzing', seconds: 0, stage: '準備中' })
+      setTrackingId(accepted.job_id)
     } catch (e: any) {
       setError(e.requestId ? `${e.message}（追蹤碼 ${e.requestId}）` : e.message)
-    } finally {
-      if (ticker) clearInterval(ticker)
       setPhase({ kind: 'idle' })
     }
   }
@@ -177,6 +207,8 @@ export default function FillPage() {
           onClick={() => {
             sessionStorage.removeItem(KEY_JOB)
             setPlan(null)
+            setTrackingId(null)
+            setPhase({ kind: 'idle' })
           }}
           className="text-sm text-slate-500 hover:text-slate-800"
         >

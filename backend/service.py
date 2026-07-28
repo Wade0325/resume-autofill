@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -55,46 +56,88 @@ def _save_upload(job_id: str, content: bytes) -> Path:
 # --------------------------------------------------------------------------
 # 填寫
 # --------------------------------------------------------------------------
-def analyze(filename: str, content: bytes) -> PlanOut:
+def analyze(filename: str, content: bytes) -> str:
+    """收下檔案就回 job_id，分析在背景執行緒跑。
+
+    真實履歷的分析要兩三分鐘，同步請求會讓前端乾等、一斷線結果就丟了。
+    前端拿 job_id 輪詢 get_job_state() 看進度。
+    """
     job_id = uuid.uuid4().hex[:12]
-    src = _save_upload(job_id, content)
+    _save_upload(job_id, content)
     log.info("上傳 %s (%.1f KB) job=%s", filename, len(content) / 1024, job_id)
+    db.create_job(job_id, filename, status="processing")
+    threading.Thread(target=_analyze_worker, args=(job_id, filename),
+                     daemon=True).start()
+    return job_id
 
+
+def _analyze_worker(job_id: str, filename: str) -> None:
+    src = input_path(job_id)
     t0 = time.perf_counter()
-    # 先讀出這份文件已經有的值，才分得出哪些非空格子是使用者資料（可覆蓋）、
-    # 哪些是表格印好的欄位名稱（不能碰）
-    existing = reader.read(document.text_only(str(src)), config.LLM_HOST, config.LLM_MODEL)
-    text, slots = document.load(str(src), _values_of(existing))
-    fp = document.fingerprint(slots)
-    cached = db.get_template(fp)
-    log.info("解析完成 位置=%d 可覆蓋=%d 全文=%d字 fingerprint=%s 範本快取=%s",
-             len(slots), sum(1 for s in slots if s.existing.strip()), len(text), fp,
-             "命中" if cached else "未命中")
+    try:
+        # 先讀出這份文件已經有的值，才分得出哪些非空格子是使用者資料（可覆蓋）、
+        # 哪些是表格印好的欄位名稱（不能碰）
+        db.update_job(job_id, stage="讀取文件內容")
+        existing = reader.read(document.text_only(str(src)),
+                               config.LLM_HOST, config.LLM_MODEL)
+        text, slots = document.load(str(src), _values_of(existing))
+        fp = document.fingerprint(slots)
+        cached = db.get_template(fp)
+        log.info("解析完成 位置=%d 可覆蓋=%d 全文=%d字 fingerprint=%s 範本快取=%s",
+                 len(slots), sum(1 for s in slots if s.existing.strip()), len(text), fp,
+                 "命中" if cached else "未命中")
 
-    decisions = planner.decide(text, slots, config.LLM_HOST, config.LLM_MODEL, cached)
+        db.update_job(job_id, stage="辨識欄位對映" if not cached else "套用已學過的格式")
+        decisions = planner.decide(text, slots, config.LLM_HOST, config.LLM_MODEL, cached)
 
-    # 第二輪修正：只在有模型新判的格子時跑（純快取代表使用者確認過）。
-    # 先做零成本的確定性對齊（標籤↔欄位、白名單外格子、期間欄拆併），
-    # 再由模型指認學經歷每一列對應清單第幾筆（分級列會錯位的根源）。
-    if any(d[3] == "model" for d in decisions.values()):
-        headers = document.slot_headers(str(src), slots)
-        profile = db.get_kv("profile") or {}
-        decisions = planner.align_labels(slots, decisions, headers)
-        decisions = planner.assign_rows(slots, decisions, profile, headers,
-                                        config.LLM_HOST, config.LLM_MODEL)
-        if config.LLM_VERIFY:
-            decisions = planner.verify(slots, decisions, profile, headers,
-                                       config.LLM_HOST, config.LLM_MODEL)
+        # 第二輪修正：只在有模型新判的格子時跑（純快取代表使用者確認過）。
+        # 先做零成本的確定性對齊（標籤↔欄位、白名單外格子、期間欄拆併），
+        # 再由模型指認學經歷每一列對應清單第幾筆（分級列會錯位的根源）。
+        if any(d[3] == "model" for d in decisions.values()):
+            db.update_job(job_id, stage="覆核對映結果")
+            headers = document.slot_headers(str(src), slots)
+            profile = db.get_kv("profile") or {}
+            decisions = planner.align_labels(slots, decisions, headers)
+            decisions = planner.assign_rows(slots, decisions, profile, headers,
+                                            config.LLM_HOST, config.LLM_MODEL)
+            if config.LLM_VERIFY:
+                decisions = planner.verify(slots, decisions, profile, headers,
+                                           config.LLM_HOST, config.LLM_MODEL)
 
-    db.create_job(job_id, filename, fp, [s.to_dict() for s in slots],
-                  {k: list(v) for k, v in decisions.items()})
+        db.update_job(job_id, fingerprint=fp,
+                      anchors=[s.to_dict() for s in slots],
+                      decided={k: list(v) for k, v in decisions.items()},
+                      status="analyzed", stage="")
 
-    plan = _render(job_id, filename, fp, bool(cached), slots, decisions)
-    log.info("比對完成 fill=%d skip=%d by_source=%s 耗時=%dms",
-             plan.stats.fill, plan.stats.skip, plan.stats.by_source,
-             int((time.perf_counter() - t0) * 1000))
-    actions.record("上傳履歷「%s」成功", filename)
-    return plan
+        plan = _render(job_id, filename, fp, bool(cached), slots, decisions)
+        log.info("比對完成 fill=%d skip=%d by_source=%s 耗時=%dms",
+                 plan.stats.fill, plan.stats.skip, plan.stats.by_source,
+                 int((time.perf_counter() - t0) * 1000))
+        actions.record("上傳履歷「%s」成功", filename)
+    except llm.LlmUnavailable as e:
+        log.warning("分析失敗 %s：%s", filename, e)
+        db.update_job(job_id, status="failed", stage="",
+                      error="模型還沒啟動，無法辨識欄位。請從右上角啟動模型後重新上傳")
+        actions.problem("上傳履歷「%s」失敗：模型還沒啟動", filename)
+    except Exception as e:
+        log.exception("分析失敗 %s", filename)
+        db.update_job(job_id, status="failed", stage="",
+                      error=f"無法解析這份文件：{e}")
+        actions.problem("上傳履歷「%s」失敗：檔案無法解析", filename)
+
+
+def get_job_state(job_id: str) -> Optional[Dict[str, Any]]:
+    """輪詢用：processing 給階段、failed 給原因、好了給完整計畫。"""
+    job = db.get_job(job_id)
+    if not job:
+        return None
+    if job["status"] == "processing":
+        return {"status": "processing", "stage": job.get("stage") or "準備中",
+                "filename": job["filename"]}
+    if job["status"] == "failed":
+        return {"status": "failed", "error": job.get("error") or "分析失敗",
+                "filename": job["filename"]}
+    return {"status": "ready", "plan": get_plan(job_id)}
 
 
 def get_plan(job_id: str) -> Optional[PlanOut]:

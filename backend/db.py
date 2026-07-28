@@ -33,9 +33,11 @@ CREATE TABLE IF NOT EXISTS job (
     id          TEXT PRIMARY KEY,
     filename    TEXT NOT NULL,
     fingerprint TEXT NOT NULL,
-    status      TEXT NOT NULL,
+    status      TEXT NOT NULL,   -- processing | analyzed | written | failed
     anchors     TEXT NOT NULL,
     decided     TEXT NOT NULL,
+    stage       TEXT NOT NULL DEFAULT '',   -- processing 時目前進行到哪一步
+    error       TEXT NOT NULL DEFAULT '',   -- failed 時給使用者看的原因
     created_at  TEXT NOT NULL
 );
 -- 匯入與填寫存的東西已經不一樣了：填寫要 anchor 座標才寫得回去，
@@ -69,6 +71,13 @@ def init() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
         conn.execute("PRAGMA journal_mode=WAL")
+        # 既有資料庫補欄位（SQLite 的 IF NOT EXISTS 不會改舊表）
+        for ddl in ("ALTER TABLE job ADD COLUMN stage TEXT NOT NULL DEFAULT ''",
+                    "ALTER TABLE job ADD COLUMN error TEXT NOT NULL DEFAULT ''"):
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                pass   # 欄位已存在
     log.info("資料庫就緒 path=%s", config.DB_PATH)
 
 
@@ -112,15 +121,17 @@ def put_template(fingerprint: str, mapping: Dict[str, str], source_name: str = "
 
 
 # ---------------- job：一次上傳的處理過程 ----------------
-def create_job(job_id: str, filename: str, fingerprint: str,
-               anchors: List[Dict[str, Any]], decided: Dict[str, Any]) -> None:
+def create_job(job_id: str, filename: str, fingerprint: str = "",
+               anchors: Optional[List[Dict[str, Any]]] = None,
+               decided: Optional[Dict[str, Any]] = None,
+               status: str = "analyzed") -> None:
     with connect() as conn:
         conn.execute(
             "INSERT INTO job (id, filename, fingerprint, status, anchors, decided, "
-            "created_at) VALUES (?, ?, ?, 'analyzed', ?, ?, ?)",
-            (job_id, filename, fingerprint,
-             json.dumps(anchors, ensure_ascii=False),
-             json.dumps(decided, ensure_ascii=False), _now()))
+            "created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (job_id, filename, fingerprint, status,
+             json.dumps(anchors or [], ensure_ascii=False),
+             json.dumps(decided or {}, ensure_ascii=False), _now()))
 
 
 def get_job(job_id: str) -> Optional[Dict[str, Any]]:
@@ -135,19 +146,44 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
 
 
 def update_job(job_id: str, *, decided: Optional[Dict[str, Any]] = None,
-               status: Optional[str] = None) -> None:
+               status: Optional[str] = None,
+               anchors: Optional[List[Dict[str, Any]]] = None,
+               fingerprint: Optional[str] = None,
+               stage: Optional[str] = None,
+               error: Optional[str] = None) -> None:
     sets, params = [], []
     if decided is not None:
         sets.append("decided = ?")
         params.append(json.dumps(decided, ensure_ascii=False))
+    if anchors is not None:
+        sets.append("anchors = ?")
+        params.append(json.dumps(anchors, ensure_ascii=False))
+    if fingerprint is not None:
+        sets.append("fingerprint = ?")
+        params.append(fingerprint)
     if status is not None:
         sets.append("status = ?")
         params.append(status)
+    if stage is not None:
+        sets.append("stage = ?")
+        params.append(stage)
+    if error is not None:
+        sets.append("error = ?")
+        params.append(error)
     if not sets:
         return
     params.append(job_id)
     with connect() as conn:
         conn.execute(f"UPDATE job SET {', '.join(sets)} WHERE id = ?", params)
+
+
+def fail_stale_jobs() -> int:
+    """把上次關機時還在分析中的 job 標成失敗——執行緒已經死了，不會有結果。"""
+    with connect() as conn:
+        cur = conn.execute(
+            "UPDATE job SET status = 'failed', "
+            "error = '分析被伺服器重啟中斷，請重新上傳' WHERE status = 'processing'")
+    return cur.rowcount
 
 
 def delete_job(job_id: str) -> None:

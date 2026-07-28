@@ -59,9 +59,14 @@ export default function ImportPage() {
           return
         }
         // 檔案送完了，剩下的時間都花在解析與模型判斷
-        setPhase({ kind: 'analyzing', seconds: 0 })
+        setPhase({ kind: 'analyzing', seconds: 0, stage: '讀取內容中' })
         ticker ??= setInterval(
-          () => setPhase({ kind: 'analyzing', seconds: Math.round((Date.now() - started) / 1000) }),
+          () =>
+            setPhase({
+              kind: 'analyzing',
+              seconds: Math.round((Date.now() - started) / 1000),
+              stage: '讀取內容中',
+            }),
           1000,
         )
       })

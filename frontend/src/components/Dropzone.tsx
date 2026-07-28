@@ -3,7 +3,7 @@ import { useRef, useState } from 'react'
 export type UploadPhase =
   | { kind: 'idle' }
   | { kind: 'uploading'; percent: number }
-  | { kind: 'analyzing'; seconds: number }
+  | { kind: 'analyzing'; seconds: number; stage: string }
 
 type Props = {
   title: string
@@ -66,10 +66,12 @@ function Progress({ phase }: { phase: UploadPhase }) {
   const uploading = phase.kind === 'uploading'
   const percent = uploading ? phase.percent : 100
 
+  const stage = phase.kind === 'analyzing' ? phase.stage : ''
+
   return (
     <div className="max-w-sm mx-auto">
       <div className="flex justify-between text-sm mb-2">
-        <span className="text-slate-700">{uploading ? '上傳中' : '辨識欄位中'}</span>
+        <span className="text-slate-700">{uploading ? '上傳中' : stage || '分析中'}</span>
         <span className="text-slate-500 tabular-nums">
           {uploading ? `${percent}%` : `已 ${phase.kind === 'analyzing' ? phase.seconds : 0} 秒`}
         </span>
@@ -82,7 +84,8 @@ function Progress({ phase }: { phase: UploadPhase }) {
       </div>
       {!uploading && (
         <p className="text-xs text-slate-400 mt-3">
-          第一次遇到的格式需要呼叫模型，通常 10～30 秒
+          第一次遇到的格式要靠模型判讀，約 1～4 分鐘；看過的格式幾秒就好。
+          分析在伺服器進行，切到其他頁面不會中斷。
         </p>
       )}
     </div>

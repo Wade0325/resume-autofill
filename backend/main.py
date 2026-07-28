@@ -29,6 +29,9 @@ async def lifespan(app: FastAPI):
     purged = db.purge_old_jobs()
     if purged:
         log.info("已清除 %d 筆過期上傳檔（超過 %d 小時）", purged, config.JOB_RETENTION_HOURS)
+    stale = db.fail_stale_jobs()
+    if stale:
+        log.info("標記 %d 筆被重啟中斷的分析為失敗", stale)
     log.info("服務啟動 http://%s:%d 　推論引擎 %s",
              config.API_HOST, config.API_PORT, config.LLM_HOST)
     yield
