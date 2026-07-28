@@ -1,7 +1,7 @@
 """SQLite 存取層。用標準庫 sqlite3，不引入 ORM。
 
 profile 與 settings 存成 JSON 放在 kv 表：兩者都是整份讀寫、從不按欄位查詢，
-正規化只會換來 join 與 migration 成本，而 matcher.get_value() 本來就吃巢狀 dict。
+正規化只會換來 join 與 migration 成本，而 planner.get_value() 本來就吃巢狀 dict。
 """
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
-"""核心流程編排：extract → decide → build_plan → apply_ops。
+"""流程編排：填寫（我的資料 → 空白履歷）與匯入（已填履歷 → 我的資料）。
 
-這是唯一知道處理順序的地方；API 層只管 HTTP，core/ 只管演算法。
+API 層只管 HTTP，core 只管演算法，順序寫在這裡。
 """
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import config, db
-from .core import extractor, matcher, reader, writer
-from .core.llm import get_backend
+from .core import document, llm, planner, reader, writer
+from .core.document import Slot
 from .core.schema import BY_KEY
 from .schemas import (ImportPreviewOut, ImportRow, PlanItem, PlanOut, PlanStats)
 
@@ -31,44 +31,53 @@ def output_path(job_id: str) -> Path:
     return job_dir(job_id) / "output.docx"
 
 
-def _backend():
-    return get_backend({"backend": "llamacpp", "host": config.LLM_HOST,
-                        "model": config.LLM_MODEL})
+def _values_of(extracted: Dict[str, Any]) -> set:
+    """把 reader 的輸出攤平成一組值，用來認出哪些格子裝的是使用者資料。"""
+    out = set()
+    for value in extracted.values():
+        if isinstance(value, list):
+            for row in value:
+                if isinstance(row, dict):
+                    out.update(str(v) for v in row.values() if str(v).strip())
+        elif str(value).strip():
+            out.add(str(value))
+    return out
 
 
+def _save_upload(job_id: str, content: bytes) -> Path:
+    job_dir(job_id).mkdir(parents=True, exist_ok=True)
+    path = input_path(job_id)
+    path.write_bytes(content)
+    return path
+
+
+# --------------------------------------------------------------------------
+# 填寫
+# --------------------------------------------------------------------------
 def analyze(filename: str, content: bytes) -> PlanOut:
-    """收下上傳的 docx，解析並產生填寫計畫。"""
     job_id = uuid.uuid4().hex[:12]
-    d = job_dir(job_id)
-    d.mkdir(parents=True, exist_ok=True)
-    src = input_path(job_id)
-    src.write_bytes(content)
+    src = _save_upload(job_id, content)
     log.info("上傳 %s (%.1f KB) job=%s", filename, len(content) / 1024, job_id)
 
     t0 = time.perf_counter()
-    # 一律連已填寫的位置一起抽：使用者上傳的可能是填過的舊履歷，
-    # 那些格子要能被「我的資料」覆蓋掉，沒抽出來就無從覆蓋。
-    # 對空白表格而言這是嚴格超集，不影響原本的結果。
-    data = extractor.extract(str(src), include_filled=True)
-    anchors, fingerprint = data["anchors"], data["fingerprint"]
-    log.info("解析完成 anchors=%d fingerprint=%s 耗時=%dms",
-             len(anchors), fingerprint, int((time.perf_counter() - t0) * 1000))
+    # 先讀出這份文件已經有的值，才分得出哪些非空格子是使用者資料（可覆蓋）、
+    # 哪些是表格印好的欄位名稱（不能碰）
+    existing = reader.read(document.text_only(str(src)), config.LLM_HOST, config.LLM_MODEL)
+    text, slots = document.load(str(src), _values_of(existing))
+    fp = document.fingerprint(slots)
+    cached = db.get_template(fp)
+    log.info("解析完成 位置=%d 可覆蓋=%d 全文=%d字 fingerprint=%s 範本快取=%s",
+             len(slots), sum(1 for s in slots if s.existing.strip()), len(text), fp,
+             "命中" if cached else "未命中")
 
-    cached = db.get_template(fingerprint)
-    log.info("範本快取%s fingerprint=%s entries=%d",
-             "命中" if cached else "未命中", fingerprint, len(cached))
+    decisions = planner.decide(text, slots, config.LLM_HOST, config.LLM_MODEL, cached)
+    db.create_job(job_id, filename, fp, [s.to_dict() for s in slots],
+                  {k: list(v) for k, v in decisions.items()})
 
-    backend = _backend()
-    t1 = time.perf_counter()
-    decided = matcher.decide(anchors, backend, cached_map=cached)
-    db.create_job(job_id, filename, fingerprint, anchors,
-                  {k: list(v) for k, v in decided.items()})
-
-    plan = _render(job_id, filename, fingerprint, bool(cached),
-                   backend.name != "null", anchors, decided)
+    plan = _render(job_id, filename, fp, bool(cached), slots, decisions)
     log.info("比對完成 fill=%d skip=%d by_source=%s 耗時=%dms",
              plan.stats.fill, plan.stats.skip, plan.stats.by_source,
-             int((time.perf_counter() - t1) * 1000))
+             int((time.perf_counter() - t0) * 1000))
     return plan
 
 
@@ -76,47 +85,48 @@ def get_plan(job_id: str) -> Optional[PlanOut]:
     job = db.get_job(job_id)
     if not job:
         return None
-    decided = {k: tuple(v) for k, v in job["decided"].items()}
+    slots = [Slot(**s) for s in job["anchors"]]
+    decisions = {k: tuple(v) for k, v in job["decided"].items()}
     return _render(job_id, job["filename"], job["fingerprint"],
-                   bool(db.get_template(job["fingerprint"])), True,
-                   job["anchors"], decided)
+                   bool(db.get_template(job["fingerprint"])), slots, decisions)
 
 
 def apply_fixes(job_id: str, fixes: List[Tuple[str, str]]) -> Optional[PlanOut]:
-    """套用使用者修正。只改 decided 再重算，完全不呼叫模型。"""
+    """套用使用者修正。只改決策再重算，不會再呼叫模型。"""
     job = db.get_job(job_id)
     if not job:
         return None
-    decided = {k: tuple(v) for k, v in job["decided"].items()}
-    valid_ids = {a["id"] for a in job["anchors"]}
+    slots = [Slot(**s) for s in job["anchors"]]
+    decisions = {k: tuple(v) for k, v in job["decided"].items()}
+    valid = {s.id for s in slots}
 
-    for anchor_id, field_key in fixes:
-        if anchor_id not in valid_ids:
-            raise ValueError(f"anchor_id 不存在：{anchor_id}")
+    for slot_id, field_key in fixes:
+        if slot_id not in valid:
+            raise ValueError(f"位置不存在：{slot_id}")
         if field_key not in BY_KEY and field_key not in ("__SKIP__", "__UNKNOWN__"):
             raise ValueError(f"未知欄位代碼：{field_key}")
-        old = decided.get(anchor_id, ("", 0.0, ""))[0]
-        decided[anchor_id] = (field_key, 1.0, "manual")
-        # 這條是日後補強規則別名表的唯一依據，別降級成 debug
-        log.info("使用者修正 %s：%s → %s", anchor_id, old or "(未決定)", field_key)
+        previous = decisions.get(slot_id)
+        old = previous[0] if previous else ""
+        decisions[slot_id] = (field_key, previous[1] if previous else 0, 1.0,
+                              "manual", previous[4] if previous else "")
+        # 這是日後改進提示詞的唯一依據
+        log.info("使用者修正 %s：%s → %s", slot_id, old or "(未決定)", field_key)
 
-    db.update_job(job_id, decided={k: list(v) for k, v in decided.items()})
+    db.update_job(job_id, decided={k: list(v) for k, v in decisions.items()})
     return _render(job_id, job["filename"], job["fingerprint"],
-                   bool(db.get_template(job["fingerprint"])), True,
-                   job["anchors"], decided)
+                   bool(db.get_template(job["fingerprint"])), slots, decisions)
 
 
 def write_output(job_id: str) -> Optional[Dict[str, Any]]:
-    """產生填好的 docx，並把這次的對映存成範本快取。"""
     job = db.get_job(job_id)
     if not job:
         return None
-    profile = db.get_kv("profile") or {}
+    slots = [Slot(**s) for s in job["anchors"]]
+    decisions = {k: tuple(v) for k, v in job["decided"].items()}
     settings = db.get_settings()
-    decided = {k: tuple(v) for k, v in job["decided"].items()}
 
-    ops, _ = matcher.build_plan(
-        job["anchors"], profile, decided,
+    ops, _ = planner.build_plan(
+        slots, db.get_kv("profile") or {}, decisions,
         min_confidence=settings["min_confidence"],
         allow_sensitive=settings["allow_sensitive"])
 
@@ -126,14 +136,16 @@ def write_output(job_id: str) -> Optional[Dict[str, Any]]:
     log.info("寫檔完成 written=%d failed=%d 耗時=%dms",
              result["written"], result["failed"], int((time.perf_counter() - t0) * 1000))
     for f in result["fail"]:
-        log.warning("寫入失敗 anchor=%s error=%s", f.get("anchor"), f.get("error"))
+        log.warning("寫入失敗 slot=%s error=%s", f.get("slot"), f.get("error"))
 
-    # 學習：把這次的決策記住，下次同一份表格直接命中快取，0 次模型呼叫
+    # 記住這次的決策，同一份表格下次完全不必問模型。
+    # 連略過的位置也要記，否則下次還會為了那些格子再呼叫一次。
     mapping = dict(db.get_template(job["fingerprint"]))
-    mapping.update({o.anchor["id"]: o.field_key for o in ops})
+    mapping.update({sid: {"field_key": key, "ordinal": ordinal, "label": label}
+                    for sid, (key, ordinal, _conf, _src, label) in decisions.items()})
     db.put_template(job["fingerprint"], mapping, source_name=job["filename"])
     db.update_job(job_id, status="written")
-    log.info("範本已學習 fingerprint=%s entries=%d", job["fingerprint"], len(mapping))
+    log.info("範本已學習 fingerprint=%s 位置=%d", job["fingerprint"], len(mapping))
 
     return {"job_id": job_id, "written": result["written"],
             "failed": result["failed"], "learned": len(mapping),
@@ -150,18 +162,15 @@ def delete(job_id: str) -> bool:
 
 
 def _render(job_id: str, filename: str, fingerprint: str, cached: bool,
-            llm_available: bool, anchors: List[Dict[str, Any]],
-            decided: Dict[str, Any]) -> PlanOut:
-    """把 decided 轉成前端要的單一 items 列表。"""
-    profile = db.get_kv("profile") or {}
+            slots: List[Slot], decisions: Dict[str, Any]) -> PlanOut:
     settings = db.get_settings()
-    ops, skipped = matcher.build_plan(
-        anchors, profile, decided,
+    ops, skipped = planner.build_plan(
+        slots, db.get_kv("profile") or {}, decisions,
         min_confidence=settings["min_confidence"],
         allow_sensitive=settings["allow_sensitive"])
 
     items = [_item(o, "fill") for o in ops] + [_item(s, "skip") for s in skipped]
-    items.sort(key=lambda i: i.anchor_id)
+    items.sort(key=lambda i: i.slot_id)
 
     by_source: Dict[str, int] = {}
     for o in ops:
@@ -169,41 +178,32 @@ def _render(job_id: str, filename: str, fingerprint: str, cached: bool,
 
     return PlanOut(
         job_id=job_id, filename=filename, fingerprint=fingerprint,
-        template_cached=cached, llm_available=llm_available,
-        stats=PlanStats(anchors=len(anchors), fill=len(ops),
-                        skip=len(skipped), by_source=by_source),
+        template_cached=cached, llm_available=llm.available(config.LLM_HOST),
+        stats=PlanStats(slots=len(slots), fill=len(ops), skip=len(skipped),
+                        by_source=by_source),
         items=items)
 
 
 def _item(op, status: str) -> PlanItem:
     return PlanItem(
-        anchor_id=op.anchor["id"], label=op.anchor["label"],
-        kind=op.anchor["kind"], options=op.anchor.get("options", []),
-        field_key=op.field_key, value=str(op.value),
-        existing=op.anchor.get("existing", ""), confidence=op.confidence,
-        source=op.source, status=status, note=op.note)
+        slot_id=op.slot.id, label=op.label, kind=op.slot.kind,
+        options=op.slot.options,
+        field_key=op.field_key, ordinal=op.ordinal, value=str(op.value),
+        existing=op.slot.existing, confidence=op.confidence, source=op.source,
+        status=status, note=op.note)
 
 
 # --------------------------------------------------------------------------
-# 匯入：已填寫的履歷 → 我的資料
+# 匯入
 # --------------------------------------------------------------------------
 def analyze_import(filename: str, content: bytes) -> ImportPreviewOut:
-    """整份文件交給模型讀。
-
-    不走 extractor 的結構解析：那套是為了「知道要寫回哪一格」而存在的，
-    匯入不需要座標，卻要付出配對錯誤的代價——實測 16 欄合併儲存格的履歷會把
-    「聯絡電話」當成姓名的值。模型直接讀整列反而準得多。
-    """
     import_id = uuid.uuid4().hex[:12]
-    d = job_dir(import_id)
-    d.mkdir(parents=True, exist_ok=True)
-    src = input_path(import_id)
-    src.write_bytes(content)
+    src = _save_upload(import_id, content)
     log.info("匯入上傳 %s (%.1f KB) import=%s", filename, len(content) / 1024, import_id)
 
     t0 = time.perf_counter()
-    text = reader.serialize(str(src))
-    extracted = reader.read_profile(text, config.LLM_HOST, config.LLM_MODEL)
+    text = document.text_only(str(src))
+    extracted = reader.read(text, config.LLM_HOST, config.LLM_MODEL)
     db.create_import(import_id, filename, extracted)
 
     rows = _import_rows(extracted)
@@ -214,7 +214,6 @@ def analyze_import(filename: str, content: bytes) -> ImportPreviewOut:
 
 
 def get_import(import_id: str) -> Optional[ImportPreviewOut]:
-    """重新取回匯入預覽。使用者切到別頁再切回來時要能接續，不必重傳檔案。"""
     record = db.get_import(import_id)
     if not record:
         return None
@@ -234,24 +233,23 @@ def apply_import(import_id: str, row_ids: List[str]) -> Optional[int]:
         row = rows.get(row_id)
         if row is None:
             continue
-        matcher.set_value(profile, row.field_key, row.incoming, row.ordinal)
+        planner.set_value(profile, row.field_key, row.incoming, row.ordinal)
         applied.append(row.field_key)
     db.put_kv("profile", profile)
 
-    # 只記欄位代碼不記值——incoming 全是個資
+    # 只記欄位代碼——incoming 全是個資
     log.info("匯入寫入 選取=%d 欄位=%s", len(applied), ",".join(sorted(set(applied))))
     return len(applied)
 
 
 def _import_rows(extracted: Dict[str, Any]) -> List[ImportRow]:
-    """把模型讀到的資料攤成一列一個欄位，並和目前的 profile 比對。"""
     profile = db.get_kv("profile") or {}
     rows: List[ImportRow] = []
 
-    def add(field_key: str, ordinal: int, value: str) -> None:
+    def add(field_key: str, ordinal: int, value: Any) -> None:
         if field_key not in BY_KEY or not str(value).strip():
             return
-        current = str(matcher.get_value(profile, field_key, ordinal) or "")
+        current = str(planner.get_value(profile, field_key, ordinal) or "")
         rows.append(ImportRow(
             row_id=f"{field_key}#{ordinal}", field_key=field_key, ordinal=ordinal,
             current=current, incoming=str(value).strip(), default_checked=not current))

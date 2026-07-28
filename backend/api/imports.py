@@ -6,6 +6,7 @@ import logging
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from .. import config, service
+from ..core.llm import LlmUnavailable
 from ..schemas import ImportApplyIn, ImportApplyOut, ImportPreviewOut
 
 log = logging.getLogger(__name__)
@@ -26,6 +27,8 @@ async def create_import(file: UploadFile = File(...)) -> ImportPreviewOut:
 
     try:
         return service.analyze_import(name, content)
+    except LlmUnavailable as e:
+        raise HTTPException(503, f"模型未就緒：{e}")
     except Exception as e:
         log.exception("匯入解析失敗 filename=%s", name)
         raise HTTPException(400, f"無法解析這份 docx：{e}")

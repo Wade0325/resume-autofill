@@ -3,9 +3,8 @@
 export type FieldSpec = {
   key: string
   label: string
-  kind: string // text | date | choice | longtext | list
+  kind: string // text | date | money | choice | longtext | list
   choices: string[]
-  aliases: string[]
   sensitive: boolean
 }
 
@@ -16,11 +15,12 @@ export type Health = {
 }
 
 export type PlanItem = {
-  anchor_id: string
+  slot_id: string
   label: string
   kind: string
   options: string[]
   field_key: string
+  ordinal: number
   value: string
   existing: string
   confidence: number
@@ -35,7 +35,7 @@ export type Plan = {
   fingerprint: string
   template_cached: boolean
   llm_available: boolean
-  stats: { anchors: number; fill: number; skip: number; by_source: Record<string, number> }
+  stats: { slots: number; fill: number; skip: number; by_source: Record<string, number> }
   items: PlanItem[]
 }
 
@@ -141,7 +141,7 @@ export const api = {
   analyze: (file: File, onProgress?: (pct: number) => void) =>
     upload<Plan>('/jobs', file, onProgress),
   getJob: (jobId: string) => request<Plan>(`/jobs/${jobId}`),
-  fixMappings: (jobId: string, fixes: { anchor_id: string; field_key: string }[]) =>
+  fixMappings: (jobId: string, fixes: { slot_id: string; field_key: string }[]) =>
     request<Plan>(`/jobs/${jobId}/mappings`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },

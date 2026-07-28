@@ -7,6 +7,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from .. import config, db, service
+from ..core.llm import LlmUnavailable
 from ..schemas import MappingsIn, OutputOut, PlanOut
 
 log = logging.getLogger(__name__)
@@ -29,6 +30,9 @@ async def create_job(file: UploadFile = File(...)) -> PlanOut:
 
     try:
         return service.analyze(name, content)
+    except LlmUnavailable as e:
+        # 沒有模型就沒有辦法判斷欄位，只有看過的格式能靠快取離線運作
+        raise HTTPException(503, f"模型未就緒：{e}")
     except Exception as e:
         # 壞掉的 docx 是使用者輸入問題，不該回 500
         log.exception("解析失敗 filename=%s", name)
@@ -46,7 +50,7 @@ def read_job(job_id: str) -> PlanOut:
 @router.patch("/{job_id}/mappings", response_model=PlanOut)
 def fix_mappings(job_id: str, body: MappingsIn) -> PlanOut:
     try:
-        plan = service.apply_fixes(job_id, [(f.anchor_id, f.field_key) for f in body.fixes])
+        plan = service.apply_fixes(job_id, [(f.slot_id, f.field_key) for f in body.fixes])
     except ValueError as e:
         raise HTTPException(422, str(e))
     if plan is None:
