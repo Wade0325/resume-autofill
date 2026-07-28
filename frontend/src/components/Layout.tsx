@@ -54,6 +54,7 @@ function ModelMenu() {
   const [offline, setOffline] = useState(true)
   const [open, setOpen] = useState(false)
   const [err, setErr] = useState('')
+  const [customUrl, setCustomUrl] = useState('')
 
   const refresh = useCallback(() => {
     api
@@ -88,6 +89,17 @@ function ModelMenu() {
     if (!window.confirm(`要下載「${shortName(m.name)}」嗎？檔案約 ${m.size_gb} GB。`)) return
     setErr('')
     api.downloadModel(m.name).then(refresh).catch((e) => setErr(e.message))
+  }
+
+  const downloadCustom = () => {
+    setErr('')
+    api
+      .downloadModelUrl(customUrl)
+      .then(() => {
+        setCustomUrl('')
+        refresh()
+      })
+      .catch((e) => setErr(e.message))
   }
 
   const pill = pillState(info, offline)
@@ -131,6 +143,33 @@ function ModelMenu() {
                 </li>
               ))}
             </ul>
+          )}
+          {!offline && info && (
+            <div className="px-4 py-3 border-t border-slate-100 space-y-1.5">
+              <div className="text-xs text-slate-500">
+                自訂模型：貼上 Hugging Face 的 .gguf 下載連結
+              </div>
+              <div className="flex gap-2">
+                <input
+                  value={customUrl}
+                  onChange={(e) => setCustomUrl(e.target.value)}
+                  placeholder="https://huggingface.co/…/resolve/main/xxx.gguf"
+                  className="flex-1 min-w-0 text-xs border border-slate-300 rounded px-2 py-1.5
+                             focus:outline-none focus:ring-2 focus:ring-sky-500"
+                />
+                <button
+                  onClick={downloadCustom}
+                  disabled={!customUrl.trim()}
+                  className="text-xs px-3 py-1.5 rounded-md border border-sky-200 text-sky-700
+                             hover:bg-sky-50 disabled:opacity-40 whitespace-nowrap"
+                >
+                  下載
+                </button>
+              </div>
+              <div className="text-[11px] text-slate-400">
+                檔案大小約等於所需 VRAM；超過顯卡容量會變得很慢或無法啟動
+              </div>
+            </div>
           )}
           {err && (
             <div className="px-4 py-2 text-xs text-rose-600 border-t border-slate-100">{err}</div>

@@ -12,7 +12,8 @@ import logging
 import subprocess
 import threading
 import time
-from urllib.parse import urlparse
+from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import requests
 from fastapi import APIRouter, HTTPException
@@ -25,7 +26,14 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/models", tags=["models"])
 
 # 可下載的型錄。官方 Qwen 未提供 GGUF，用 unsloth 的量化版（同 README 第 5 節）。
+# 型錄外的模型走 /models/download-url，貼 Hugging Face 的 .gguf 連結自行下載。
 CATALOG = [
+    {"name": "Qwen3.5-35B-A3B-Q4_K_M", "size_gb": 20.0,
+     "note": "最強選項（MoE，啟用 3B），需 64GB RAM 或大顯存",
+     "url": "https://huggingface.co/unsloth/Qwen3.5-35B-A3B-GGUF/resolve/main/Qwen3.5-35B-A3B-Q4_K_M.gguf"},
+    {"name": "Qwen3.5-27B-Q4_K_M", "size_gb": 16.5,
+     "note": "更強的判讀，需 24GB 級顯卡；8GB 顯卡會極慢",
+     "url": "https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/Qwen3.5-27B-Q4_K_M.gguf"},
     {"name": "Qwen3.5-9B-Q4_K_M", "size_gb": 5.3, "note": "預設，判讀最準（約需 7.4 GB VRAM）",
      "url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf"},
     {"name": "Qwen3.5-4B-Q4_K_M", "size_gb": 2.6, "note": "較省資源，複雜表格易誤判",
@@ -57,6 +65,9 @@ def list_models() -> dict:
     for name, path in local.items():   # 使用者自己放進來的檔案也要列
         rows.append(_row(name, round(path.stat().st_size / 1024 ** 3, 1), "",
                          downloaded=True, downloadable=False))
+    for name in _downloads:            # 自訂網址下載中（或失敗）的也要列
+        if not any(r["name"] == name for r in rows):
+            rows.append(_row(name, 0, "自訂下載", downloaded=False, downloadable=False))
     return {"active": config.LLM_MODEL,
             "running": llm.available(config.LLM_HOST),
             "starting": _starting,
@@ -131,6 +142,39 @@ def _kill_port(port: int) -> None:
          "| ForEach-Object { Stop-Process -Id $_ -Force }"],
         capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
     time.sleep(1)   # 等 port 真正釋放
+
+
+class UrlIn(BaseModel):
+    url: str
+
+
+@router.post("/download-url")
+def download_from_url(body: UrlIn) -> dict:
+    """自訂模型：貼 Hugging Face 的 .gguf 連結下載到 models/。
+
+    只做兩件防呆：https、副檔名 .gguf。下載的是資料檔不會被執行，
+    這是使用者自己機器上的個人工具，不必更嚴。
+    """
+    # 檔案頁的 /blob/ 連結幫使用者轉成直接下載的 /resolve/
+    url = body.url.strip().replace("/blob/", "/resolve/", 1)
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise HTTPException(422, "只接受 https 網址")
+    fname = unquote(Path(parsed.path).name)
+    if not fname.lower().endswith(".gguf"):
+        raise HTTPException(422, "網址必須指向 .gguf 檔（到 Hugging Face 檔案列表複製下載連結）")
+
+    name = fname[: -len(".gguf")]
+    if (config.MODELS_DIR / fname).exists():
+        raise HTTPException(409, "已有同名的模型檔")
+    with _lock:
+        active = _downloads.get(name)
+        if active and active["error"] is None:
+            raise HTTPException(409, "已經在下載中")
+        _downloads[name] = {"pct": 0, "error": None}
+    threading.Thread(target=_download, args=({"name": name, "url": url},),
+                     daemon=True).start()
+    return {"ok": True, "name": name}
 
 
 @router.post("/download")

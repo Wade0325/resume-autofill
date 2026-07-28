@@ -203,4 +203,6 @@ export const api = {
   models: () => request<ModelsOut>('/models'),
   selectModel: (name: string) => postJson<{ ok: boolean }>('/models/select', { name }),
   downloadModel: (name: string) => postJson<{ ok: boolean }>('/models/download', { name }),
+  downloadModelUrl: (url: string) =>
+    postJson<{ ok: boolean; name: string }>('/models/download-url', { url }),
 }
