@@ -5,13 +5,14 @@ API 層只管 HTTP，core 只管演算法，順序寫在這裡。
 from __future__ import annotations
 
 import logging
+import tempfile
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import actions, config, db
-from .core import document, llm, planner, preview, reader, writer
+from .core import convert, document, llm, planner, preview, reader, writer
 from .core.document import Slot
 from .core.schema import BY_KEY
 from .schemas import (ImportPreviewOut, ImportRow, PlanItem, PlanOut, PlanStats)
@@ -100,6 +101,36 @@ def get_preview(job_id: str) -> Optional[Dict[str, Any]]:
     slot_ids = {s["id"] for s in job["anchors"]}
     return {"job_id": job_id,
             "blocks": preview.build(str(input_path(job_id)), slot_ids)}
+
+
+def render_preview_pdf(job_id: str, which: str) -> Optional[bytes]:
+    """排版預覽的 PDF。original＝原始文件、filled＝套用我的資料後。
+
+    original 轉一次就快取在 job 目錄；filled 每次重算——使用者剛改過
+    對映就要看到新結果，LibreOffice 轉一次約一兩秒，可以接受。
+    """
+    job = db.get_job(job_id)
+    if not job:
+        return None
+
+    if which == "original":
+        cache = job_dir(job_id) / "original.pdf"
+        if not cache.exists():
+            cache.write_bytes(convert.docx_to_pdf(input_path(job_id).read_bytes()))
+        return cache.read_bytes()
+
+    slots = [Slot(**s) for s in job["anchors"]]
+    decisions = {k: tuple(v) for k, v in job["decided"].items()}
+    settings = db.get_settings()
+    ops, _ = planner.build_plan(
+        slots, db.get_kv("profile") or {}, decisions,
+        min_confidence=settings["min_confidence"],
+        allow_sensitive=settings["allow_sensitive"])
+    with tempfile.TemporaryDirectory(prefix="preview_") as tmp:
+        filled = Path(tmp) / "filled.docx"
+        # 預覽一律標黃底，才看得出資料落在哪一格；下載的成品仍依設定
+        writer.apply_ops(str(input_path(job_id)), str(filled), ops, highlight=True)
+        return convert.docx_to_pdf(filled.read_bytes())
 
 
 def apply_fixes(job_id: str, fixes: List[Tuple[str, str]]) -> Optional[PlanOut]:

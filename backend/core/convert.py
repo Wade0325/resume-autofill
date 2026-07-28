@@ -37,15 +37,25 @@ def find_soffice() -> Optional[str]:
 
 
 def doc_to_docx(content: bytes) -> bytes:
-    soffice = find_soffice()
-    if not soffice:
+    if not find_soffice():
         raise ConversionError(
             "轉換 .doc 需要 LibreOffice 但找不到。請安裝 LibreOffice，"
             "或先用 Word 另存成 .docx 再上傳")
+    return _convert(content, "input.doc", "docx")
 
-    with tempfile.TemporaryDirectory(prefix="doc2docx_") as tmp:
+
+def docx_to_pdf(content: bytes) -> bytes:
+    """左右對照預覽用：轉成 PDF 才能呈現真正的排版。"""
+    if not find_soffice():
+        raise ConversionError("產生排版預覽需要 LibreOffice 但找不到。請安裝 LibreOffice")
+    return _convert(content, "input.docx", "pdf")
+
+
+def _convert(content: bytes, src_name: str, target: str) -> bytes:
+    soffice = find_soffice()
+    with tempfile.TemporaryDirectory(prefix="convert_") as tmp:
         tmp_dir = Path(tmp)
-        src = tmp_dir / "input.doc"
+        src = tmp_dir / src_name
         src.write_bytes(content)
         # 獨立的 profile 目錄：使用者若正開著 LibreOffice，
         # 共用 profile 會搶鎖導致轉檔靜默失敗
@@ -54,12 +64,12 @@ def doc_to_docx(content: bytes) -> bytes:
             proc = subprocess.run(
                 [soffice, "--headless", "--norestore",
                  f"-env:UserInstallation={profile}",
-                 "--convert-to", "docx", "--outdir", str(tmp_dir), str(src)],
+                 "--convert-to", target, "--outdir", str(tmp_dir), str(src)],
                 capture_output=True, text=True, errors="replace", timeout=120)
         except subprocess.TimeoutExpired:
             raise ConversionError("LibreOffice 轉檔逾時，請改用 Word 另存成 .docx")
 
-        out = tmp_dir / "input.docx"
+        out = src.with_suffix(f".{target}")
         if proc.returncode != 0 or not out.exists():
             detail = (proc.stderr or proc.stdout or "").strip()
             raise ConversionError(f"LibreOffice 轉檔失敗：{detail or '未知原因'}")

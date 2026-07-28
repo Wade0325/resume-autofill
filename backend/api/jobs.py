@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 
 from .. import actions, config, db, service
@@ -57,6 +57,20 @@ def read_job(job_id: str) -> PlanOut:
     if plan is None:
         raise HTTPException(404, "找不到這個 job")
     return plan
+
+
+@router.get("/{job_id}/preview.pdf")
+def preview_pdf(job_id: str, which: str = "original") -> Response:
+    """排版預覽。LibreOffice 不在時回 503，前端退回結構化對照。"""
+    if which not in ("original", "filled"):
+        raise HTTPException(422, "which 必須是 original 或 filled")
+    try:
+        pdf = service.render_preview_pdf(job_id, which)
+    except ConversionError as e:
+        raise HTTPException(503, str(e))
+    if pdf is None:
+        raise HTTPException(404, "找不到這個 job")
+    return Response(content=pdf, media_type="application/pdf")
 
 
 @router.get("/{job_id}/preview")

@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type FieldSpec, type Plan, type PlanItem, type PreviewOut } from '../api'
 import DocPreview from '../components/DocPreview'
 import Dropzone, { type UploadPhase } from '../components/Dropzone'
+import PdfCompare from '../components/PdfCompare'
 
 // 切到別頁再切回來時要能接續，不必重傳檔案重跑一次模型
 const KEY_JOB = 'fill.jobId'
@@ -11,6 +12,9 @@ export default function FillPage() {
   const [fields, setFields] = useState<FieldSpec[]>([])
   const [plan, setPlan] = useState<Plan | null>(null)
   const [preview, setPreview] = useState<PreviewOut | null>(null)
+  const [pdfOk, setPdfOk] = useState(true)
+  const [pdfMsg, setPdfMsg] = useState('')
+  const [previewVersion, setPreviewVersion] = useState(0)
   const [phase, setPhase] = useState<UploadPhase>({ kind: 'idle' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -28,12 +32,20 @@ export default function FillPage() {
   // 預覽抓不到就退回只有清單，不擋主流程
   const jobId = plan?.job_id
   useEffect(() => {
+    setPdfOk(true)
+    setPreviewVersion(0)
     if (!jobId) {
       setPreview(null)
       return
     }
     api.getPreview(jobId).then(setPreview).catch(() => setPreview(null))
   }, [jobId])
+
+  // 這台機器沒有 LibreOffice：PDF 永遠做不出來，退回結構化對照
+  const onPdfUnavailable = useCallback((message: string) => {
+    setPdfOk(false)
+    setPdfMsg(message)
+  }, [])
 
   async function run<T>(work: () => Promise<T>): Promise<T | undefined> {
     setBusy(true)
@@ -79,7 +91,10 @@ export default function FillPage() {
     const result = await run(() =>
       api.fixMappings(plan.job_id, [{ slot_id: slotId, field_key: fieldKey }]),
     )
-    if (result) setPlan(result)
+    if (result) {
+      setPlan(result)
+      setPreviewVersion((v) => v + 1) // 讓右邊的 PDF 重新產生
+    }
   }
 
   async function applyAndDownload() {
@@ -138,9 +153,16 @@ export default function FillPage() {
         </div>
       )}
 
-      {preview && <DocPreview blocks={preview.blocks} items={plan.items} />}
+      {pdfOk ? (
+        <PdfCompare jobId={plan.job_id} version={previewVersion} onUnavailable={onPdfUnavailable} />
+      ) : (
+        <>
+          <div className="text-xs text-slate-500">{pdfMsg}——改用結構化對照顯示。</div>
+          {preview && <DocPreview blocks={preview.blocks} items={plan.items} />}
+        </>
+      )}
 
-      <details open={!preview} className="group">
+      <details open={!pdfOk && !preview} className="group">
         <summary className="cursor-pointer text-sm text-slate-600 hover:text-slate-900 select-none py-1">
           <span className="group-open:hidden">▸</span>
           <span className="hidden group-open:inline">▾</span> 檢視與修正對映清單（{plan.items.length} 個位置）
