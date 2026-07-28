@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import actions, config, db
-from .core import document, llm, planner, reader, writer
+from .core import document, llm, planner, preview, reader, writer
 from .core.document import Slot
 from .core.schema import BY_KEY
 from .schemas import (ImportPreviewOut, ImportRow, PlanItem, PlanOut, PlanStats)
@@ -90,6 +90,16 @@ def get_plan(job_id: str) -> Optional[PlanOut]:
     decisions = {k: tuple(v) for k, v in job["decided"].items()}
     return _render(job_id, job["filename"], job["fingerprint"],
                    bool(db.get_template(job["fingerprint"])), slots, decisions)
+
+
+def get_preview(job_id: str) -> Optional[Dict[str, Any]]:
+    """把原始文件攤成結構化區塊，前端拿 plan 的值疊上去做左右對照。"""
+    job = db.get_job(job_id)
+    if not job:
+        return None
+    slot_ids = {s["id"] for s in job["anchors"]}
+    return {"job_id": job_id,
+            "blocks": preview.build(str(input_path(job_id)), slot_ids)}
 
 
 def apply_fixes(job_id: str, fixes: List[Tuple[str, str]]) -> Optional[PlanOut]:

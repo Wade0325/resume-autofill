@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, type FieldSpec, type Plan, type PlanItem } from '../api'
+import { api, type FieldSpec, type Plan, type PlanItem, type PreviewOut } from '../api'
+import DocPreview from '../components/DocPreview'
 import Dropzone, { type UploadPhase } from '../components/Dropzone'
 
 // 切到別頁再切回來時要能接續，不必重傳檔案重跑一次模型
@@ -9,6 +10,7 @@ const KEY_JOB = 'fill.jobId'
 export default function FillPage() {
   const [fields, setFields] = useState<FieldSpec[]>([])
   const [plan, setPlan] = useState<Plan | null>(null)
+  const [preview, setPreview] = useState<PreviewOut | null>(null)
   const [phase, setPhase] = useState<UploadPhase>({ kind: 'idle' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -22,6 +24,16 @@ export default function FillPage() {
     if (!jobId) return
     api.getJob(jobId).then(setPlan).catch(() => sessionStorage.removeItem(KEY_JOB))
   }, [])
+
+  // 預覽抓不到就退回只有清單，不擋主流程
+  const jobId = plan?.job_id
+  useEffect(() => {
+    if (!jobId) {
+      setPreview(null)
+      return
+    }
+    api.getPreview(jobId).then(setPreview).catch(() => setPreview(null))
+  }, [jobId])
 
   async function run<T>(work: () => Promise<T>): Promise<T | undefined> {
     setBusy(true)
@@ -126,7 +138,17 @@ export default function FillPage() {
         </div>
       )}
 
-      <PlanTable plan={plan} fields={fields} busy={busy} onRemap={remap} />
+      {preview && <DocPreview blocks={preview.blocks} items={plan.items} />}
+
+      <details open={!preview} className="group">
+        <summary className="cursor-pointer text-sm text-slate-600 hover:text-slate-900 select-none py-1">
+          <span className="group-open:hidden">▸</span>
+          <span className="hidden group-open:inline">▾</span> 檢視與修正對映清單（{plan.items.length} 個位置）
+        </summary>
+        <div className="mt-3">
+          <PlanTable plan={plan} fields={fields} busy={busy} onRemap={remap} />
+        </div>
+      </details>
 
       <div className="flex items-center justify-between pb-8">
         <button

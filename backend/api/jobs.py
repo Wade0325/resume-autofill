@@ -59,6 +59,14 @@ def read_job(job_id: str) -> PlanOut:
     return plan
 
 
+@router.get("/{job_id}/preview")
+def read_preview(job_id: str) -> dict:
+    result = service.get_preview(job_id)
+    if result is None:
+        raise HTTPException(404, "找不到這個 job")
+    return result
+
+
 @router.patch("/{job_id}/mappings", response_model=PlanOut)
 def fix_mappings(job_id: str, body: MappingsIn) -> PlanOut:
     try:
