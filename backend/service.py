@@ -14,7 +14,7 @@ from . import config, db
 from .core import extractor, matcher, writer
 from .core.llm import get_backend
 from .core.schema import BY_KEY
-from .schemas import PlanItem, PlanOut, PlanStats
+from .schemas import (ImportPreviewOut, ImportRow, PlanItem, PlanOut, PlanStats)
 
 log = logging.getLogger(__name__)
 
@@ -46,7 +46,10 @@ def analyze(filename: str, content: bytes) -> PlanOut:
     log.info("上傳 %s (%.1f KB) job=%s", filename, len(content) / 1024, job_id)
 
     t0 = time.perf_counter()
-    data = extractor.extract(str(src))
+    # 一律連已填寫的位置一起抽：使用者上傳的可能是填過的舊履歷，
+    # 那些格子要能被「我的資料」覆蓋掉，沒抽出來就無從覆蓋。
+    # 對空白表格而言這是嚴格超集，不影響原本的結果。
+    data = extractor.extract(str(src), include_filled=True)
     anchors, fingerprint = data["anchors"], data["fingerprint"]
     log.info("解析完成 anchors=%d fingerprint=%s 耗時=%dms",
              len(anchors), fingerprint, int((time.perf_counter() - t0) * 1000))
@@ -176,5 +179,86 @@ def _item(op, status: str) -> PlanItem:
     return PlanItem(
         anchor_id=op.anchor["id"], label=op.anchor["label"],
         kind=op.anchor["kind"], options=op.anchor.get("options", []),
-        field_key=op.field_key, value=str(op.value), confidence=op.confidence,
+        field_key=op.field_key, value=str(op.value),
+        existing=op.anchor.get("existing", ""), confidence=op.confidence,
         source=op.source, status=status, note=op.note)
+
+
+# --------------------------------------------------------------------------
+# 匯入：已填寫的履歷 → 我的資料
+# --------------------------------------------------------------------------
+def analyze_import(filename: str, content: bytes) -> ImportPreviewOut:
+    import_id = uuid.uuid4().hex[:12]
+    d = job_dir(import_id)
+    d.mkdir(parents=True, exist_ok=True)
+    src = input_path(import_id)
+    src.write_bytes(content)
+    log.info("匯入上傳 %s (%.1f KB) import=%s", filename, len(content) / 1024, import_id)
+
+    t0 = time.perf_counter()
+    data = extractor.extract(str(src), include_filled=True)
+    anchors, fingerprint = data["anchors"], data["fingerprint"]
+
+    decided = matcher.decide(anchors, _backend(),
+                             cached_map=db.get_template(fingerprint))
+    db.create_job(import_id, filename, fingerprint, anchors,
+                  {k: list(v) for k, v in decided.items()})
+
+    rows = _import_rows(anchors, decided)
+    log.info("匯入解析完成 anchors=%d 可匯入=%d 需覆蓋=%d 耗時=%dms",
+             len(anchors), len(rows), sum(1 for r in rows if not r.default_checked),
+             int((time.perf_counter() - t0) * 1000))
+    return ImportPreviewOut(import_id=import_id, filename=filename, rows=rows)
+
+
+def apply_import(import_id: str, anchor_ids: List[str]) -> Optional[int]:
+    job = db.get_job(import_id)
+    if not job:
+        return None
+    decided = {k: tuple(v) for k, v in job["decided"].items()}
+    rows = {r.anchor_id: r for r in _import_rows(job["anchors"], decided)}
+
+    profile = db.get_kv("profile") or {}
+    applied = []
+    for aid in anchor_ids:
+        row = rows.get(aid)
+        if row is None:
+            continue
+        matcher.set_value(profile, row.field_key, row.incoming, row.ordinal)
+        applied.append(row.field_key)
+    db.put_kv("profile", profile)
+
+    # 只記欄位代碼不記值——incoming 全是個資
+    log.info("匯入寫入 選取=%d 欄位=%s", len(applied), ",".join(sorted(set(applied))))
+    return len(applied)
+
+
+def _import_rows(anchors: List[Dict[str, Any]],
+                 decided: Dict[str, Any]) -> List[ImportRow]:
+    """把「anchor 的既有內容」轉成可匯入的欄位列表。"""
+    profile = db.get_kv("profile") or {}
+    ordinals = matcher.assign_ordinals(anchors, decided)
+    by_id = {a["id"]: a for a in anchors}
+
+    rows: List[ImportRow] = []
+    for aid, (key, _conf, _src) in decided.items():
+        anchor = by_id.get(aid)
+        if anchor is None or key not in BY_KEY:
+            continue                       # __SKIP__ / __UNKNOWN__ 不匯入
+
+        raw = anchor.get("existing", "").strip()
+        if not raw:
+            continue
+        # 勾選題存的是整串「■男　□女」，要取出被勾的那一項
+        value = extractor.checked_option(raw) if anchor["kind"] == "checkbox" else raw
+        if not value:
+            continue
+
+        ordinal = ordinals.get(aid, 0)
+        current = str(matcher.get_value(profile, key, ordinal) or "")
+        rows.append(ImportRow(
+            anchor_id=aid, label=anchor["label"], field_key=key, ordinal=ordinal,
+            current=current, incoming=value, default_checked=not current))
+
+    rows.sort(key=lambda r: r.anchor_id)
+    return rows

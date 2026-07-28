@@ -41,6 +41,7 @@ class PlanItem(BaseModel):
     options: List[str] = []
     field_key: str
     value: str
+    existing: str = ""                # 文件原本就有的內容，非空代表這一格會被覆蓋
     confidence: float
     source: str                       # cache | rule | fuzzy | llm | manual
     status: Literal["fill", "skip"]
@@ -79,6 +80,30 @@ class OutputOut(BaseModel):
     failed: int
     learned: int
     download_url: str
+
+
+class ImportRow(BaseModel):
+    anchor_id: str
+    label: str                        # docx 上印的標籤，讓使用者確認對映合不合理
+    field_key: str
+    ordinal: int                      # 第幾筆學歷／經歷
+    current: str                      # 我的資料現在的值
+    incoming: str                     # 從履歷抽到的值
+    default_checked: bool             # current 為空才預設勾選
+
+
+class ImportPreviewOut(BaseModel):
+    import_id: str
+    filename: str
+    rows: List[ImportRow]
+
+
+class ImportApplyIn(BaseModel):
+    anchor_ids: List[str]
+
+
+class ImportApplyOut(BaseModel):
+    applied: int
 
 
 ProfileIn = Dict[str, Any]      # profile 結構由 core.schema 定義，這層不重複驗證

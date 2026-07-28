@@ -124,7 +124,7 @@ def build_plan(anchors: List[Dict[str, Any]],
     """
     ops: List[FillOp] = []
     skipped: List[FillOp] = []
-    ordinals = _assign_ordinals(anchors, decided)
+    ordinals = assign_ordinals(anchors, decided)
 
     by_id = {a["id"]: a for a in anchors}
     for aid, (key, conf, src) in decided.items():
@@ -164,7 +164,7 @@ def build_plan(anchors: List[Dict[str, Any]],
     return ops, skipped
 
 
-def _assign_ordinals(anchors, decided) -> Dict[str, int]:
+def assign_ordinals(anchors, decided) -> Dict[str, int]:
     """
     處理『學歷／經歷』這種多列表格：同一個 (表格, 欄, 欄位代碼) 的空格
     依列號排序，第 1 列拿 education[0]、第 2 列拿 education[1]，依此類推。
@@ -198,6 +198,25 @@ def get_value(profile: Dict[str, Any], key: str, ordinal: int = 0):
         item = arr[ordinal]
         return _dig(item, tail)
     return _dig(profile, key)
+
+
+def set_value(profile: Dict[str, Any], key: str, value: str, ordinal: int = 0) -> None:
+    """與 get_value 對稱的寫入，供匯入流程使用。列表不夠長時自動補齊。"""
+    if "[]" in key:
+        head, tail = key.split("[].", 1)
+        arr = profile.setdefault(head, [])
+        while len(arr) <= ordinal:
+            arr.append({})
+        _bury(arr[ordinal], tail, value)
+    else:
+        _bury(profile, key, value)
+
+
+def _bury(obj: Dict[str, Any], path: str, value: str) -> None:
+    parts = path.split(".")
+    for p in parts[:-1]:
+        obj = obj.setdefault(p, {})
+    obj[parts[-1]] = value
 
 
 def _dig(obj: Any, path: str):

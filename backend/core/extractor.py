@@ -29,6 +29,8 @@ from docx.oxml.ns import qn
 from docx.table import Table, _Cell
 from docx.text.paragraph import Paragraph
 
+from .schema import ALIAS_INDEX, normalize_label
+
 # 常見的「這裡是空白」標記
 PLACEHOLDER_RE = re.compile(r"^[\s\u3000_＿…．\.\-—–]*$")
 BLANK_RUN_RE = re.compile(r"[_＿]{2,}|[\.．]{4,}")
@@ -155,14 +157,17 @@ def _grid(table: Table) -> List[List[Optional[_Cell]]]:
     return grid
 
 
-def _label_for_cell(grid, r: int, c: int) -> str:
-    """空白格的標籤：先看左邊，再看上面（台灣履歷表兩種都很常見）。"""
+def _nonblank_left(grid, r: int, c: int) -> str:
     for cc in range(c - 1, -1, -1):
         cell = grid[r][cc]
         if cell is not None:
             t = cell_text(cell)
             if t and not is_blank(t):
                 return t.replace("\n", " ")
+    return ""
+
+
+def _nonblank_above(grid, r: int, c: int) -> str:
     for rr in range(r - 1, -1, -1):
         if c < len(grid[rr]):
             cell = grid[rr][c]
@@ -171,6 +176,76 @@ def _label_for_cell(grid, r: int, c: int) -> str:
                 if t and not is_blank(t):
                     return t.replace("\n", " ")
     return ""
+
+
+def _label_for_cell(grid, r: int, c: int) -> str:
+    """空白格的標籤：先看左邊，再看上面（台灣履歷表兩種都很常見）。"""
+    return _nonblank_left(grid, r, c) or _nonblank_above(grid, r, c)
+
+
+def _label_for_filled_cell(grid, r: int, c: int) -> str:
+    """已填寫格子的標籤：鄰格必須「看起來像欄位名稱」才採用。
+
+    填寫模式可以無腦取左邊那格，因為值格是空的。匯入模式不行：學歷表的
+    「資訊工程學系」左邊是「國立臺灣大學」，那是另一個值不是標籤，
+    直接拿來用會讓整列標籤往右錯位一格。
+
+    而且要「一路找到欄位名稱為止」，不能取第一個非空格：學歷表第 2 列的正上方
+    是第 1 列的值（國立臺灣大學），要再往上一列才會碰到表頭（學校名稱）。
+    """
+    for cc in range(c - 1, -1, -1):
+        cell = grid[r][cc]
+        if cell is not None:
+            t = cell_text(cell).replace("\n", " ")
+            if _is_label_cell(t):
+                return t
+    for rr in range(r - 1, -1, -1):
+        if c < len(grid[rr]):
+            cell = grid[rr][c]
+            if cell is not None:
+                t = cell_text(cell).replace("\n", " ")
+                if _is_label_cell(t):
+                    return t
+    # 整欄整列都找不到已知欄位名稱時，退回鄰格規則讓 LLM 去判斷
+    return _nonblank_above(grid, r, c) or _nonblank_left(grid, r, c)
+
+
+def _is_label_cell(text: str) -> bool:
+    """這格的內容本身就是欄位名稱（例如「出生年月日」）→ 它是標籤，不是值。
+
+    匯入模式非做這個判斷不可：標籤格也是非空的，而 _label_for_cell() 對第 0 欄
+    會往上找，於是「出生年月日」會被安上「姓　名」的標籤，當成姓名匯入。
+    """
+    return normalize_label(text) in ALIAS_INDEX
+
+
+def checked_option(text: str) -> str:
+    """從「■男　□女」取出被勾選的那一項。"""
+    m = re.search(f"[{CHECKED_CHARS}][ 　]*([^ 　{CHECKBOX_CHARS}{CHECKED_CHARS}]+)",
+                  text)
+    return m.group(1).strip() if m else ""
+
+
+def _label_value_pairs(text: str) -> List[Dict[str, Any]]:
+    """把「緊急聯絡人：王大明  關係：父子  電話：0922」拆成三組標籤與值。
+
+    用兩個以上的空白切段，是因為 Word 履歷表就是靠空白排版把數個欄位塞在同一行。
+    連值的字元位置一起回傳：寫回時要能精準替換掉舊值，只把新值接在後面是錯的。
+    """
+    pairs: List[Dict[str, Any]] = []
+    offset = 0
+    for chunk in re.split(r"([ 　]{2,})", text):   # 保留分隔符才算得出偏移量
+        if chunk and not re.fullmatch(r"[ 　]{2,}", chunk):
+            m = INLINE_LABEL_RE.search(chunk)
+            if m and not is_blank(m.group("value")):
+                pairs.append({
+                    "label": m.group("label").strip(),
+                    "value": m.group("value").strip(),
+                    "start": offset + m.start("value"),
+                    "end": offset + m.end("value"),
+                })
+        offset += len(chunk)
+    return pairs
 
 
 def _row_context(grid, r: int) -> str:
@@ -199,7 +274,7 @@ def table_preceding_labels(doc) -> Dict[int, str]:
     return labels
 
 
-def extract_tables(doc, prefix="tbl") -> List[Anchor]:
+def extract_tables(doc, prefix="tbl", include_filled: bool = False) -> List[Anchor]:
     anchors: List[Anchor] = []
     pre_labels = table_preceding_labels(doc)
     for ti, table in enumerate(doc.tables):
@@ -220,6 +295,33 @@ def extract_tables(doc, prefix="tbl") -> List[Anchor]:
                         id=aid, kind="checkbox", label=label,
                         context=_row_context(grid, r), loc=loc,
                         options=opts, existing=text))
+                    continue
+
+                # (a2) 已填寫的格子也要成為 anchor：匯入時是資料來源，
+                #      填寫時則是「會被我的資料覆蓋掉」的既有內容
+                if include_filled and not is_blank(text):
+                    if _is_label_cell(text):
+                        continue
+                    last_line = text.split("\n")[-1]
+                    inline = INLINE_LABEL_RE.search(last_line)
+                    if inline and not is_blank(inline.group("value")):
+                        # 格子裡就寫著「語文能力：英文」：標籤比鄰格更準，
+                        # 而且只能替換冒號後面那段，整格覆寫會把標籤一起吃掉
+                        anchors.append(Anchor(
+                            id=aid + ".inline", kind="inline",
+                            label=inline.group("label").strip(),
+                            context=_row_context(grid, r),
+                            loc={**loc, "in_cell": True,
+                                 "value_start": inline.start("value"),
+                                 "value_end": inline.end("value")},
+                            existing=inline.group("value").strip()))
+                        continue
+                    label = (_label_for_filled_cell(grid, r, c)
+                             or _clean_heading(pre_labels.get(ti, "")))
+                    if label:
+                        anchors.append(Anchor(
+                            id=aid, kind="cell", label=label,
+                            context=_row_context(grid, r), loc=loc, existing=text))
                     continue
 
                 # (b) 空白格 → 左/上找標籤
@@ -264,12 +366,24 @@ def _strip_options(text: str) -> str:
 # --------------------------------------------------------------------------
 # 3) 段落填空
 # --------------------------------------------------------------------------
-def extract_paragraphs(doc) -> List[Anchor]:
+def extract_paragraphs(doc, include_filled: bool = False) -> List[Anchor]:
     anchors: List[Anchor] = []
     for pi, para in enumerate(doc.paragraphs):
         text = para.text
         if not text.strip():
             continue
+
+        # 匯入模式：先看有沒有「標籤：值」已經填好的段落
+        if include_filled:
+            pairs = _label_value_pairs(text)
+            if pairs:
+                for vi, p in enumerate(pairs):
+                    anchors.append(Anchor(
+                        id=f"p{pi}.v{vi}", kind="inline", label=p["label"],
+                        context=text[:200],
+                        loc={"para": pi, "value_start": p["start"], "value_end": p["end"]},
+                        existing=p["value"]))
+                continue
 
         if any(ch in text for ch in CHECKBOX_CHARS):
             opts = _parse_checkbox_options(text)
@@ -323,13 +437,14 @@ def _clean_heading(text: str) -> str:
 # --------------------------------------------------------------------------
 # 對外主函式
 # --------------------------------------------------------------------------
-def extract(path: str) -> Dict[str, Any]:
+def extract(path: str, include_filled: bool = False) -> Dict[str, Any]:
+    """include_filled=True 是匯入模式：連已經填好的位置也一併抽出來。"""
     doc = Document(path)
     anchors: List[Anchor] = []
     anchors += extract_content_controls(doc)
     anchors += extract_form_fields(doc)
-    anchors += extract_tables(doc)
-    anchors += extract_paragraphs(doc)
+    anchors += extract_tables(doc, include_filled=include_filled)
+    anchors += extract_paragraphs(doc, include_filled=include_filled)
 
     # 去重（同一個 id 只留一個）
     uniq: Dict[str, Anchor] = {}

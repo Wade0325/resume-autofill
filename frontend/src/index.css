@@ -1,0 +1,10 @@
+@import 'tailwindcss';
+
+/* Tailwind v4 是 CSS-first 設定，主題直接寫在這裡，不需要 tailwind.config.js */
+@theme {
+  --font-sans: 'Noto Sans TC', 'Microsoft JhengHei', system-ui, sans-serif;
+}
+
+body {
+  @apply bg-slate-50 text-slate-800 font-sans;
+}
