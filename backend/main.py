@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config, db
-from .api import imports, jobs, logs, meta, profile
+from .api import imports, jobs, logs, meta, models, profile
 from .logging_setup import request_id_var, setup_logging
 
 log = logging.getLogger(__name__)
@@ -22,6 +22,10 @@ log = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     setup_logging(config.LOG_DIR, config.LOG_LEVEL)
     db.init()
+    # 使用者在介面上切換過模型的話，重啟後沿用那次的選擇
+    saved_model = db.get_kv("llm_model")
+    if saved_model:
+        config.LLM_MODEL = saved_model
     purged = db.purge_old_jobs()
     if purged:
         log.info("已清除 %d 筆過期上傳檔（超過 %d 小時）", purged, config.JOB_RETENTION_HOURS)
@@ -71,6 +75,7 @@ app.include_router(profile.router, prefix="/api")
 app.include_router(jobs.router, prefix="/api")
 app.include_router(imports.router, prefix="/api")
 app.include_router(logs.router, prefix="/api")
+app.include_router(models.router, prefix="/api")
 
 # 正式版把 build 好的前端交給同一個服務托管，使用者只會看到一個網址。
 # 開發時 dist 不存在，走 Vite dev server 的 proxy，這裡就跳過。

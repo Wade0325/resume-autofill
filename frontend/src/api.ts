@@ -62,6 +62,25 @@ export type LogEntry = {
   message: string
 }
 
+export type ModelInfo = {
+  name: string
+  size_gb: number
+  note: string
+  downloaded: boolean
+  downloadable: boolean
+  active: boolean
+  downloading: boolean
+  progress: number
+  error: string
+}
+
+export type ModelsOut = {
+  active: string
+  running: boolean
+  starting: string | null
+  models: ModelInfo[]
+}
+
 export type Profile = Record<string, any>
 
 /** 後端錯誤一律帶 X-Request-Id，附在訊息裡才對得到 log。 */
@@ -171,4 +190,8 @@ export const api = {
   logs: ({ level }: { level?: string }) =>
     request<LogEntry[]>(`/logs${level ? `?level=${level}` : ''}`),
   clearLogs: () => request<{ ok: boolean }>('/logs', { method: 'DELETE' }),
+
+  models: () => request<ModelsOut>('/models'),
+  selectModel: (name: string) => postJson<{ ok: boolean }>('/models/select', { name }),
+  downloadModel: (name: string) => postJson<{ ok: boolean }>('/models/download', { name }),
 }
