@@ -30,6 +30,14 @@ export default function LogPage() {
     return () => clearInterval(timer)
   }, [load, live])
 
+  const clear = () => {
+    if (!window.confirm('確定要清除日誌？畫面會清空，舊紀錄仍保留在備份檔裡。')) return
+    api
+      .clearLogs()
+      .then(load)
+      .catch((e) => setError(e.message))
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -74,6 +82,12 @@ export default function LogPage() {
           className="text-xs px-3 py-1.5 rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50"
         >
           立即重新整理
+        </button>
+        <button
+          onClick={clear}
+          className="text-xs px-3 py-1.5 rounded-md border border-rose-200 text-rose-600 hover:bg-rose-50"
+        >
+          清除日誌
         </button>
       </div>
 

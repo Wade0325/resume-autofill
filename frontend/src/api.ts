@@ -170,4 +170,5 @@ export const api = {
 
   logs: ({ level }: { level?: string }) =>
     request<LogEntry[]>(`/logs${level ? `?level=${level}` : ''}`),
+  clearLogs: () => request<{ ok: boolean }>('/logs', { method: 'DELETE' }),
 }
