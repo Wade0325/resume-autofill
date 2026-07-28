@@ -15,7 +15,7 @@ API_PORT = int(os.environ.get("RESUME_AUTOFILL_API_PORT", "8090"))
 
 # 推論引擎位置屬於部署設定，與使用者可調的門檻分開（後者存在 DB 的 settings）
 LLM_HOST = os.environ.get("RESUME_AUTOFILL_LLM_HOST", "http://localhost:8085")
-LLM_MODEL = os.environ.get("RESUME_AUTOFILL_LLM_MODEL", "Qwen3.5-4B-Q4_K_M")
+LLM_MODEL = os.environ.get("RESUME_AUTOFILL_LLM_MODEL", "Qwen3.5-9B-Q4_K_M")
 
 LOG_LEVEL = os.environ.get("RESUME_AUTOFILL_LOG_LEVEL", "INFO")
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
