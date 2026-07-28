@@ -12,6 +12,7 @@ class FieldSpecOut(BaseModel):
     kind: str
     choices: List[str] = []
     sensitive: bool = False
+    derived: bool = False             # 由其他欄位合成，個人資料表單不顯示
 
 
 class LlmStatus(BaseModel):
