@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, type FieldSpec, type ImportPreview, type ImportRow } from '../api'
 import { SECTIONS } from '../sections'
@@ -103,6 +103,13 @@ export default function ImportPage() {
     remember(next)
   }
 
+  // 表頭勾選框：只作用在畫面上這個主題的列，其他主題的勾選不受影響
+  function toggleAll(rows: ImportRow[], select: boolean) {
+    const next = new Set(picked)
+    rows.forEach((r) => (select ? next.add(r.row_id) : next.delete(r.row_id)))
+    remember(next)
+  }
+
   if (!preview) {
     return (
       <div className="space-y-6">
@@ -132,17 +139,6 @@ export default function ImportPage() {
           抽到 <strong className="text-slate-900 text-base">{preview.rows.length}</strong> 個欄位，
           已勾選 <strong className="text-sky-700 text-base">{picked.size}</strong> 個
         </span>
-        <div className="flex gap-2 ml-auto">
-          <Chip onClick={() => remember(new Set(preview.rows.map((r) => r.row_id)))}>全選</Chip>
-          <Chip
-            onClick={() =>
-              remember(new Set(preview.rows.filter((r) => !r.current.trim()).map((r) => r.row_id)))
-            }
-          >
-            只選空白的
-          </Chip>
-          <Chip onClick={() => remember(new Set())}>全不選</Chip>
-        </div>
       </div>
 
       <div className="grid grid-cols-[13rem_1fr] gap-8 items-start">
@@ -177,7 +173,13 @@ export default function ImportPage() {
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-600 text-xs">
                 <tr>
-                  <th className="w-12 px-4 py-3"></th>
+                  <th className="w-12 px-4 py-3">
+                    <SelectAllBox
+                      rows={shown}
+                      picked={picked}
+                      onToggle={(select) => toggleAll(shown, select)}
+                    />
+                  </th>
                   <th className="text-left px-4 py-3 font-medium">欄位</th>
                   <th className="text-left px-4 py-3 font-medium">我的資料現在的值</th>
                   <th className="text-left px-4 py-3 font-medium">從履歷抽到的值</th>
@@ -272,14 +274,34 @@ function Row({
   )
 }
 
-function Chip({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+function SelectAllBox({
+  rows,
+  picked,
+  onToggle,
+}: {
+  rows: ImportRow[]
+  picked: Set<string>
+  onToggle: (select: boolean) => void
+}) {
+  const ref = useRef<HTMLInputElement>(null)
+  const chosen = rows.filter((r) => picked.has(r.row_id)).length
+  const all = rows.length > 0 && chosen === rows.length
+
+  // indeterminate 只能用 JS 設，沒有對應的 HTML 屬性
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = chosen > 0 && !all
+  }, [chosen, all])
+
   return (
-    <button
-      onClick={onClick}
-      className="text-xs px-3 py-1 rounded-full border border-slate-300 text-slate-600 hover:bg-slate-50"
-    >
-      {children}
-    </button>
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={all}
+      disabled={rows.length === 0}
+      onChange={() => onToggle(!all)}
+      title={all ? '取消全選這個主題' : '全選這個主題'}
+      className="w-4 h-4 accent-sky-600 disabled:cursor-not-allowed"
+    />
   )
 }
 

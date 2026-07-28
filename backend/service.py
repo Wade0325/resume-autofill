@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import config, db
+from . import actions, config, db
 from .core import document, llm, planner, reader, writer
 from .core.document import Slot
 from .core.schema import BY_KEY
@@ -29,6 +29,18 @@ def input_path(job_id: str) -> Path:
 
 def output_path(job_id: str) -> Path:
     return job_dir(job_id) / "output.docx"
+
+
+def _field_label(field_key: str) -> str:
+    """欄位代碼轉成操作紀錄用的白話名稱。"""
+    if field_key in ("", None):
+        return "（未決定）"
+    if field_key == "__SKIP__":
+        return "（不填這格）"
+    if field_key == "__UNKNOWN__":
+        return "（找不到對應）"
+    spec = BY_KEY.get(field_key)
+    return spec.label if spec else field_key
 
 
 def _values_of(extracted: Dict[str, Any]) -> set:
@@ -78,6 +90,8 @@ def analyze(filename: str, content: bytes) -> PlanOut:
     log.info("比對完成 fill=%d skip=%d by_source=%s 耗時=%dms",
              plan.stats.fill, plan.stats.skip, plan.stats.by_source,
              int((time.perf_counter() - t0) * 1000))
+    actions.record("上傳「%s」：找到 %d 個可填位置，其中 %d 格可以自動填入",
+                   filename, plan.stats.slots, plan.stats.fill)
     return plan
 
 
@@ -107,10 +121,13 @@ def apply_fixes(job_id: str, fixes: List[Tuple[str, str]]) -> Optional[PlanOut]:
             raise ValueError(f"未知欄位代碼：{field_key}")
         previous = decisions.get(slot_id)
         old = previous[0] if previous else ""
+        label = previous[4] if previous else ""
         decisions[slot_id] = (field_key, previous[1] if previous else 0, 1.0,
-                              "manual", previous[4] if previous else "")
+                              "manual", label)
         # 這是日後改進提示詞的唯一依據
         log.info("使用者修正 %s：%s → %s", slot_id, old or "(未決定)", field_key)
+        actions.record("修正「%s」這格：%s → %s",
+                       label or slot_id, _field_label(old), _field_label(field_key))
 
     db.update_job(job_id, decided={k: list(v) for k, v in decisions.items()})
     return _render(job_id, job["filename"], job["fingerprint"],
@@ -137,6 +154,11 @@ def write_output(job_id: str) -> Optional[Dict[str, Any]]:
              result["written"], result["failed"], int((time.perf_counter() - t0) * 1000))
     for f in result["fail"]:
         log.warning("寫入失敗 slot=%s error=%s", f.get("slot"), f.get("error"))
+    if result["failed"]:
+        actions.problem("產生「%s」的成果檔：填入 %d 格，另有 %d 格沒寫成功",
+                        job["filename"], result["written"], result["failed"])
+    else:
+        actions.record("產生「%s」的成果檔：填入 %d 格", job["filename"], result["written"])
 
     # 記住這次的決策，同一份表格下次完全不必問模型。
     # 連略過的位置也要記，否則下次還會為了那些格子再呼叫一次。
@@ -153,11 +175,13 @@ def write_output(job_id: str) -> Optional[Dict[str, Any]]:
 
 
 def delete(job_id: str) -> bool:
-    if not db.get_job(job_id):
+    job = db.get_job(job_id)
+    if not job:
         return False
     db.delete_job(job_id)
     db._rmtree(job_dir(job_id))
     log.info("已刪除 job=%s", job_id)
+    actions.record("刪除上傳的「%s」", job["filename"])
     return True
 
 
@@ -210,6 +234,7 @@ def analyze_import(filename: str, content: bytes) -> ImportPreviewOut:
     log.info("匯入讀取完成 全文=%d字 欄位=%d 需覆蓋=%d 耗時=%dms",
              len(text), len(rows), sum(1 for r in rows if not r.default_checked),
              int((time.perf_counter() - t0) * 1000))
+    actions.record("上傳已填好的「%s」：讀到 %d 個欄位可以匯入", filename, len(rows))
     return ImportPreviewOut(import_id=import_id, filename=filename, rows=rows)
 
 
@@ -239,6 +264,7 @@ def apply_import(import_id: str, row_ids: List[str]) -> Optional[int]:
 
     # 只記欄位代碼——incoming 全是個資
     log.info("匯入寫入 選取=%d 欄位=%s", len(applied), ",".join(sorted(set(applied))))
+    actions.record("從「%s」匯入 %d 個欄位到我的資料", record["filename"], len(applied))
     return len(applied)
 
 

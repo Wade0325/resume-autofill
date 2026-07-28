@@ -5,6 +5,12 @@
   --font-sans: 'Noto Sans TC', 'Microsoft JhengHei', system-ui, sans-serif;
 }
 
+/* 長短頁面切換時捲軸忽隱忽現，置中的內容會跟著左右跳。
+   固定預留捲軸的空位，寬度就不再變動。 */
+html {
+  scrollbar-gutter: stable;
+}
+
 body {
   @apply bg-slate-50 text-slate-800 font-sans;
 }

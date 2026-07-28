@@ -6,7 +6,8 @@ import logging
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from .. import config, db, service
+from .. import actions, config, db, service
+from ..core.convert import ConversionError, doc_to_docx
 from ..core.llm import LlmUnavailable
 from ..schemas import MappingsIn, OutputOut, PlanOut
 
@@ -17,10 +18,8 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 @router.post("", response_model=PlanOut)
 async def create_job(file: UploadFile = File(...)) -> PlanOut:
     name = file.filename or ""
-    if name.lower().endswith(".doc"):
-        raise HTTPException(400, "舊版 .doc 不支援，請先用 Word 或 LibreOffice 轉成 .docx")
-    if not name.lower().endswith(".docx"):
-        raise HTTPException(400, "只接受 .docx 檔案")
+    if not name.lower().endswith((".doc", ".docx")):
+        raise HTTPException(400, "只接受 .doc 或 .docx 檔案")
 
     content = await file.read()
     if len(content) > config.MAX_UPLOAD_BYTES:
@@ -28,16 +27,27 @@ async def create_job(file: UploadFile = File(...)) -> PlanOut:
     if not content:
         raise HTTPException(400, "檔案是空的")
 
+    if name.lower().endswith(".doc"):
+        try:
+            content = doc_to_docx(content)
+            log.info("轉檔 .doc → .docx %s", name)
+        except ConversionError as e:
+            log.warning("轉檔失敗 %s：%s", name, e)
+            actions.problem("上傳「%s」失敗：%s", name, e)
+            raise HTTPException(400, str(e))
+
     try:
         return service.analyze(name, content)
     except LlmUnavailable as e:
         # 沒有模型就沒有辦法判斷欄位，只有看過的格式能靠快取離線運作。
         # 原因要進 log，否則日誌上只剩一行 503 看不出發生什麼事
         log.warning("填寫失敗 %s：%s", name, e)
+        actions.problem("上傳「%s」失敗：模型還沒啟動，無法辨識欄位", name)
         raise HTTPException(503, f"模型未就緒：{e}")
     except Exception as e:
         # 壞掉的 docx 是使用者輸入問題，不該回 500
         log.exception("填寫失敗 %s：無法解析", name)
+        actions.problem("上傳「%s」失敗：檔案無法解析", name)
         raise HTTPException(400, f"無法解析這份 docx：{e}")
 
 
@@ -75,6 +85,7 @@ def download_output(job_id: str) -> FileResponse:
         raise HTTPException(404, "尚未產生成果檔，請先呼叫 POST /output")
     job = db.get_job(job_id)
     stem = (job["filename"].rsplit(".", 1)[0] if job else "resume")
+    actions.record("下載成果檔「%s_已填寫.docx」", stem)
     return FileResponse(
         path, filename=f"{stem}_已填寫.docx",
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")

@@ -5,7 +5,8 @@ import logging
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from .. import config, service
+from .. import actions, config, service
+from ..core.convert import ConversionError, doc_to_docx
 from ..core.llm import LlmUnavailable
 from ..schemas import ImportApplyIn, ImportApplyOut, ImportPreviewOut
 
@@ -16,8 +17,8 @@ router = APIRouter(prefix="/imports", tags=["imports"])
 @router.post("", response_model=ImportPreviewOut)
 async def create_import(file: UploadFile = File(...)) -> ImportPreviewOut:
     name = file.filename or ""
-    if not name.lower().endswith(".docx"):
-        raise HTTPException(400, "只接受 .docx 檔案")
+    if not name.lower().endswith((".doc", ".docx")):
+        raise HTTPException(400, "只接受 .doc 或 .docx 檔案")
 
     content = await file.read()
     if len(content) > config.MAX_UPLOAD_BYTES:
@@ -25,13 +26,24 @@ async def create_import(file: UploadFile = File(...)) -> ImportPreviewOut:
     if not content:
         raise HTTPException(400, "檔案是空的")
 
+    if name.lower().endswith(".doc"):
+        try:
+            content = doc_to_docx(content)
+            log.info("轉檔 .doc → .docx %s", name)
+        except ConversionError as e:
+            log.warning("轉檔失敗 %s：%s", name, e)
+            actions.problem("上傳「%s」失敗：%s", name, e)
+            raise HTTPException(400, str(e))
+
     try:
         return service.analyze_import(name, content)
     except LlmUnavailable as e:
         log.warning("匯入失敗 %s：%s", name, e)
+        actions.problem("上傳「%s」失敗：模型還沒啟動，無法讀取內容", name)
         raise HTTPException(503, f"模型未就緒：{e}")
     except Exception as e:
         log.exception("匯入失敗 %s：無法解析", name)
+        actions.problem("上傳「%s」失敗：檔案無法解析", name)
         raise HTTPException(400, f"無法解析這份 docx：{e}")
 
 

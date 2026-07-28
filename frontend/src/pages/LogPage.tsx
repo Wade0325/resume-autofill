@@ -34,7 +34,7 @@ export default function LogPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-xl font-semibold text-slate-900">日誌</h1>
-        <p className="text-sm text-slate-500 mt-1">程式在處理過程中留下的紀錄。</p>
+        <p className="text-sm text-slate-500 mt-1">你在這裡做過的操作與結果。</p>
       </div>
 
       {error && (
@@ -92,7 +92,6 @@ export default function LogPage() {
                 <tr>
                   <th className="text-left px-4 py-3 font-medium whitespace-nowrap">時間</th>
                   <th className="text-left px-4 py-3 font-medium">等級</th>
-                  <th className="text-left px-4 py-3 font-medium">來源</th>
                   <th className="text-left px-4 py-3 font-medium">訊息</th>
                 </tr>
               </thead>
@@ -106,9 +105,6 @@ export default function LogPage() {
                       <span className={`text-xs px-1.5 py-0.5 rounded ${levelTone(e.level)}`}>
                         {e.level}
                       </span>
-                    </td>
-                    <td className="px-4 py-2 text-xs text-slate-500 whitespace-nowrap">
-                      {e.module.replace(/^backend\./, '')}
                     </td>
                     <td className="px-4 py-2 text-slate-800 whitespace-pre-wrap break-all">
                       {e.message}

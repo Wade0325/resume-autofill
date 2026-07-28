@@ -42,7 +42,7 @@ export default function Dropzone({ title, hint, phase, onFile }: Props) {
       <input
         ref={inputRef}
         type="file"
-        accept=".docx"
+        accept=".doc,.docx"
         className="hidden"
         onChange={(e) => {
           take(e.target.files)
@@ -53,7 +53,7 @@ export default function Dropzone({ title, hint, phase, onFile }: Props) {
         <>
           <p className="text-slate-800 font-medium">{title}</p>
           <p className="text-sm text-slate-500 mt-1">{hint}</p>
-          <p className="text-xs text-slate-400 mt-3">只接受 .docx，舊版 .doc 請先另存新檔</p>
+          <p className="text-xs text-slate-400 mt-3">接受 .docx 與舊版 .doc（.doc 會自動轉檔）</p>
         </>
       )}
     </div>
