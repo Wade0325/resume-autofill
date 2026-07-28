@@ -212,13 +212,6 @@ def _is_label_cell(text: str) -> bool:
     return normalize_label(text) in ALIAS_INDEX
 
 
-def checked_option(text: str) -> str:
-    """從「■男　□女」取出被勾選的那一項。"""
-    m = re.search(f"[{CHECKED_CHARS}][ 　]*([^ 　{CHECKBOX_CHARS}{CHECKED_CHARS}]+)",
-                  text)
-    return m.group(1).strip() if m else ""
-
-
 def _label_value_pairs(text: str) -> List[Dict[str, Any]]:
     """把「緊急聯絡人：王大明  關係：父子  電話：0922」拆成三組標籤與值。
 

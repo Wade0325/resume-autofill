@@ -40,8 +40,7 @@ export type Plan = {
 }
 
 export type ImportRow = {
-  anchor_id: string
-  label: string
+  row_id: string
   field_key: string
   ordinal: number
   current: string
@@ -158,6 +157,6 @@ export const api = {
   analyzeImport: (file: File, onProgress?: (pct: number) => void) =>
     upload<ImportPreview>('/imports', file, onProgress),
   getImport: (importId: string) => request<ImportPreview>(`/imports/${importId}`),
-  applyImport: (importId: string, anchorIds: string[]) =>
-    postJson<{ applied: number }>(`/imports/${importId}/apply`, { anchor_ids: anchorIds }),
+  applyImport: (importId: string, rowIds: string[]) =>
+    postJson<{ applied: number }>(`/imports/${importId}/apply`, { row_ids: rowIds }),
 }

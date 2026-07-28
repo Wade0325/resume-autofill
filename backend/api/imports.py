@@ -41,7 +41,7 @@ def read_import(import_id: str) -> ImportPreviewOut:
 
 @router.post("/{import_id}/apply", response_model=ImportApplyOut)
 def apply_import(import_id: str, body: ImportApplyIn) -> ImportApplyOut:
-    applied = service.apply_import(import_id, body.anchor_ids)
+    applied = service.apply_import(import_id, body.row_ids)
     if applied is None:
         raise HTTPException(404, "找不到這次匯入")
     return ImportApplyOut(applied=applied)
