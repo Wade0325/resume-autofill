@@ -55,6 +55,14 @@ export type ImportPreview = {
   rows: ImportRow[]
 }
 
+export type LogEntry = {
+  time: string
+  level: string
+  request_id: string
+  module: string
+  message: string
+}
+
 export type Profile = Record<string, any>
 
 /** 後端錯誤一律帶 X-Request-Id，附在訊息裡才對得到 log。 */
@@ -160,4 +168,11 @@ export const api = {
   getImport: (importId: string) => request<ImportPreview>(`/imports/${importId}`),
   applyImport: (importId: string, rowIds: string[]) =>
     postJson<{ applied: number }>(`/imports/${importId}/apply`, { row_ids: rowIds }),
+
+  logs: ({ level, requestId }: { level?: string; requestId?: string }) => {
+    const q = new URLSearchParams()
+    if (level) q.set('level', level)
+    if (requestId) q.set('request_id', requestId)
+    return request<LogEntry[]>(`/logs?${q}`)
+  },
 }
