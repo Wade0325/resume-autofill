@@ -226,7 +226,7 @@ llama.cpp 會把 schema 轉成 **GBNF grammar**，在生成的每一步只允許
 
 ## 6. 目前狀態
 
-後端已完成並通過端到端驗證，前端與打包尚未開始。
+前後端已完成並通過端到端驗證（含瀏覽器實機操作），打包尚未開始。
 
 ```
 backend/
@@ -236,28 +236,45 @@ backend/
   db.py              SQLite（kv / template / job 三張表）        ✅
   schemas.py         Pydantic 請求回應模型                       ✅
   service.py         流程編排 extract → decide → plan → write    ✅
-  api/               health、fields、profile、settings、jobs     ✅
+  api/               health、fields、profile、settings、jobs、imports  ✅
   core/              解析、比對、模型、寫回（演算法層）            ✅
+frontend/
+  src/api.ts         後端呼叫與型別                              ✅
+  src/components/    Layout、Dropzone、Field、RepeatList          ✅
+  src/pages/         我的資料、填寫履歷、匯入履歷                  ✅
 tools/
   make_sample.py     產生測試用履歷表                            ✅
 scripts/
   start-llama-server.ps1                                        ✅
 
 規劃中
-  frontend/      React + Tailwind
   launcher/      C# 啟動器
   models/        Qwen3.5-4B-Q4_K_M.gguf（不進版控）
   bin/           llama-server.exe（不進版控）
 ```
 
-### 啟動後端
+### 啟動
 
 ```powershell
 .\scripts\start-llama-server.ps1                    # 推論引擎，port 8085
-python -m uvicorn backend.main:app --port 8090      # API，port 8090
+cd frontend; npm install; npm run build; cd ..      # 前端（只需做一次）
+python -m uvicorn backend.main:app --port 8090      # 服務，port 8090
 ```
 
-開 `http://localhost:8090/docs` 就有完整的互動介面（前端做好之前用這個操作）。
+開 `http://localhost:8090/` 就是完整介面。開發前端時改用 `npm run dev`
+（port 5173，已設好 proxy）。`http://localhost:8090/docs` 仍是 API 的互動文件。
+
+### 三個頁面
+
+| 頁面 | 做什麼 |
+|---|---|
+| 我的資料 | 個人資料填一次，之後所有履歷都從這裡取值 |
+| 填寫履歷 | 上傳空白（或已填過的）履歷 → 檢視並修正對映 → 套用並下載 |
+| 匯入履歷 | 上傳已填寫的舊履歷 → 逐欄勾選 → 寫回我的資料 |
+
+**兩個方向的衝突處理不一樣，這是刻意的**：填寫方向以「我的資料」為準，
+文件原本的值會被覆蓋，表格上用刪除線與「將被覆蓋」標記事先告知；
+匯入方向反過來，已經有值的欄位**預設不勾選**，避免上傳一份舊履歷就把維護好的資料蓋掉。
 
 **降級行為**：llama-server 沒起來時會自動退回 `NullBackend`——請求仍回 200，
 回應帶 `llm_available: false`，規則比對與範本快取照常運作，只是模型判斷不到的欄位

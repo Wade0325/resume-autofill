@@ -5,12 +5,14 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import config, db
-from .api import jobs, meta, profile
+from .api import imports, jobs, meta, profile
 from .logging_setup import request_id_var, setup_logging
 
 log = logging.getLogger(__name__)
@@ -67,3 +69,23 @@ async def request_context(request: Request, call_next):
 app.include_router(meta.router, prefix="/api")
 app.include_router(profile.router, prefix="/api")
 app.include_router(jobs.router, prefix="/api")
+app.include_router(imports.router, prefix="/api")
+
+# 正式版把 build 好的前端交給同一個服務托管，使用者只會看到一個網址。
+# 開發時 dist 不存在，走 Vite dev server 的 proxy，這裡就跳過。
+_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if _DIST.is_dir():
+    app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def spa(path: str):
+        """react-router 的 /fill、/import 在伺服器上並不存在，一律回 index.html
+        交給前端接手，否則直接輸入網址或按重整就會 404。"""
+        if path.startswith("api/"):
+            raise HTTPException(404, "找不到這個 API 端點")
+        candidate = _DIST / path
+        if path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(_DIST / "index.html")
+
+    log.info("前端靜態檔已掛載 path=%s", _DIST)

@@ -27,6 +27,8 @@ from .schema import FIELD_KEYS, describe_fields_for_llm
 
 log = logging.getLogger(__name__)
 
+HEALTH_TIMEOUT = 0.5
+
 SYSTEM_PROMPT = """你是履歷表單的欄位對映器。使用者會給你一份 Word 履歷表中「待填空格」的清單。
 你的工作：為每一個空格，從給定的欄位代碼清單中挑出唯一正確的一個。
 
@@ -91,8 +93,11 @@ class LlamaCppBackend(BaseBackend):
         self.model, self.host, self.timeout = model, host, timeout
 
     def available(self) -> bool:
+        # 探測 localhost 的服務：活著就是毫秒級回應，逾時放長只會讓前端的
+        # 狀態燈每次輪詢都卡好幾秒（模型沒開時尤其明顯）
         try:
-            return requests.get(f"{self.host}/health", timeout=3).status_code == 200
+            return requests.get(f"{self.host}/health",
+                                timeout=HEALTH_TIMEOUT).status_code == 200
         except Exception:
             return False
 

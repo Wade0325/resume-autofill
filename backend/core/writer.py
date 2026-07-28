@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import copy
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from docx import Document
 from docx.oxml.ns import qn
@@ -134,8 +134,14 @@ def _replace_span(para, start: int, end: int, text: str, highlight: bool) -> boo
     return written
 
 
-def _fill_inline(para, text: str, highlight: bool, blank_index: int = 0) -> bool:
+def _fill_inline(para, text: str, highlight: bool, blank_index: int = 0,
+                 span: Optional[tuple] = None) -> bool:
     """處理『姓名：______』『… 關係：___ 電話：___』或『可到職日：』結尾。"""
+    # span 是既有值的字元範圍（來自 include_filled 抽取）。沒有它的話，
+    # 一個已經填好的段落找不到空白也沒有結尾冒號，只會把新值附加在後面。
+    if span is not None:
+        return _replace_span(para, span[0], span[1], text, highlight)
+
     full = para.text
     blanks = list(BLANK_RUN_RE.finditer(full))
     if blanks:
@@ -243,13 +249,15 @@ def apply_ops(src_path: str, out_path: str, ops: List[Any],
                                         loc["row"], loc["col"], op.value, highlight)
             elif kind == "inline":
                 bi = loc.get("blank_index", 0)
+                span = ((loc["value_start"], loc["value_end"])
+                        if "value_start" in loc else None)
                 if loc.get("in_cell"):
                     grid = _grid(doc.tables[loc["table"]])
                     cell = grid[loc["row"]][loc["col"]]
-                    done = _fill_inline(cell.paragraphs[-1], op.value, highlight, bi)
+                    done = _fill_inline(cell.paragraphs[-1], op.value, highlight, bi, span)
                 else:
                     done = _fill_inline(doc.paragraphs[loc["para"]], op.value,
-                                        highlight, bi)
+                                        highlight, bi, span)
             elif kind == "checkbox":
                 if "para" in loc:
                     done = _fill_checkbox(doc.paragraphs[loc["para"]], op.value, highlight)
