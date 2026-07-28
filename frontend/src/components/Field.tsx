@@ -54,6 +54,24 @@ function renderInput(spec: FieldSpec, value: string, onChange: (v: string) => vo
     )
   }
 
+  if (spec.kind === 'money') {
+    return (
+      <div className="relative">
+        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-500">
+          NT$
+        </span>
+        <input
+          className={`${INPUT_CLASS} pl-11`}
+          type="text"
+          inputMode="numeric"
+          value={value}
+          placeholder="60,000"
+          onChange={(e) => onChange(formatMoney(e.target.value))}
+        />
+      </div>
+    )
+  }
+
   // date 用 text 而非 <input type="date">：履歷表上的日期格式很雜
   // （2014/09、民國 83 年），限制成 ISO 反而讓人沒辦法照原樣填
   return (
@@ -65,4 +83,11 @@ function renderInput(spec: FieldSpec, value: string, onChange: (v: string) => vo
       onChange={(e) => onChange(e.target.value)}
     />
   )
+}
+
+/** 只留數字並加上千分位。存進 profile 的就是這個字串，會原樣填進履歷。 */
+function formatMoney(raw: string): string {
+  const digits = raw.replace(/\D/g, '')
+  if (!digits) return ''
+  return Number(digits).toLocaleString('en-US')
 }
