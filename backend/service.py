@@ -72,6 +72,20 @@ def analyze(filename: str, content: bytes) -> PlanOut:
              "命中" if cached else "未命中")
 
     decisions = planner.decide(text, slots, config.LLM_HOST, config.LLM_MODEL, cached)
+
+    # 第二輪修正：只在有模型新判的格子時跑（純快取代表使用者確認過）。
+    # 先做零成本的確定性對齊（標籤↔欄位、白名單外格子、期間欄拆併），
+    # 再由模型指認學經歷每一列對應清單第幾筆（分級列會錯位的根源）。
+    if any(d[3] == "model" for d in decisions.values()):
+        headers = document.slot_headers(str(src), slots)
+        profile = db.get_kv("profile") or {}
+        decisions = planner.align_labels(slots, decisions, headers)
+        decisions = planner.assign_rows(slots, decisions, profile, headers,
+                                        config.LLM_HOST, config.LLM_MODEL)
+        if config.LLM_VERIFY:
+            decisions = planner.verify(slots, decisions, profile, headers,
+                                       config.LLM_HOST, config.LLM_MODEL)
+
     db.create_job(job_id, filename, fp, [s.to_dict() for s in slots],
                   {k: list(v) for k, v in decisions.items()})
 

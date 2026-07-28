@@ -110,3 +110,26 @@ DERIVED_FROM = {
     "education[].period": ("education[].start", "education[].end"),
     "experience[].period": ("experience[].start", "experience[].end"),
 }
+
+# 標籤 → 欄位的確定性對照（squash 後精確比對）。
+# 表格印的字和 FIELDS 的 label 一模一樣時，對映沒有第二種答案，
+# 不必經過模型；模型第一輪在密集表格裡常整組位移一格，這裡拉回來。
+LABEL_ALIASES = {
+    "修業期間": "education[].period",
+    "在學期間": "education[].period",
+    "求學期間": "education[].period",
+    "入學年月": "education[].start",
+    "畢業年月": "education[].end",
+    "任職期間": "experience[].period",
+    "工作期間": "experience[].period",
+    "服務期間": "experience[].period",
+    "月薪": "experience[].salary",
+}
+BY_LABEL = {f.label: f.key for f in FIELDS}
+
+# 印著這些字的格子一律不填：欄位定義裡刻意沒有這些資訊（隱私白名單），
+# 以及「日/夜間部」「幾年制」這種個人資料不會有的表單微欄位。
+BLOCKED_LABELS = (
+    "身分證", "身份證", "血型", "身高", "體重", "出生地",
+    "身心障礙", "殘障手冊", "日/夜", "日夜", "年制",
+)

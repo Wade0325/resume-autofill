@@ -121,6 +121,42 @@ def text_only(path: str) -> str:
     return load(path)[0]
 
 
+def slot_headers(path: str, slots: List[Slot]) -> Dict[str, Dict[str, str]]:
+    """每個表格位置的「列首」與「欄首」——同列往左、同欄往上第一格有字的內容。
+
+    這是機械抽取，不經過模型，所以可靠。給第二輪審核用：
+    「列首＝高中/專科、欄首＝學校名稱」比整份攤平全文精準得多。
+    """
+    doc = Document(path)
+    tables = [b for b in iter_block_items(doc) if isinstance(b, Table)]
+
+    by_table: Dict[int, List[Slot]] = {}
+    for s in slots:
+        if "table" in s.loc:
+            by_table.setdefault(s.loc["table"], []).append(s)
+
+    out: Dict[str, Dict[str, str]] = {}
+    for ti, tslots in by_table.items():
+        if ti >= len(tables):
+            continue
+        texts = [[cell_text(c) if c is not None else "" for c in row]
+                 for row in _grid(tables[ti])]
+        for s in tslots:
+            r, c = s.loc["row"], s.loc["col"]
+            if r >= len(texts):
+                continue
+            row_hdr = next(
+                (t for t in reversed(texts[r][:c]) if t.strip() and not is_blank(t)), "")
+            col_hdr = ""
+            for rr in range(r - 1, -1, -1):
+                if c < len(texts[rr]) and texts[rr][c].strip() and not is_blank(texts[rr][c]):
+                    col_hdr = texts[rr][c]
+                    break
+            out[s.id] = {"row": row_hdr.replace("\n", " ")[:20],
+                         "col": col_hdr.replace("\n", " ")[:20]}
+    return out
+
+
 def fingerprint(slots: List[Slot]) -> str:
     """同一份表格 → 同一個指紋 → 直接沿用上次的對映，不必再問模型。"""
     payload = json.dumps(sorted((s.kind, s.id) for s in slots), ensure_ascii=False)
