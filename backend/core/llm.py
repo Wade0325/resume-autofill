@@ -61,7 +61,11 @@ def ask(host: str, system: str, user: str, schema: Dict[str, Any],
              label or "-", len(user), choice.get("finish_reason"), len(content),
              int((time.perf_counter() - t0) * 1000))
 
-    if choice.get("finish_reason") == "length" or not content:
+    if choice.get("finish_reason") == "length":
         raise LlmUnavailable(
-            f"模型未產生有效輸出（finish_reason={choice.get('finish_reason')}）")
+            "這份文件超出模型的上下文長度，輸出被截斷。"
+            "請用更大的 --ctx-size 重啟 llama-server（目前的提示詞約 "
+            f"{len(user) // 2} tokens）")
+    if not content:
+        raise LlmUnavailable("模型沒有回傳任何內容")
     return json.loads(content)
