@@ -28,9 +28,10 @@ async def create_import(file: UploadFile = File(...)) -> ImportPreviewOut:
     try:
         return service.analyze_import(name, content)
     except LlmUnavailable as e:
+        log.warning("匯入失敗 %s：%s", name, e)
         raise HTTPException(503, f"模型未就緒：{e}")
     except Exception as e:
-        log.exception("匯入解析失敗 filename=%s", name)
+        log.exception("匯入失敗 %s：無法解析", name)
         raise HTTPException(400, f"無法解析這份 docx：{e}")
 
 

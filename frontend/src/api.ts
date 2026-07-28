@@ -58,7 +58,6 @@ export type ImportPreview = {
 export type LogEntry = {
   time: string
   level: string
-  request_id: string
   module: string
   message: string
 }
@@ -169,10 +168,6 @@ export const api = {
   applyImport: (importId: string, rowIds: string[]) =>
     postJson<{ applied: number }>(`/imports/${importId}/apply`, { row_ids: rowIds }),
 
-  logs: ({ level, requestId }: { level?: string; requestId?: string }) => {
-    const q = new URLSearchParams()
-    if (level) q.set('level', level)
-    if (requestId) q.set('request_id', requestId)
-    return request<LogEntry[]>(`/logs?${q}`)
-  },
+  logs: ({ level }: { level?: string }) =>
+    request<LogEntry[]>(`/logs${level ? `?level=${level}` : ''}`),
 }

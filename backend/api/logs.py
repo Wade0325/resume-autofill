@@ -1,5 +1,8 @@
 """把 log 檔的內容讀出來給前端看。
 
+只回使用者操作留下的紀錄。輪詢與啟動那些背景雜訊會把真正的操作淹掉——
+health 每 15 秒一筆、日誌頁本身每 3 秒又一筆。
+
 log 從來不寫入 profile 的值（見 logging_setup），所以攤在畫面上是安全的。
 """
 from __future__ import annotations
@@ -18,32 +21,43 @@ router = APIRouter(tags=["logs"])
 LINE_RE = re.compile(
     r"^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) +"
     r"(?P<level>\w+) +"
-    r"\[(?P<request_id>[^\]]*)\] +"
+    r"\[[^\]]*\] +"
     r"(?P<module>\S+) +"
     r"(?P<message>.*)$"
 )
 
 TAIL_BYTES = 512 * 1024   # 只讀檔尾，log 會長到 5 MB
 
+STARTUP_MESSAGES = ("服務啟動", "服務關閉", "資料庫就緒", "已清除")
+INTERNAL_MODULES = ("uvicorn", "backend.db")
+
 
 @router.get("/logs", response_model=List[LogEntry])
 def read_logs(
     limit: int = Query(300, ge=1, le=2000),
     level: Optional[str] = None,
-    request_id: Optional[str] = None,
 ) -> List[LogEntry]:
-    entries = _parse(_tail_lines())
+    entries = [e for e in _parse(_tail_lines()) if _is_user_action(e)]
 
     if level:
         wanted = {"ERROR": {"ERROR"},
                   "WARNING": {"ERROR", "WARNING"}}.get(level.upper())
         if wanted:
             entries = [e for e in entries if e.level in wanted]
-    if request_id:
-        entries = [e for e in entries if e.request_id == request_id]
 
     entries.reverse()          # 最新的在最前面
     return entries[:limit]
+
+
+def _is_user_action(entry: LogEntry) -> bool:
+    if entry.module.startswith(INTERNAL_MODULES):
+        return False
+    if any(m in entry.message for m in STARTUP_MESSAGES):
+        return False
+    # backend.main 記的是 HTTP 存取——輪詢、靜態檔、換分頁都會產生，
+    # 而且是「POST /api/imports → 200」這種開發者語言。
+    # 但它同時也記未攔截的例外與失敗的請求，那些要留。
+    return not (entry.module == "backend.main" and entry.level == "INFO")
 
 
 def _tail_lines() -> List[str]:

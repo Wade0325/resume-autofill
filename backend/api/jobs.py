@@ -31,11 +31,13 @@ async def create_job(file: UploadFile = File(...)) -> PlanOut:
     try:
         return service.analyze(name, content)
     except LlmUnavailable as e:
-        # 沒有模型就沒有辦法判斷欄位，只有看過的格式能靠快取離線運作
+        # 沒有模型就沒有辦法判斷欄位，只有看過的格式能靠快取離線運作。
+        # 原因要進 log，否則日誌上只剩一行 503 看不出發生什麼事
+        log.warning("填寫失敗 %s：%s", name, e)
         raise HTTPException(503, f"模型未就緒：{e}")
     except Exception as e:
         # 壞掉的 docx 是使用者輸入問題，不該回 500
-        log.exception("解析失敗 filename=%s", name)
+        log.exception("填寫失敗 %s：無法解析", name)
         raise HTTPException(400, f"無法解析這份 docx：{e}")
 
 
