@@ -1,5 +1,6 @@
 # ---- 個人資料（本專案最重要的一條）----
 # 履歷內含姓名、身分證字號、電話、地址，絕對不能進版控
+/data/
 profile.json
 config.json
 .resume_autofill/

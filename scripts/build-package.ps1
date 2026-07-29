@@ -96,7 +96,7 @@ if (-not $Quick) {
     Write-Host "== 複製 llama.cpp（含 CUDA DLL，約 700 MB）=="
     Copy-Item (Join-Path $root "bin") (Join-Path $dist "bin") -Recurse
 }
-foreach ($d in "models", "input", "output") {
+foreach ($d in "models", "input", "output", "data") {
     New-Item -ItemType Directory -Force (Join-Path $dist $d) | Out-Null
 }
 @"
@@ -106,7 +106,7 @@ Resume AutoFill
 2. 首次使用：點右上角「模型未啟動」→ 下載 Qwen3.5-9B（約 6 GB）→ 啟動。
 3. 建議規格：NVIDIA 顯卡 8 GB VRAM。無獨顯也能跑，但速度會慢很多。
 4. 選裝 LibreOffice 可支援 .doc 舊格式與排版預覽。
-5. 個人資料只存在這台電腦（%USERPROFILE%\.resume_autofill），不會上傳。
+5. 個人資料只存在本資料夾的 data\ 裡，不會上傳；刪掉整個資料夾即完整移除。
 結束程式：工作列右下角系統匣圖示 → 右鍵 → 結束。
 "@ | Out-File (Join-Path $dist "README.txt") -Encoding utf8
 

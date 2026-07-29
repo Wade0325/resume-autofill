@@ -48,7 +48,7 @@ internal static class Program
             Debug($"wait-timeout backendExited={_backend?.HasExited}");
             KillBackend();
             MessageBox.Show(
-                "後端在 60 秒內沒有就緒。\n詳細原因請看 %USERPROFILE%\\.resume_autofill\\logs\\app.log",
+                "後端在 60 秒內沒有就緒。\n詳細原因請看程式資料夾裡的 data\\logs\\app.log",
                 "Resume AutoFill", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }

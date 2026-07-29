@@ -221,7 +221,9 @@ tests/prompt_test.py         最小 prompt 實驗場：一張截圖＋prompt 丟
 
 ### Log
 
-`~/.resume_autofill/logs/app.log`（UTF-8，5 MB × 5 輪替）。
+`data/logs/app.log`（程式根目錄下，UTF-8，5 MB × 5 輪替）。
+個人資料整包在根目錄的 `data/`（可攜式，已被 .gitignore 排除），
+用 `RESUME_AUTOFILL_HOME` 可另指位置。
 同一請求的所有記錄共用 request_id，回應標頭 `X-Request-Id` 帶著它。
 **log 永遠不寫入 profile 的值**——log 可能被使用者附在問題回報裡送出。
 輪詢類請求（模型狀態、分析進度）記在 DEBUG，預設不出現。
@@ -247,6 +249,7 @@ Resume_AutoFill\
   ResumeAutoFill.exe    啟動器（launcher/，dotnet publish 單檔自足）
   app\                  backend 原始碼＋frontend/dist＋runtime（內嵌 Python）
   bin\                  llama-server.exe＋CUDA DLL（約 670 MB）
+  data\                 個人資料（SQLite、上傳暫存、日誌），首次啟動自動建立
   models\ input\ output\
   README.txt
 ```

@@ -4,7 +4,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-HOME = Path(os.environ.get("RESUME_AUTOFILL_HOME", Path.home() / ".resume_autofill"))
+# 所有路徑跟著程式根目錄走（可攜式）：打包版由啟動器用 RESUME_AUTOFILL_ROOT
+# 指到解壓根目錄，開發時就是 repo 根。個人資料放 data/——整個資料夾就是
+# 完整的程式＋資料，刪掉資料夾＝徹底移除
+_ROOT = Path(os.environ.get("RESUME_AUTOFILL_ROOT",
+                            Path(__file__).resolve().parent.parent))
+
+HOME = Path(os.environ.get("RESUME_AUTOFILL_HOME", _ROOT / "data"))
 DB_PATH = HOME / "app.db"
 JOBS_DIR = HOME / "jobs"
 LOG_DIR = HOME / "logs"
@@ -18,11 +24,6 @@ LLM_HOST = os.environ.get("RESUME_AUTOFILL_LLM_HOST", "http://localhost:8085")
 LLM_MODEL = os.environ.get("RESUME_AUTOFILL_LLM_MODEL", "Qwen3.5-9B-Q4_K_M")
 LLM_CTX_SIZE = int(os.environ.get("RESUME_AUTOFILL_LLM_CTX", "16384"))
 
-# 模型檔與 llama-server 跟著程式目錄走（見 README 的目錄結構）。
-# 打包版的原始碼在 Resume_AutoFill/app/backend 底下，models/ 與 bin/ 在
-# 解壓根目錄——啟動器用 RESUME_AUTOFILL_ROOT 指過來，開發時不設就是 repo 根
-_ROOT = Path(os.environ.get("RESUME_AUTOFILL_ROOT",
-                            Path(__file__).resolve().parent.parent))
 MODELS_DIR = Path(os.environ.get("RESUME_AUTOFILL_MODELS_DIR", _ROOT / "models"))
 LLAMA_SERVER = Path(os.environ.get("RESUME_AUTOFILL_LLAMA_SERVER", _ROOT / "bin" / "llama-server.exe"))
 
