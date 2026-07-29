@@ -13,17 +13,7 @@ const INPUT_CLASS =
 export default function Field({ spec, value, onChange }: Props) {
   return (
     <label className="block">
-      <span className="text-sm text-slate-700">
-        {spec.label}
-        {spec.sensitive && (
-          <span
-            className="ml-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5"
-            title="敏感欄位，除非在設定中開啟，否則不會自動填入履歷"
-          >
-            預設不自動填
-          </span>
-        )}
-      </span>
+      <span className="text-sm text-slate-700">{spec.label}</span>
       <div className="mt-1">{renderInput(spec, value, onChange)}</div>
     </label>
   )
@@ -33,7 +23,7 @@ function renderInput(spec: FieldSpec, value: string, onChange: (v: string) => vo
   if (spec.kind === 'choice') {
     return (
       <select className={INPUT_CLASS} value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">（未填）</option>
+        <option value="">(未填)</option>
         {spec.choices.map((c) => (
           <option key={c} value={c}>
             {c}

@@ -7,7 +7,7 @@ from fastapi import APIRouter
 
 from .. import config, db
 from ..core import llm
-from ..core.schema import FIELDS, SENSITIVE_KEYS
+from ..core.schema import FIELDS
 from ..schemas import FieldSpecOut, HealthOut, LlmStatus
 
 log = logging.getLogger(__name__)
@@ -34,6 +34,5 @@ def health() -> HealthOut:
 def fields() -> list[FieldSpecOut]:
     """給前端的下拉選單用；也是模型能選的完整白名單。"""
     return [FieldSpecOut(key=f.key, label=f.label, kind=f.kind,
-                         choices=f.choices, sensitive=f.key in SENSITIVE_KEYS,
-                         derived=f.derived)
+                         choices=f.choices, derived=f.derived)
             for f in FIELDS]

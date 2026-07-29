@@ -477,10 +477,8 @@ def _renumber(slots: List[Slot], decisions: Dict[str, Decision]) -> None:
 # 產生計畫
 # --------------------------------------------------------------------------
 def build_plan(slots: List[Slot], profile: Dict[str, Any],
-               decisions: Dict[str, Decision], min_confidence: float = 0.60,
-               allow_sensitive: bool = False) -> Tuple[List[FillOp], List[FillOp]]:
-    from .schema import SENSITIVE_KEYS
-
+               decisions: Dict[str, Decision], min_confidence: float = 0.60
+               ) -> Tuple[List[FillOp], List[FillOp]]:
     by_id = {s.id: s for s in slots}
     ops: List[FillOp] = []
     skipped: List[FillOp] = []
@@ -490,7 +488,7 @@ def build_plan(slots: List[Slot], profile: Dict[str, Any],
         if slot is None:
             continue
 
-        reason = _reject(key, conf, min_confidence, allow_sensitive, SENSITIVE_KEYS)
+        reason = _reject(key, conf, min_confidence)
         if reason:
             skipped.append(FillOp(slot, key, "", conf, source, label, reason, ordinal))
             continue
@@ -521,14 +519,11 @@ def build_plan(slots: List[Slot], profile: Dict[str, Any],
     return ops, skipped
 
 
-def _reject(key: str, conf: float, min_confidence: float,
-            allow_sensitive: bool, sensitive: set) -> str:
+def _reject(key: str, conf: float, min_confidence: float) -> str:
     if key in ("__SKIP__", "__UNKNOWN__"):
         return "模型判定非可填欄位或找不到對應"
     if key not in BY_KEY:
         return "此欄位已不存在，請重新指定"
-    if key in sensitive and not allow_sensitive:
-        return "敏感欄位，預設不自動填"
     if conf < min_confidence:
         return f"信心值 {conf:.2f} 低於門檻"
     return ""

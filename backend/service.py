@@ -184,8 +184,7 @@ def render_preview_pdf(job_id: str, which: str) -> Optional[bytes]:
     settings = db.get_settings()
     ops, _ = planner.build_plan(
         slots, db.get_kv("profile") or {}, decisions,
-        min_confidence=settings["min_confidence"],
-        allow_sensitive=settings["allow_sensitive"])
+        min_confidence=settings["min_confidence"])
     with tempfile.TemporaryDirectory(prefix="preview_") as tmp:
         filled = Path(tmp) / "filled.docx"
         # 預覽一律標黃底，才看得出資料落在哪一格；下載的成品仍依設定
@@ -231,8 +230,7 @@ def write_output(job_id: str) -> Optional[Dict[str, Any]]:
 
     ops, _ = planner.build_plan(
         slots, db.get_kv("profile") or {}, decisions,
-        min_confidence=settings["min_confidence"],
-        allow_sensitive=settings["allow_sensitive"])
+        min_confidence=settings["min_confidence"])
 
     t0 = time.perf_counter()
     result = writer.apply_ops(str(input_path(job_id)), str(output_path(job_id)),
@@ -265,8 +263,7 @@ def _render(job_id: str, filename: str, fingerprint: str, cached: bool,
     settings = db.get_settings()
     ops, skipped = planner.build_plan(
         slots, db.get_kv("profile") or {}, decisions,
-        min_confidence=settings["min_confidence"],
-        allow_sensitive=settings["allow_sensitive"])
+        min_confidence=settings["min_confidence"])
 
     items = [_item(o, "fill") for o in ops] + [_item(s, "skip") for s in skipped]
     items.sort(key=lambda i: i.slot_id)

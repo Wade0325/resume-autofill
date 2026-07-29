@@ -5,7 +5,6 @@ export type FieldSpec = {
   label: string
   kind: string // text | date | money | choice | longtext | list
   choices: string[]
-  sensitive: boolean
   derived: boolean
 }
 

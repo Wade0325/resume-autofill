@@ -21,7 +21,7 @@ class FieldSpec:
 FIELDS: List[FieldSpec] = [
     # ---------- 基本資料 ----------
     # 私密欄位（身分證字號、身分別…）一樣開放：值要不要填由使用者自己決定，
-    # 系統只提供服務。特別敏感的列在 SENSITIVE_KEYS，預設不自動填。
+    # 系統只提供服務。
     FieldSpec("basic.name_zh", "中文姓名", hint="申請人的中文全名"),
     FieldSpec("basic.name_en", "英文姓名"),
     FieldSpec("basic.name_passport", "護照全名", hint="與護照相同的英文全名"),
@@ -128,9 +128,6 @@ SPECIAL_KEYS = ["__SKIP__", "__UNKNOWN__"]
 FIELD_KEYS = [f.key for f in FIELDS] + SPECIAL_KEYS
 
 BY_KEY = {f.key: f for f in FIELDS}
-
-# 高敏感欄位：預設不自動填，除非 config 明確開啟
-SENSITIVE_KEYS = {"basic.marital_status", "basic.national_id", "basic.identity_category"}
 
 
 def describe_fields(include_special: bool = True) -> str:
