@@ -84,9 +84,8 @@ llama-server*
 Thumbs.db
 desktop.ini
 
-# ---- Claude Code 本機設定 ----
-.claude/settings.local.json
-.claude/*.local.json
+# ---- Claude Code 本機目錄（慣例：整包不入版控）----
+.claude/
 
 # C# 啟動器建置產物
 launcher/**/obj/
