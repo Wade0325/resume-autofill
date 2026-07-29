@@ -45,7 +45,7 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("contact.address_household", "戶籍地址"),
 
     # ---------- 應徵資訊 ----------
-    FieldSpec("job.applied_position", "應徵職務"),
+    # 應徵職務刻意不收：每間公司都不一樣，存了也只會填錯，留白讓使用者手寫
     FieldSpec("job.expected_salary", "希望待遇", kind="money", hint="月薪金額"),
     FieldSpec("job.expected_salary_year", "期望年薪", kind="money", hint="年薪金額"),
     FieldSpec("job.available_date", "可到職日", kind="date"),
@@ -194,4 +194,6 @@ BY_LABEL = {f.label: f.key for f in FIELDS if _label_counts[f.label] == 1}
 # 以及「幾年制」這種個人資料不會有的表單微欄位。
 BLOCKED_LABELS = (
     "血型", "身高", "體重", "出生地", "殘障手冊", "年制",
+    # 每間公司不一樣的值，填了必錯，一律留白讓使用者手寫
+    "應徵職務", "應徵職位",
 )
