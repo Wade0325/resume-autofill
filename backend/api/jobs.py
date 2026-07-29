@@ -115,10 +115,3 @@ def download_output(job_id: str) -> FileResponse:
     return FileResponse(
         path, filename=f"{stem}_已填寫.docx",
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-
-
-@router.delete("/{job_id}")
-def remove_job(job_id: str) -> dict:
-    if not service.delete(job_id):
-        raise HTTPException(404, "找不到這個 job")
-    return {"ok": True}

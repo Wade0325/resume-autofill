@@ -78,8 +78,13 @@ def _analyze_worker(job_id: str, filename: str) -> None:
         # 先讀出這份文件已經有的值，才分得出哪些非空格子是使用者資料（可覆蓋）、
         # 哪些是表格印好的欄位名稱（不能碰）
         db.update_job(job_id, stage="讀取文件內容")
-        existing = reader.read(document.text_only(str(src)),
-                               config.LLM_HOST, config.LLM_MODEL)
+        try:
+            existing = reader.read(document.text_only(str(src)),
+                                   config.LLM_HOST, config.LLM_MODEL)
+        except llm.LlmUnavailable:
+            # 錨定引擎不靠模型也能填空白範本；只是分不出已填值可否覆蓋
+            log.warning("模型不可用，跳過既有值判讀，僅填空白位置")
+            existing = {}
         text, slots = document.load(str(src), _values_of(existing))
         fp = document.fingerprint(slots)
         cached = db.get_template(fp)
@@ -88,21 +93,19 @@ def _analyze_worker(job_id: str, filename: str) -> None:
                  "命中" if cached else "未命中")
 
         db.update_job(job_id, stage="辨識欄位對映" if not cached else "套用已學過的格式")
-        decisions = planner.decide(text, slots, config.LLM_HOST, config.LLM_MODEL, cached)
+        headers = document.slot_headers(str(src), slots)
+        decisions = planner.decide_by_anchor(str(src), slots, config.LLM_HOST,
+                                             config.LLM_MODEL, cached, headers=headers)
 
-        # 第二輪修正：只在有模型新判的格子時跑（純快取代表使用者確認過）。
-        # 先做零成本的確定性對齊（標籤↔欄位、白名單外格子、期間欄拆併），
+        # 第二輪修正：只在有新錨定的格子時跑（純快取代表使用者確認過）。
+        # 先做零成本的確定性對齊（白名單外格子、期間欄拆併），
         # 再由模型指認學經歷每一列對應清單第幾筆（分級列會錯位的根源）。
-        if any(d[3] == "model" for d in decisions.values()):
+        if any(d[3] != "cache" for d in decisions.values()):
             db.update_job(job_id, stage="覆核對映結果")
-            headers = document.slot_headers(str(src), slots)
             profile = db.get_kv("profile") or {}
             decisions = planner.align_labels(slots, decisions, headers)
             decisions = planner.assign_rows(slots, decisions, profile, headers,
                                             config.LLM_HOST, config.LLM_MODEL)
-            if config.LLM_VERIFY:
-                decisions = planner.verify(slots, decisions, profile, headers,
-                                           config.LLM_HOST, config.LLM_MODEL)
 
         db.update_job(job_id, fingerprint=fp,
                       anchors=[s.to_dict() for s in slots],
@@ -257,17 +260,6 @@ def write_output(job_id: str) -> Optional[Dict[str, Any]]:
             "download_url": f"/api/jobs/{job_id}/output"}
 
 
-def delete(job_id: str) -> bool:
-    job = db.get_job(job_id)
-    if not job:
-        return False
-    db.delete_job(job_id)
-    db._rmtree(job_dir(job_id))
-    log.info("已刪除 job=%s", job_id)
-    actions.record("刪除履歷「%s」", job["filename"])
-    return True
-
-
 def _render(job_id: str, filename: str, fingerprint: str, cached: bool,
             slots: List[Slot], decisions: Dict[str, Any]) -> PlanOut:
     settings = db.get_settings()
@@ -303,35 +295,93 @@ def _item(op, status: str) -> PlanItem:
 # --------------------------------------------------------------------------
 # 匯入
 # --------------------------------------------------------------------------
-def analyze_import(filename: str, content: bytes) -> ImportPreviewOut:
+def analyze_import(filename: str, content: bytes) -> Dict[str, Any]:
+    """收下檔案就回 import_id，讀取在背景執行緒跑（與填寫的 analyze 同一套理由：
+    模型讀一份履歷要幾分鐘，同步請求會讓切頁的使用者丟失結果）。"""
     import_id = uuid.uuid4().hex[:12]
-    src = _save_upload(import_id, content)
+    _save_upload(import_id, content)
     log.info("匯入上傳 %s (%.1f KB) import=%s", filename, len(content) / 1024, import_id)
+    db.create_import(import_id, filename)
+    threading.Thread(target=_import_worker, args=(import_id, filename),
+                     daemon=True).start()
+    return {"import_id": import_id, "status": "processing", "filename": filename}
 
+
+def _import_worker(import_id: str, filename: str) -> None:
+    src = input_path(import_id)
     t0 = time.perf_counter()
-    text = document.text_only(str(src))
-    extracted = reader.read(text, config.LLM_HOST, config.LLM_MODEL)
-    db.create_import(import_id, filename, extracted)
+    try:
+        db.update_import(import_id, stage="讀取文件內容")
+        text = document.text_only(str(src))
 
-    rows = _import_rows(extracted)
-    log.info("匯入讀取完成 全文=%d字 欄位=%d 需覆蓋=%d 耗時=%dms",
-             len(text), len(rows), sum(1 for r in rows if not r.default_checked),
-             int((time.perf_counter() - t0) * 1000))
-    actions.record("上傳履歷「%s」成功，等待確認匯入", filename)
-    return ImportPreviewOut(import_id=import_id, filename=filename, rows=rows)
+        # 模型有視覺能力（掛了 mmproj）就附上頁面截圖：排版資訊補回攤平文字丟掉的部分
+        images: List[bytes] = []
+        if llm.supports_vision(config.LLM_HOST):
+            try:
+                db.update_import(import_id, stage="擷取頁面截圖")
+                images = convert.docx_to_page_pngs(src.read_bytes())
+                log.info("視覺模式：附 %d 頁截圖", len(images))
+            except Exception as e:
+                log.warning("截圖產生失敗，改用純文字讀取：%s", e)
+                images = []
+
+        db.update_import(import_id, stage="模型讀取資料中")
+        try:
+            extracted = reader.read(text, config.LLM_HOST, config.LLM_MODEL, images=images)
+        except llm.LlmUnavailable:
+            if not images:
+                raise
+            # 視覺呼叫失敗不該讓整次匯入陪葬，退回純文字再試一次
+            log.warning("視覺讀取失敗，退回純文字重試")
+            extracted = reader.read(text, config.LLM_HOST, config.LLM_MODEL)
+
+        db.update_import(import_id, extracted=extracted, status="ready", stage="")
+        rows = _import_rows(extracted)
+        log.info("匯入讀取完成 全文=%d字 欄位=%d 需覆蓋=%d 耗時=%dms",
+                 len(text), len(rows), sum(1 for r in rows if not r.default_checked),
+                 int((time.perf_counter() - t0) * 1000))
+        actions.record("上傳履歷「%s」成功，等待確認匯入", filename)
+    except llm.LlmUnavailable as e:
+        log.warning("匯入失敗 %s：%s", filename, e)
+        db.update_import(import_id, status="failed", stage="",
+                         error="模型還沒啟動，無法讀取資料。請從右上角啟動模型後重新上傳")
+        actions.problem("上傳履歷「%s」失敗：模型還沒啟動", filename)
+    except Exception as e:
+        log.exception("匯入失敗 %s", filename)
+        db.update_import(import_id, status="failed", stage="",
+                         error=f"無法解析這份文件：{e}")
+        actions.problem("上傳履歷「%s」失敗：檔案無法解析", filename)
 
 
-def get_import(import_id: str) -> Optional[ImportPreviewOut]:
+def render_import_pdf(import_id: str) -> Optional[bytes]:
+    """上傳履歷的排版預覽 PDF。轉一次就快取在上傳目錄。"""
+    if db.get_import(import_id) is None or not input_path(import_id).exists():
+        return None
+    cache = job_dir(import_id) / "original.pdf"
+    if not cache.exists():
+        cache.write_bytes(convert.docx_to_pdf(input_path(import_id).read_bytes()))
+    return cache.read_bytes()
+
+
+def get_import(import_id: str) -> Optional[Dict[str, Any]]:
+    """輪詢用：processing 給階段、failed 給原因、好了給完整預覽。"""
     record = db.get_import(import_id)
     if not record:
         return None
-    return ImportPreviewOut(import_id=import_id, filename=record["filename"],
-                            rows=_import_rows(record["extracted"]))
+    if record["status"] == "processing":
+        return {"status": "processing", "stage": record.get("stage") or "準備中",
+                "filename": record["filename"]}
+    if record["status"] == "failed":
+        return {"status": "failed", "error": record.get("error") or "讀取失敗",
+                "filename": record["filename"]}
+    preview = ImportPreviewOut(import_id=import_id, filename=record["filename"],
+                               rows=_import_rows(record["extracted"]))
+    return {"status": "ready", "preview": preview.model_dump()}
 
 
 def apply_import(import_id: str, row_ids: List[str]) -> Optional[int]:
     record = db.get_import(import_id)
-    if not record:
+    if not record or record["status"] != "ready":
         return None
     rows = {r.row_id: r for r in _import_rows(record["extracted"])}
 
@@ -356,12 +406,14 @@ def _import_rows(extracted: Dict[str, Any]) -> List[ImportRow]:
     rows: List[ImportRow] = []
 
     def add(field_key: str, ordinal: int, value: Any) -> None:
-        if field_key not in BY_KEY or not str(value).strip():
+        # 舊紀錄的值可能混進 {{id}} 位置標記，顯示與寫入前都剝掉
+        text = document.MARKER_RE.sub("", str(value)).strip()
+        if field_key not in BY_KEY or not text:
             return
         current = str(planner.get_value(profile, field_key, ordinal) or "")
         rows.append(ImportRow(
             row_id=f"{field_key}#{ordinal}", field_key=field_key, ordinal=ordinal,
-            current=current, incoming=str(value).strip(), default_checked=not current))
+            current=current, incoming=text, default_checked=not current))
 
     for key, value in extracted.items():
         if isinstance(value, list):

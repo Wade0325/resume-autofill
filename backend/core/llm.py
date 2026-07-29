@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Dict
+from typing import Any, Dict, List, Union
 
 import requests
 
@@ -30,7 +30,24 @@ def available(host: str) -> bool:
         return False
 
 
-def ask(host: str, system: str, user: str, schema: Dict[str, Any],
+def supports_vision(host: str) -> bool:
+    """llama-server 有掛 mmproj 時，/props 會回報 vision 能力。
+
+    偵測不到就當沒有——手動啟動的舊版 server 寧可走純文字，
+    也不要把圖片丟給一個看不懂的服務。
+    """
+    try:
+        props = requests.get(f"{host}/props", timeout=HEALTH_TIMEOUT).json()
+        return bool(props.get("modalities", {}).get("vision"))
+    except Exception:
+        return False
+
+
+# user 可以是純文字，或 OpenAI 格式的多段內容（文字＋data URI 圖片）
+UserContent = Union[str, List[Dict[str, Any]]]
+
+
+def ask(host: str, system: str, user: UserContent, schema: Dict[str, Any],
         model: str = "local", label: str = "") -> Dict[str, Any]:
     payload = {
         "model": model,
@@ -48,6 +65,11 @@ def ask(host: str, system: str, user: str, schema: Dict[str, Any],
         },
     }
 
+    prompt_chars = len(user) if isinstance(user, str) else sum(
+        len(p.get("text", "")) for p in user if isinstance(p, dict))
+    images = 0 if isinstance(user, str) else sum(
+        1 for p in user if isinstance(p, dict) and p.get("type") == "image_url")
+
     t0 = time.perf_counter()
     try:
         r = requests.post(f"{host}/v1/chat/completions", json=payload, timeout=CALL_TIMEOUT)
@@ -57,15 +79,15 @@ def ask(host: str, system: str, user: str, schema: Dict[str, Any],
 
     choice = r.json()["choices"][0]
     content = choice["message"]["content"] or ""
-    log.info("模型呼叫 %s 提示=%d字 finish=%s 回應=%d字 耗時=%dms",
-             label or "-", len(user), choice.get("finish_reason"), len(content),
+    log.info("模型呼叫 %s 提示=%d字 圖片=%d finish=%s 回應=%d字 耗時=%dms",
+             label or "-", prompt_chars, images, choice.get("finish_reason"), len(content),
              int((time.perf_counter() - t0) * 1000))
 
     if choice.get("finish_reason") == "length":
         raise LlmUnavailable(
             "這份文件超出模型的上下文長度，輸出被截斷。"
             "請用更大的 --ctx-size 重啟 llama-server（目前的提示詞約 "
-            f"{len(user) // 2} tokens）")
+            f"{prompt_chars // 2} tokens）")
     if not content:
         raise LlmUnavailable("模型沒有回傳任何內容")
     return json.loads(content)

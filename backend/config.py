@@ -17,8 +17,6 @@ API_PORT = int(os.environ.get("RESUME_AUTOFILL_API_PORT", "8090"))
 LLM_HOST = os.environ.get("RESUME_AUTOFILL_LLM_HOST", "http://localhost:8085")
 LLM_MODEL = os.environ.get("RESUME_AUTOFILL_LLM_MODEL", "Qwen3.5-9B-Q4_K_M")
 LLM_CTX_SIZE = int(os.environ.get("RESUME_AUTOFILL_LLM_CTX", "16384"))
-# 逐格模型複審（實驗性）：確定性對齊與列指派已涵蓋常見錯位，預設關閉
-LLM_VERIFY = os.environ.get("RESUME_AUTOFILL_LLM_VERIFY", "0") == "1"
 
 # 模型檔與 llama-server 跟著程式目錄走（見 README 的目錄結構）
 _ROOT = Path(__file__).resolve().parent.parent

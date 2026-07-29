@@ -91,6 +91,18 @@ function ModelMenu() {
     api.downloadModel(m.name).then(refresh).catch((e) => setErr(e.message))
   }
 
+  const downloadVision = (m: ModelInfo) => {
+    if (
+      !window.confirm(
+        `要補下載「${shortName(m.name)}」的視覺檔嗎？約 1 GB。\n` +
+          '掛上後模型能看履歷截圖，匯入的辨識會更準（需重新啟動模型）。',
+      )
+    )
+      return
+    setErr('')
+    api.downloadModel(m.name).then(refresh).catch((e) => setErr(e.message))
+  }
+
   const downloadCustom = () => {
     setErr('')
     api
@@ -119,6 +131,11 @@ function ModelMenu() {
         <div className="absolute right-0 top-full mt-2 w-80 bg-white border border-slate-200 rounded-lg shadow-lg z-30 overflow-hidden">
           <div className="px-4 py-2 text-xs text-slate-500 border-b border-slate-100">
             推論模型（切換會重啟引擎，約需 1～2 分鐘）
+            {info?.running && (
+              <span className={info.vision ? 'ml-2 text-violet-600' : 'ml-2 text-slate-400'}>
+                {info.vision ? '目前引擎：看得到截圖' : '目前引擎：純文字'}
+              </span>
+            )}
           </div>
           {offline || !info ? (
             <p className="text-sm text-slate-400 text-center py-6">後端未連線</p>
@@ -127,7 +144,17 @@ function ModelMenu() {
               {info.models.map((m) => (
                 <li key={m.name} className="px-4 py-3 flex items-center gap-3">
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm text-slate-800">{shortName(m.name)}</div>
+                    <div className="text-sm text-slate-800 flex items-center gap-1.5">
+                      {shortName(m.name)}
+                      {m.vision && (
+                        <span
+                          className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200"
+                          title="會附履歷截圖給模型看排版"
+                        >
+                          視覺
+                        </span>
+                      )}
+                    </div>
                     <div className="text-xs text-slate-400">
                       {m.size_gb} GB{m.note ? `・${m.note}` : ''}
                     </div>
@@ -139,6 +166,7 @@ function ModelMenu() {
                     running={info.running}
                     onSwitch={switchTo}
                     onDownload={download}
+                    onDownloadVision={downloadVision}
                   />
                 </li>
               ))}
@@ -186,28 +214,43 @@ function ModelAction({
   running,
   onSwitch,
   onDownload,
+  onDownloadVision,
 }: {
   m: ModelInfo
   starting: string | null
   running: boolean
   onSwitch: (m: ModelInfo) => void
   onDownload: (m: ModelInfo) => void
+  onDownloadVision: (m: ModelInfo) => void
 }) {
   if (starting === m.name)
     return <span className="text-xs text-sky-600 whitespace-nowrap">啟動中…</span>
-  if (m.active && running)
-    return <span className="text-xs text-emerald-600 whitespace-nowrap">✓ 使用中</span>
   if (m.downloading)
     return <span className="text-xs text-sky-600 whitespace-nowrap">下載中 {m.progress}%</span>
   if (m.downloaded)
     return (
-      <button
-        onClick={() => onSwitch(m)}
-        disabled={!!starting}
-        className="text-xs px-3 py-1.5 rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-40 whitespace-nowrap"
-      >
-        {m.active ? '重新啟動' : '切換'}
-      </button>
+      <div className="flex items-center gap-1.5">
+        {m.vision_downloadable && (
+          <button
+            onClick={() => onDownloadVision(m)}
+            className="text-xs px-2 py-1.5 rounded-md border border-violet-200 text-violet-700 hover:bg-violet-50 whitespace-nowrap"
+            title="下載視覺投影檔，模型才能看履歷截圖"
+          >
+            補視覺檔
+          </button>
+        )}
+        {m.active && running ? (
+          <span className="text-xs text-emerald-600 whitespace-nowrap">✓ 使用中</span>
+        ) : (
+          <button
+            onClick={() => onSwitch(m)}
+            disabled={!!starting}
+            className="text-xs px-3 py-1.5 rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-40 whitespace-nowrap"
+          >
+            {m.active ? '重新啟動' : '切換'}
+          </button>
+        )}
+      </div>
     )
   if (m.downloadable)
     return (

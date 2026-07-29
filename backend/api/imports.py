@@ -3,19 +3,19 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Response, UploadFile
 
 from .. import actions, config, service
 from ..core.convert import ConversionError, doc_to_docx
-from ..core.llm import LlmUnavailable
-from ..schemas import ImportApplyIn, ImportApplyOut, ImportPreviewOut
+from ..schemas import ImportApplyIn, ImportApplyOut
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/imports", tags=["imports"])
 
 
-@router.post("", response_model=ImportPreviewOut)
-async def create_import(file: UploadFile = File(...)) -> ImportPreviewOut:
+@router.post("")
+async def create_import(file: UploadFile = File(...)) -> dict:
+    """收檔即回，讀取在背景跑；用 GET /imports/{id} 輪詢進度。"""
     name = file.filename or ""
     if not name.lower().endswith((".doc", ".docx")):
         raise HTTPException(400, "只接受 .doc 或 .docx 檔案")
@@ -35,24 +35,27 @@ async def create_import(file: UploadFile = File(...)) -> ImportPreviewOut:
             actions.problem("上傳履歷「%s」失敗：%s", name, e)
             raise HTTPException(400, str(e))
 
-    try:
-        return service.analyze_import(name, content)
-    except LlmUnavailable as e:
-        log.warning("匯入失敗 %s：%s", name, e)
-        actions.problem("上傳履歷「%s」失敗：模型還沒啟動", name)
-        raise HTTPException(503, f"模型未就緒：{e}")
-    except Exception as e:
-        log.exception("匯入失敗 %s：無法解析", name)
-        actions.problem("上傳履歷「%s」失敗：檔案無法解析", name)
-        raise HTTPException(400, f"無法解析這份 docx：{e}")
+    return service.analyze_import(name, content)
 
 
-@router.get("/{import_id}", response_model=ImportPreviewOut)
-def read_import(import_id: str) -> ImportPreviewOut:
-    preview = service.get_import(import_id)
-    if preview is None:
+@router.get("/{import_id}")
+def read_import(import_id: str) -> dict:
+    state = service.get_import(import_id)
+    if state is None:
         raise HTTPException(404, "找不到這次匯入")
-    return preview
+    return state
+
+
+@router.get("/{import_id}/preview.pdf")
+def preview_pdf(import_id: str) -> Response:
+    """上傳履歷的排版預覽。LibreOffice 不在時回 503，前端只顯示欄位清單。"""
+    try:
+        pdf = service.render_import_pdf(import_id)
+    except ConversionError as e:
+        raise HTTPException(503, str(e))
+    if pdf is None:
+        raise HTTPException(404, "找不到這次匯入的檔案")
+    return Response(content=pdf, media_type="application/pdf")
 
 
 @router.post("/{import_id}/apply", response_model=ImportApplyOut)

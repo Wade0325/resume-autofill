@@ -9,9 +9,10 @@
 """
 from __future__ import annotations
 
+import base64
 import logging
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from . import llm
 from .schema import FIELDS, describe_fields
@@ -28,13 +29,34 @@ SYSTEM_PROMPT = """你是履歷資料抽取器。使用者會給你一份已經�
 4. 只抽求職者本人填寫的資料。公司內部欄位（面談情形、任用與否、建議薪資、
    初試複試日期、主管簽名）一律略過。
 5. 勾選題輸出被勾選的那一項（■ 或 ☑ 標記的），沒勾就不要輸出。
-6. education 與 experience 可能有多筆，依表格由上到下的順序輸出，不要輸出空白列。"""
+6. education、experience、family、reference 這類清單可能有多筆，
+   依表格由上到下的順序輸出，不要輸出空白列。"""
 
 
-def read(text: str, host: str, model: str) -> Dict[str, Any]:
-    """回傳 {欄位代碼: 值}；列表欄位回傳 {root: [{sub: 值}]}。"""
+VISION_RULE = """
+7. 另附文件的頁面截圖：用截圖理解表格排版、判斷值屬於哪個欄位；
+   但輸出的值一律以「履歷全文」的文字為準逐字照抄，不要抄截圖上看起來的字。"""
+
+
+def read(text: str, host: str, model: str,
+         images: Optional[List[bytes]] = None) -> Dict[str, Any]:
+    """回傳 {欄位代碼: 值}；列表欄位回傳 {root: [{sub: 值}]}。
+
+    images 給 PNG 頁面截圖時走視覺模式：模型同時看到排版與精確文字，
+    合併儲存格、標籤與值的歸屬比攤平文字好判斷。逐字驗證照舊，
+    看圖看錯的值會因為不在原文中而被丟掉。
+    """
     user = f"可抽取的欄位：\n{describe_fields(include_special=False)}\n\n履歷全文：\n{text}"
-    data = llm.ask(host, SYSTEM_PROMPT, user, _schema(), model=model, label="讀取履歷")
+    if images:
+        content: List[Dict[str, Any]] = [{"type": "text", "text": user}]
+        for img in images:
+            b64 = base64.b64encode(img).decode("ascii")
+            content.append({"type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{b64}"}})
+        data = llm.ask(host, SYSTEM_PROMPT + VISION_RULE, content, _schema(),
+                       model=model, label=f"讀取履歷(視覺{len(images)}頁)")
+    else:
+        data = llm.ask(host, SYSTEM_PROMPT, user, _schema(), model=model, label="讀取履歷")
     return _keep_verbatim(data, text)
 
 

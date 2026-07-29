@@ -1,8 +1,8 @@
-"""log 設定：單行人類可讀格式、request_id 串接、輪替、敏感值遮蔽。
+"""log 設定：單行人類可讀格式、request_id 串接、輪替。
 
 隱私規則：**永遠不要把 profile 的值寫進 log**。
 這是履歷工具，log 檔很可能被使用者附在問題回報裡送出去。
-需要判斷「值有沒有取到」時用 redact()，只留長度。
+需要判斷「值有沒有取到」時記長度或筆數，不記內容。
 """
 from __future__ import annotations
 
@@ -24,13 +24,6 @@ class RequestIdFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.request_id = request_id_var.get()
         return True
-
-
-def redact(value) -> str:
-    """把使用者資料換成長度描述，例如 <8 chars>。"""
-    if value in (None, ""):
-        return "<empty>"
-    return f"<{len(str(value))} chars>"
 
 
 def setup_logging(log_dir: Path, level: str = "INFO") -> None:

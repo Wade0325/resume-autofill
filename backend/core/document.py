@@ -74,12 +74,6 @@ def checkbox_options(text: str) -> List[str]:
     return out
 
 
-def checked_option(text: str) -> str:
-    """取出已經被勾選的那一項。"""
-    m = re.search(f"[{CHECKED_CHARS}][ 　]*([^ 　{CHECKBOX_CHARS}{CHECKED_CHARS}]+)", text)
-    return m.group(1).strip() if m else ""
-
-
 # --------------------------------------------------------------------------
 # 主要出口
 # --------------------------------------------------------------------------
@@ -116,19 +110,43 @@ def load(path: str, overwritable: Optional[Set[str]] = None) -> Tuple[str, List[
     return "\n".join(lines), slots
 
 
+# load() 加在可填位置上的 {{id}} 標記
+MARKER_RE = re.compile(r"\{\{[^{}]*\}\}")
+
+
 def text_only(path: str) -> str:
-    """只要全文，不標記位置（匯入用）。"""
-    return load(path)[0]
+    """只要全文，不帶位置標記（匯入用）。
+
+    標記若留著，模型抽值時會把 {{p6.tail}} 這種記號照抄成值，
+    而逐字驗證比對的又是同一份帶標記的文字，攔不下來。
+    """
+    return MARKER_RE.sub("", load(path)[0])
+
+
+def table_texts(path: str) -> List[List[List[str]]]:
+    """每張表格攤平後的文字網格 [表][列][欄]，合併儲存格在涵蓋的每格重複。
+
+    給標籤錨定用：印著字的格子是標籤、可填位置在它右邊或下面。
+    """
+    doc = Document(path)
+    out: List[List[List[str]]] = []
+    for block in iter_block_items(doc):
+        if isinstance(block, Table):
+            out.append([[cell_text(c) if c is not None else "" for c in row]
+                        for row in _grid(block)])
+    return out
 
 
 def slot_headers(path: str, slots: List[Slot]) -> Dict[str, Dict[str, str]]:
-    """每個表格位置的「列首」與「欄首」——同列往左、同欄往上第一格有字的內容。
+    """每個位置的「列首」與「欄首」——同列往左、同欄往上第一格有字的內容。
+    段落型位置（p6.b0 之類）沒有列欄概念，列首放空格前面印的那段字。
 
-    這是機械抽取，不經過模型，所以可靠。給第二輪審核用：
-    「列首＝高中/專科、欄首＝學校名稱」比整份攤平全文精準得多。
+    這是機械抽取，不經過模型，所以可靠。用途：對映結果的標籤顯示、
+    確定性標籤對齊、列指派——「列首＝高中/專科」比整份攤平全文精準得多。
     """
     doc = Document(path)
     tables = [b for b in iter_block_items(doc) if isinstance(b, Table)]
+    paragraphs = [b for b in iter_block_items(doc) if isinstance(b, Paragraph)]
 
     by_table: Dict[int, List[Slot]] = {}
     for s in slots:
@@ -154,7 +172,27 @@ def slot_headers(path: str, slots: List[Slot]) -> Dict[str, Dict[str, str]]:
                     break
             out[s.id] = {"row": row_hdr.replace("\n", " ")[:20],
                          "col": col_hdr.replace("\n", " ")[:20]}
+
+    for s in slots:
+        if "para" not in s.loc or s.loc["para"] >= len(paragraphs):
+            continue
+        out[s.id] = {"row": _para_label(paragraphs[s.loc["para"]].text, s), "col": ""}
     return out
+
+
+def _para_label(text: str, slot: Slot) -> str:
+    """段落型位置的標籤：這個空格（或勾選群）前面印的那段字。"""
+    if slot.kind == "checkbox":
+        head = re.split(f"[{CHECKBOX_CHARS}{CHECKED_CHARS}]", text)[0]
+    else:
+        blanks = list(BLANK_RUN_RE.finditer(text))
+        bi = slot.loc.get("blank_index")
+        if bi is not None and bi < len(blanks):
+            start = blanks[bi - 1].end() if bi else 0
+            head = text[start:blanks[bi].start()]
+        else:                       # pN.tail：結尾冒號型
+            head = text
+    return head.strip(" 　:：").replace("\n", " ")[-20:]
 
 
 def fingerprint(slots: List[Slot]) -> str:

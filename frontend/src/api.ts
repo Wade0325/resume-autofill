@@ -9,12 +9,6 @@ export type FieldSpec = {
   derived: boolean
 }
 
-export type Health = {
-  api: string
-  db: boolean
-  llm: { available: boolean; backend: string; host: string; model: string }
-}
-
 export type PlanItem = {
   slot_id: string
   label: string
@@ -69,6 +63,12 @@ export type ImportPreview = {
   rows: ImportRow[]
 }
 
+/** 匯入的讀取在背景跑，用這個輪詢進度 */
+export type ImportState =
+  | { status: 'processing'; stage: string; filename: string }
+  | { status: 'failed'; error: string; filename: string }
+  | { status: 'ready'; preview: ImportPreview }
+
 export type LogEntry = {
   time: string
   level: string
@@ -83,6 +83,8 @@ export type ModelInfo = {
   downloaded: boolean
   downloadable: boolean
   active: boolean
+  vision: boolean // 視覺投影檔已就位，啟動時會掛上
+  vision_downloadable: boolean // 主檔在但視覺檔還沒抓，可補下載
   downloading: boolean
   progress: number
   error: string
@@ -92,6 +94,7 @@ export type ModelsOut = {
   active: string
   running: boolean
   starting: string | null
+  vision: boolean // 執行中的引擎目前吃不吃圖片
   models: ModelInfo[]
 }
 
@@ -173,7 +176,6 @@ function postJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 export const api = {
-  health: () => request<Health>('/health'),
   fields: () => request<FieldSpec[]>('/fields'),
 
   getProfile: () => request<Profile>('/profile'),
@@ -197,8 +199,9 @@ export const api = {
   downloadUrl: (jobId: string) => `/api/jobs/${jobId}/output`,
 
   analyzeImport: (file: File, onProgress?: (pct: number) => void) =>
-    upload<ImportPreview>('/imports', file, onProgress),
-  getImport: (importId: string) => request<ImportPreview>(`/imports/${importId}`),
+    upload<{ import_id: string; status: string; filename: string }>(
+      '/imports', file, onProgress),
+  getImport: (importId: string) => request<ImportState>(`/imports/${importId}`),
   applyImport: (importId: string, rowIds: string[]) =>
     postJson<{ applied: number }>(`/imports/${importId}/apply`, { row_ids: rowIds }),
 

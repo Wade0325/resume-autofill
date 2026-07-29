@@ -1,7 +1,8 @@
 """決定履歷表上每個位置該填什麼，並產生填寫計畫。
 
-模型拿到的是整份文件的全文，可填位置以 {{id}} 標記在原地，
-所以它是憑上下文判斷，而不是靠某一格旁邊的字。
+標籤驅動：表格上印的欄位標籤（姓名、行動電話…）是可靠的錨點，
+「值填在標籤右邊或下面」由確定性的幾何規則決定；模型只出場一次，
+處理對照表裡沒有的怪標籤。錨不住的位置留白待人工，不硬猜。
 """
 from __future__ import annotations
 
@@ -10,33 +11,22 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import llm
+from . import document, llm
 from .document import Slot
 from .schema import (BLOCKED_LABELS, BY_KEY, BY_LABEL, DERIVED_FROM, FIELD_KEYS,
                      LABEL_ALIASES, describe_fields)
 
 log = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """你是履歷表單的欄位對映器。使用者會給你一份履歷表全文，
-文中的 {{id}} 是可以填字的位置。請為每個 id 指出應該填入哪個欄位。
+LABEL_PROMPT = """這些是履歷表格上印的欄位標籤，請為每一個指出對應的欄位代碼。
 
 規則：
 1. 只能使用給定的欄位代碼。
-2. **位置上已經印著欄位名稱的，那是表格印好的標籤，一律 __SKIP__。**
-   「{{a}}姓　名 | {{b}}」中 a 是標籤要 __SKIP__，b 才是填姓名的地方。
-   「{{c}}王小明」的 c 印的是人名不是欄位名稱，可以填。
-3. id 的格式是 tblT.rR.cC，R 是列號、C 是欄號，都從 0 開始。
-4. **表頭整列都要 __SKIP__，不能只跳過第一格。**
-   「{{tbl1.r0.c0}}學校名稱 | {{tbl1.r0.c1}}科系 | {{tbl1.r0.c2}}學位」
-   這三格印的都是欄位名稱，r0 整列 __SKIP__；要填的是 r1、r2 那幾列。
-5. 不是求職者要填的位置（說明文字、公司內部欄位如面試評語、建議薪資、
-   主管簽名）一律選 __SKIP__。
-6. 確定是求職者要填、但清單裡沒有對應欄位，選 __UNKNOWN__。
-7. 勾選題照樣給對應欄位，系統會自己決定勾哪一個選項。
-8. ordinal 一律填 0，系統會自己排出是第幾筆。
-9. label 請照抄該位置旁邊印在表格上的字，讓使用者認得出是哪一格。
-10. confidence 是 0.0~1.0 的信心值，不確定就給低分。
-11. 每個 id 只輸出一次，且必須輸出全部的 id。"""
+2. 「｜」後面是這個標籤所在列的列首，用它判斷語意：
+   「姓名｜緊急連絡人」是緊急連絡人的姓名（emergency.name），不是本人姓名。
+3. 不是求職者要填的（公司內部欄位、簽章欄、說明文字）→ __SKIP__。
+4. 是求職者要填、但清單裡沒有對應項目 → __UNKNOWN__。
+5. 每個標籤都要輸出一次，label 照抄輸入的字串。"""
 
 
 @dataclass
@@ -46,72 +36,225 @@ class FillOp:
     value: str
     confidence: float
     source: str               # cache | model | manual
-    label: str = ""           # 表格上印在這格旁邊的字，由模型抄回來
+    label: str = ""           # 表格上印在這格旁邊的字，機械抽取自列首／欄首
     note: str = ""
     ordinal: int = 0
 
 
 Decision = Tuple[str, int, float, str, str]   # field_key, ordinal, confidence, source, label
 
+# 舊版由模型照抄標籤，常把 {{tbl1.r2.c6}} 位置標記一起抄回來；
+# 快取裡可能還留著這種髒 label，讀出來時清掉
+_MARKER_RE = re.compile(r"\{\{[^{}]*\}\}")
+
+
+def _clean_label(raw: Any) -> str:
+    return _MARKER_RE.sub("", str(raw or "")).strip()[:40]
+
+
+# 標籤 → 欄位的確定性對照（squash 後精確比對），decide 與 align_labels 共用
+LABEL_MAP = {re.sub(r"[\s　:：*※()（）\[\]]+", "", lbl).lower(): key
+             for lbl, key in {**BY_LABEL, **LABEL_ALIASES}.items()}
+
+
+def _mech_label(slot: Slot, headers: Dict[str, Dict[str, str]]) -> str:
+    """這一格的標籤，機械抽取不經過模型（模型照抄既慢又會抄錯）。
+
+    列首與欄首都在時，優先挑「對得上欄位定義」的那個——
+    標籤在左的表單要列首、欄名在上的表格要欄首，對得上的就是對的方向。
+    """
+    h = headers.get(slot.id, {})
+    row, col = h.get("row", ""), h.get("col", "")
+    for cand in (row, col):
+        if cand and _squash(cand) in LABEL_MAP:
+            return cand[:40]
+    return (row or col)[:40]
+
 
 # --------------------------------------------------------------------------
 # 決定對映
 # --------------------------------------------------------------------------
-def decide(text: str, slots: List[Slot], host: str, model: str,
-           cached: Optional[Dict[str, Any]] = None) -> Dict[str, Decision]:
-    cached = cached or {}
-    decisions: Dict[str, Decision] = {}
-    pending = []
+def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
+                     cached: Optional[Dict[str, Any]] = None,
+                     headers: Optional[Dict[str, Dict[str, str]]] = None
+                     ) -> Dict[str, Decision]:
+    """標籤驅動的對映：程式找標籤、定位置，模型只處理對照表外的標籤。
 
+    反轉舊作法（枚舉所有空格、逐格問模型）：表格上印的標籤才是可靠的錨點，
+    「值填在標籤右邊或下面」是確定性的幾何規則。錨不住的位置留白待人工，
+    比模型硬猜填錯格安全；標籤全在對照表裡時，整條路零模型呼叫。
+    """
+    cached = cached or {}
+    headers = headers or {}
+    decisions: Dict[str, Decision] = {}
+    pending: List[Slot] = []
     for slot in slots:
         hit = cached.get(slot.id)
         if hit:
+            # 舊快取可能存到未清理的 label，讀出來時一併清
             decisions[slot.id] = (hit["field_key"], hit.get("ordinal", 0), 1.0,
-                                  "cache", hit.get("label", ""))
+                                  "cache", _clean_label(hit.get("label", "")))
         else:
             pending.append(slot)
 
-    log.info("快取命中 %d 格，待判斷 %d 格", len(decisions), len(pending))
+    log.info("快取命中 %d 格，待錨定 %d 格", len(decisions), len(pending))
     if not pending:
         return decisions
 
-    ids = [s.id for s in pending]
-    result = llm.ask(host, SYSTEM_PROMPT, _prompt(text, pending),
-                     _schema(ids), model=model, label="欄位對映")
+    texts = document.table_texts(path)
+    by_loc = {(s.loc["table"], s.loc["row"], s.loc["col"]): s
+              for s in pending if "table" in s.loc}
 
-    for item in result.get("mappings", []):
-        sid, key = item.get("id"), item.get("field_key")
-        if sid in ids and (key in BY_KEY or key in ("__SKIP__", "__UNKNOWN__")):
-            decisions[sid] = (key, int(item.get("ordinal", 0)),
-                              float(item.get("confidence", 0.0)), "model",
-                              str(item.get("label", ""))[:40])
+    # ---- 蒐集錨點：標籤文字 → 它能餵到的可填位置 ----
+    # (標籤, 位置們, 錨定方式, 同列列首) 列首是解析語意的上下文：
+    # 「姓名」印在緊急連絡人那一列時是連絡人的姓名，不是本人的
+    anchors: List[Tuple[str, List[Slot], str, str]] = []
 
-    missing = [i for i in ids if i not in decisions]
-    if missing:
-        log.warning("模型漏答 %d 格，視為找不到對應 id=%s", len(missing), ",".join(missing[:8]))
-        for sid in missing:
-            decisions[sid] = ("__UNKNOWN__", 0, 0.0, "model", "")
+    # 勾選格與段落位置的標籤印在自己身上（或空格前面），最可靠
+    for s in pending:
+        if s.kind == "checkbox":
+            label = re.split(f"[{document.CHECKBOX_CHARS}{document.CHECKED_CHARS}]",
+                             s.existing)[0].strip(" 　:：")
+            if label:
+                anchors.append((label, [s], "self", ""))
+        elif "para" in s.loc:
+            label = headers.get(s.id, {}).get("row", "")
+            if label:
+                anchors.append((label, [s], "self", ""))
 
+    # 表格：印字又不是可填位置的格子當標籤，右邊找一格、下面找一排。
+    # 合併儲存格在每個涵蓋座標重複出現：右掃從最右端做、下掃從最左端做，
+    # 各一次就好——寬標題橫跨八欄時，每欄都往下錨定會把生日塞滿整排分位格
+    for t, grid in enumerate(texts):
+        for r, row in enumerate(grid):
+            for c, text in enumerate(row):
+                if not text.strip() or (t, r, c) in by_loc:
+                    continue
+                ctx = next((x for x in reversed(row[:c])
+                            if x.strip() and x != text), "")
+                if not (c + 1 < len(row) and row[c + 1] == text):
+                    right = _scan_right(grid, by_loc, t, r, c)
+                    if right:
+                        anchors.append((text, right, "right", ctx))
+                if not (c > 0 and row[c - 1] == text):
+                    below = _scan_below(grid, by_loc, t, r, c)
+                    if below:
+                        anchors.append((text, below, "below", ctx))
+
+    # ---- 標籤 → 欄位代碼：對照表優先，剩下的一次小呼叫問模型 ----
+    # 對照表比對不看上下文（能精確對上欄位名的標籤本身就無歧義）；
+    # 模型解析要看：同字不同列首（姓名｜緊急連絡人）是不同的欄位
+    resolved: Dict[str, str] = {}
+    unknown: Dict[str, str] = {}      # composite key → 給模型看的顯示字串
+    blocked = [_squash(b) for b in BLOCKED_LABELS]
+    for label, _targets, _mode, ctx in anchors:
+        sq = _squash(label)
+        if not sq or sq in LABEL_MAP:
+            if sq and sq not in resolved:
+                resolved[sq] = LABEL_MAP.get(sq, "")
+            continue
+        comp = f"{sq}|{_squash(ctx)}"
+        if comp in unknown:
+            continue
+        if len(sq) <= 20 and not sq.isdigit() and not any(b in sq for b in blocked):
+            shown = label.replace("\n", " ").strip()[:20]
+            if ctx:
+                shown += f"｜{ctx.replace(chr(10), ' ').strip()[:12]}"
+            unknown[comp] = shown
+    model_keys = _resolve_labels(unknown, host, model) if unknown else {}
+
+    # ---- 指派：同格自帶 > 右鄰 > 下方；先到先得 ----
+    for want in ("self", "right", "below"):
+        for label, targets, mode, ctx in anchors:
+            if mode != want:
+                continue
+            sq = _squash(label)
+            key = resolved.get(sq) or model_keys.get(f"{sq}|{_squash(ctx)}", "")
+            if key not in BY_KEY:
+                continue
+            source = "rule" if resolved.get(sq) else "model"
+            if "[]" not in key and mode == "below":
+                targets = targets[:1]      # 單值欄位只吃緊鄰的一格，不吃整欄
+            for s in targets:
+                if s.id not in decisions:
+                    decisions[s.id] = (key, 0, 1.0 if source == "rule" else 0.85,
+                                       source, label.replace("\n", " ")[:40])
+
+    # ---- 錨不住的一律留白待人工；標籤用機械抽取的給使用者認格子 ----
+    for s in pending:
+        if s.id not in decisions:
+            decisions[s.id] = ("__UNKNOWN__", 0, 0.0, "rule", _mech_label(s, headers))
+
+    anchored = sum(1 for s in pending if decisions[s.id][0] in BY_KEY)
+    log.info("錨定完成 可填=%d 留白=%d 對照表外標籤=%d",
+             anchored, len(pending) - anchored, len(unknown))
     _renumber(slots, decisions)
     return decisions
 
 
-VERIFY_PROMPT = """你是履歷表單填寫的審核員。第一輪對映已為每個位置配好欄位，
-現在逐格檢查「這個值放進這一格」對不對。
+def _scan_right(grid: List[List[str]], by_loc: Dict, t: int, r: int, c: int,
+                limit: int = 8) -> List[Slot]:
+    """標籤右邊第一個可填位置。撞到別的印字格就停——右邊沒有它的位置。"""
+    row = grid[r]
+    label = row[c]
+    for cc in range(c + 1, min(len(row), c + 1 + limit)):
+        s = by_loc.get((t, r, cc))
+        if s is not None:
+            return [s]
+        if row[cc].strip() and row[cc] != label:
+            return []
+    return []
 
-每個位置都附上它所在列的列首與欄首——這兩個是直接從表格抽出來的，可靠
-（窄欄密集處欄首可能偏一格，可與標籤互相印證）。
 
-規則：
-1. 這一格的意義由列首＋欄首＋標籤決定。配錯欄位就【改成正確的欄位】，
-   例如標籤「希望待遇」卻配了 applied_position，要改成 expected_salary。
-   只有個人資料裡真的沒有對應資訊時才選 __SKIP__，不要輕易放棄。
-2. 個人資料裡不存在的項目（身分證字號、血型、身高、日/夜間部、幾年制、
-   部門名稱等），一律 __SKIP__。
-3. 期間欄的判斷：同一列有【兩個】期間位置時，左邊 start、右邊 end；
-   只有【一個】位置時用 period（起訖合成）。
-4. ordinal 照抄輸入值，不要改。
-5. 判斷正確的就照抄。每個 id 都要輸出一次。"""
+def _scan_below(grid: List[List[str]], by_loc: Dict, t: int, r: int, c: int,
+                limit: int = 10) -> List[Slot]:
+    """標籤（欄名）正下方連續的可填位置，撞到印字格為止——欄名式表格用。"""
+    out: List[Slot] = []
+    for rr in range(r + 1, min(len(grid), r + 1 + limit)):
+        if c >= len(grid[rr]):
+            break
+        s = by_loc.get((t, rr, c))
+        if s is not None:
+            out.append(s)
+        elif grid[rr][c].strip():
+            break
+    return out
+
+
+def _resolve_labels(unknown: Dict[str, str], host: str, model: str) -> Dict[str, str]:
+    """對照表沒有的標籤（含列首上下文），一次問模型。
+    模型沒起來就全留白，不擋流程。回傳 {composite key: 欄位代碼}。"""
+    shown = list(unknown.values())
+    by_shown = {v: k for k, v in unknown.items()}
+    schema = {
+        "type": "object",
+        "properties": {
+            "mappings": {
+                "type": "array",
+                "minItems": len(shown), "maxItems": len(shown),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "string", "enum": shown},
+                        "field_key": {"type": "string", "enum": FIELD_KEYS},
+                    },
+                    "required": ["label", "field_key"],
+                },
+            }
+        },
+        "required": ["mappings"],
+    }
+    user = ("可用的欄位代碼：\n" + describe_fields() +
+            "\n\n表格上的標籤：\n" + "\n".join(f"- {x}" for x in shown))
+    try:
+        result = llm.ask(host, LABEL_PROMPT, user, schema, model=model,
+                         label=f"標籤對映:{len(shown)}個")
+    except llm.LlmUnavailable:
+        log.warning("模型不可用，對照表外的 %d 個標籤先留白", len(shown))
+        return {}
+    return {by_shown[m["label"]]: m.get("field_key", "")
+            for m in result.get("mappings", []) if m.get("label") in by_shown}
+
 
 ASSIGN_PROMPT = """履歷表格的每一列要填個人資料清單中的哪一筆？
 
@@ -128,48 +271,6 @@ ASSIGN_PROMPT = """履歷表格的每一列要填個人資料清單中的哪一�
 → r1=-1（沒有高中資料）、r2=0、r3=1、r4=-1"""
 
 
-def verify(slots: List[Slot], decisions: Dict[str, Decision],
-           profile: Dict[str, Any], headers: Dict[str, Dict[str, str]],
-           host: str, model: str) -> Dict[str, Decision]:
-    """第二輪：模型逐格審核即將填入的值。回傳修正後的 decisions。
-
-    第一輪看的是攤平全文，窄欄與清單列常錯位；這一輪每格附上機械抽取的
-    列首／欄首與個人資料摘要，資訊密度高得多。改判的格子直接覆寫，
-    ordinal 採用模型指定的（不再 _renumber——挑第幾筆正是這一輪的工作）。
-    """
-    fills = []
-    for sid, (key, ordinal, conf, src, label) in decisions.items():
-        if key in ("__SKIP__", "__UNKNOWN__") or key not in BY_KEY:
-            continue
-        value = get_value(profile, key, ordinal)
-        if value in (None, ""):
-            continue
-        fills.append({"id": sid, "key": key, "ordinal": ordinal,
-                      "value": str(value), "label": label})
-    if not fills:
-        return decisions
-
-    ids = [f["id"] for f in fills]
-    result = llm.ask(host, VERIFY_PROMPT,
-                     _verify_prompt(fills, profile, headers),
-                     _schema(ids), model=model, label="填寫審核")
-
-    changed = 0
-    for item in result.get("mappings", []):
-        sid, key = item.get("id"), item.get("field_key")
-        if sid not in ids or (key not in BY_KEY and key not in ("__SKIP__", "__UNKNOWN__")):
-            continue
-        old_key, old_ord, old_conf, src, label = decisions[sid]
-        # ordinal 不採用模型的：第幾筆由 assign_rows／_renumber 決定
-        if key != old_key:
-            decisions[sid] = (key, old_ord, float(item.get("confidence", 0.0)),
-                              "model", label)
-            changed += 1
-            log.info("審核改判 %s：%s → %s", sid, old_key, key)
-    log.info("審核完成 檢查=%d 改判=%d", len(fills), changed)
-    return decisions
-
-
 _PERIOD_KEYS = {f"{s}[].{f}" for s in ("education", "experience")
                 for f in ("period", "start", "end")}
 
@@ -180,13 +281,11 @@ def align_labels(slots: List[Slot], decisions: Dict[str, Decision],
 
     1. 標籤／欄首與欄位定義的名稱完全一致 → 直接採用那個欄位。
        模型在密集表格常整組位移一格（應徵職務配到可到職日），這裡拉回來。
-    2. 印著白名單外資訊（身分證、血型、日/夜、年制…）的格子 → 一律不填。
+    2. 印著白名單外資訊（血型、身高、體重、年制…）的格子 → 一律不填。
     3. 期間欄照欄序：同一列兩格 → 左 start 右 end；只有一格 → period。
     只動模型判的格子；快取與手動修正不碰。
     """
     by_id = {s.id: s for s in slots}
-    label_map = {_squash(lbl): key
-                 for lbl, key in {**BY_LABEL, **LABEL_ALIASES}.items()}
     blocked = [_squash(b) for b in BLOCKED_LABELS]
 
     # 模型把同一列的兩格抄了同一個標籤時（月薪與任職期間都寫「任職期間」），
@@ -203,7 +302,7 @@ def align_labels(slots: List[Slot], decisions: Dict[str, Decision],
             continue
         for sid in sids:
             col_hdr = _squash(headers.get(sid, {}).get("col", ""))
-            if col_hdr and col_hdr in label_map:
+            if col_hdr and col_hdr in LABEL_MAP:
                 effective[sid] = col_hdr
 
     for sid, (key, ordinal, conf, src, label) in list(decisions.items()):
@@ -220,7 +319,7 @@ def align_labels(slots: List[Slot], decisions: Dict[str, Decision],
             log.info("標籤對齊 %s：%s → __SKIP__（白名單外欄位）", sid, key)
             continue
 
-        target = label_map.get(text)
+        target = LABEL_MAP.get(text)
         if target and target != key:
             decisions[sid] = (target, ordinal, 1.0, src, label)
             log.info("標籤對齊 %s：%s → %s", sid, key, target)
@@ -240,7 +339,8 @@ def align_labels(slots: List[Slot], decisions: Dict[str, Decision],
                   ["__SKIP__"] * (len(sids) - 2) + [f"{section}[].end"])
         for sid, new_key in zip(sids, wanted):
             key, ordinal, conf, src, label = decisions[sid]
-            if src == "model" and key != new_key:
+            # 錨定引擎的合併標題會讓同列兩格拿到同一個 period，這裡拆回起訖
+            if src in ("model", "rule") and key != new_key:
                 decisions[sid] = (new_key, ordinal, conf, src, label)
                 log.info("期間對齊 %s：%s → %s", sid, key, new_key)
     return decisions
@@ -344,37 +444,6 @@ def _ask_rows(section: str, entries: List[Dict[str, Any]],
             if int(a.get("row", -9)) in valid_rows}
 
 
-def _verify_prompt(fills: List[Dict[str, Any]], profile: Dict[str, Any],
-                   headers: Dict[str, Dict[str, str]]) -> str:
-    lines = ["可用的欄位代碼：", describe_fields(), "", "個人資料："]
-    for section in ("basic", "contact", "job", "skills", "emergency"):
-        data = profile.get(section)
-        if isinstance(data, dict):
-            for k, v in data.items():
-                if v not in (None, ""):
-                    lines.append(f"- {section}.{k} = {v}")
-    for section in ("education", "experience"):
-        for i, row in enumerate(profile.get(section) or []):
-            desc = "　".join(f"{k}={v}" for k, v in row.items() if v not in (None, ""))
-            lines.append(f"- {section}[{i}]：{desc}")
-
-    lines.append("")
-    lines.append("待審核的位置（列首／欄首＝這一格在表格上的位置）：")
-    for f in fills:
-        h = headers.get(f["id"], {})
-        where = []
-        if h.get("row"):
-            where.append(f"列首「{h['row']}」")
-        if h.get("col"):
-            where.append(f"欄首「{h['col']}」")
-        # 窄欄密集區的欄首可能偏一格，標籤是第一輪從全文抄的，兩者互補
-        if f["label"]:
-            where.append(f"標籤「{f['label']}」")
-        lines.append(f"- {f['id']} {' '.join(where)}："
-                     f"第一輪判 {f['key']} 第{f['ordinal']}筆，將填入「{f['value'][:40]}」")
-    return "\n".join(lines)
-
-
 def _renumber(slots: List[Slot], decisions: Dict[str, Decision]) -> None:
     """學歷／經歷的第幾筆，由模型指認的位置照列號排出來。
 
@@ -395,40 +464,6 @@ def _renumber(slots: List[Slot], decisions: Dict[str, Decision]) -> None:
         for ordinal, (_row, sid) in enumerate(sorted(items)):
             key, _old, conf, source, label = decisions[sid]
             decisions[sid] = (key, ordinal, conf, source, label)
-
-
-def _prompt(text: str, slots: List[Slot]) -> str:
-    lines = ["可用的欄位代碼：", describe_fields(), "", "履歷表全文：", text, "", "待判斷的位置："]
-    for s in slots:
-        extra = f"（勾選題，選項：{'、'.join(s.options)}）" if s.options else ""
-        current = f"（目前內容：{s.existing[:30]}）" if s.existing.strip() else ""
-        lines.append(f"- {s.id}{extra}{current}")
-    return "\n".join(lines)
-
-
-def _schema(ids: List[str]) -> Dict[str, Any]:
-    return {
-        "type": "object",
-        "properties": {
-            "mappings": {
-                "type": "array",
-                "minItems": len(ids),
-                "maxItems": len(ids),
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "id": {"type": "string", "enum": ids},
-                        "field_key": {"type": "string", "enum": FIELD_KEYS},
-                        "ordinal": {"type": "integer"},
-                        "confidence": {"type": "number"},
-                        "label": {"type": "string"},
-                    },
-                    "required": ["id", "field_key", "ordinal", "confidence", "label"],
-                },
-            }
-        },
-        "required": ["mappings"],
-    }
 
 
 # --------------------------------------------------------------------------

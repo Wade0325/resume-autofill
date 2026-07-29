@@ -51,6 +51,35 @@ def docx_to_pdf(content: bytes) -> bytes:
     return _convert(content, "input.docx", "pdf")
 
 
+def docx_to_page_pngs(content: bytes, max_pages: int = 3, scale: float = 2.0) -> list[bytes]:
+    """視覺模式用：把文件每一頁畫成 PNG 截圖（LibreOffice → PDF → 點陣圖）。
+
+    scale 2.0 約為 144 DPI，表格細字仍可辨識；頁數上限是為了守住
+    模型的上下文長度（每頁截圖約吃 1~2k tokens）。
+    """
+    import io
+
+    import pypdfium2 as pdfium
+
+    pdf = pdfium.PdfDocument(docx_to_pdf(content))
+    out: list[bytes] = []
+    try:
+        for i in range(min(len(pdf), max_pages)):
+            page = pdf[i]
+            bitmap = page.render(scale=scale)
+            try:
+                buf = io.BytesIO()
+                bitmap.to_pil().save(buf, format="PNG")
+                out.append(buf.getvalue())
+            finally:
+                # 常駐服務裡靠 GC 釋放會拖到行程結束，PDFium 資源要主動關
+                bitmap.close()
+                page.close()
+    finally:
+        pdf.close()
+    return out
+
+
 def _convert(content: bytes, src_name: str, target: str) -> bytes:
     soffice = find_soffice()
     with tempfile.TemporaryDirectory(prefix="convert_") as tmp:

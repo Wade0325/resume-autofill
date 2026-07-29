@@ -46,6 +46,9 @@ CREATE TABLE IF NOT EXISTS import_job (
     id         TEXT PRIMARY KEY,
     filename   TEXT NOT NULL,
     extracted  TEXT NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'ready',   -- processing | ready | failed
+    stage      TEXT NOT NULL DEFAULT '',        -- processing 時目前進行到哪一步
+    error      TEXT NOT NULL DEFAULT '',        -- failed 時給使用者看的原因
     created_at TEXT NOT NULL
 );
 """
@@ -71,9 +74,13 @@ def init() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
         conn.execute("PRAGMA journal_mode=WAL")
-        # 既有資料庫補欄位（SQLite 的 IF NOT EXISTS 不會改舊表）
+        # 既有資料庫補欄位（SQLite 的 IF NOT EXISTS 不會改舊表）。
+        # import_job 的 status 預設 ready：舊資料列都是同步時代分析完才寫入的
         for ddl in ("ALTER TABLE job ADD COLUMN stage TEXT NOT NULL DEFAULT ''",
-                    "ALTER TABLE job ADD COLUMN error TEXT NOT NULL DEFAULT ''"):
+                    "ALTER TABLE job ADD COLUMN error TEXT NOT NULL DEFAULT ''",
+                    "ALTER TABLE import_job ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'",
+                    "ALTER TABLE import_job ADD COLUMN stage TEXT NOT NULL DEFAULT ''",
+                    "ALTER TABLE import_job ADD COLUMN error TEXT NOT NULL DEFAULT ''"):
             try:
                 conn.execute(ddl)
             except sqlite3.OperationalError:
@@ -178,25 +185,46 @@ def update_job(job_id: str, *, decided: Optional[Dict[str, Any]] = None,
 
 
 def fail_stale_jobs() -> int:
-    """把上次關機時還在分析中的 job 標成失敗——執行緒已經死了，不會有結果。"""
+    """把上次關機時還在分析中的工作標成失敗——執行緒已經死了，不會有結果。"""
+    n = 0
     with connect() as conn:
-        cur = conn.execute(
-            "UPDATE job SET status = 'failed', "
-            "error = '分析被伺服器重啟中斷，請重新上傳' WHERE status = 'processing'")
-    return cur.rowcount
-
-
-def delete_job(job_id: str) -> None:
-    with connect() as conn:
-        conn.execute("DELETE FROM job WHERE id = ?", (job_id,))
+        for table in ("job", "import_job"):
+            n += conn.execute(
+                f"UPDATE {table} SET status = 'failed', "
+                "error = '分析被伺服器重啟中斷，請重新上傳' WHERE status = 'processing'").rowcount
+    return n
 
 
 # ---------------- import_job：一次匯入讀到的資料 ----------------
-def create_import(import_id: str, filename: str, extracted: Dict[str, Any]) -> None:
+def create_import(import_id: str, filename: str) -> None:
     with connect() as conn:
         conn.execute(
-            "INSERT INTO import_job (id, filename, extracted, created_at) VALUES (?, ?, ?, ?)",
-            (import_id, filename, json.dumps(extracted, ensure_ascii=False), _now()))
+            "INSERT INTO import_job (id, filename, extracted, status, created_at) "
+            "VALUES (?, ?, '{}', 'processing', ?)",
+            (import_id, filename, _now()))
+
+
+def update_import(import_id: str, *, extracted: Optional[Dict[str, Any]] = None,
+                  status: Optional[str] = None, stage: Optional[str] = None,
+                  error: Optional[str] = None) -> None:
+    sets, params = [], []
+    if extracted is not None:
+        sets.append("extracted = ?")
+        params.append(json.dumps(extracted, ensure_ascii=False))
+    if status is not None:
+        sets.append("status = ?")
+        params.append(status)
+    if stage is not None:
+        sets.append("stage = ?")
+        params.append(stage)
+    if error is not None:
+        sets.append("error = ?")
+        params.append(error)
+    if not sets:
+        return
+    params.append(import_id)
+    with connect() as conn:
+        conn.execute(f"UPDATE import_job SET {', '.join(sets)} WHERE id = ?", params)
 
 
 def get_import(import_id: str) -> Optional[Dict[str, Any]]:

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { api, type FieldSpec, type ImportPreview, type ImportRow } from '../api'
 import { SECTIONS } from '../sections'
 import Dropzone, { type UploadPhase } from '../components/Dropzone'
+import ResumeDocView from '../components/ResumeDocView'
 
 // 切到別頁再切回來時要能接續。只存 id 與勾選狀態，列表本身回頭跟後端重拿，
 // 免得 sessionStorage 裡放一份會過期的副本。
@@ -15,6 +16,7 @@ export default function ImportPage() {
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [active, setActive] = useState<string>(SECTIONS[0].id)
   const [phase, setPhase] = useState<UploadPhase>({ kind: 'idle' })
+  const [hovered, setHovered] = useState<string | null>(null) // 滑到的列，讓履歷上的框連動
   const [applying, setApplying] = useState(false)
   const [error, setError] = useState('')
   const navigate = useNavigate()
@@ -23,19 +25,67 @@ export default function ImportPage() {
     api.fields().then(setFields).catch((e) => setError(e.message))
   }, [])
 
-  // 還原上一次的匯入
+  // 讀取在後端背景執行，這裡輪詢進度；切頁再回來會憑 sessionStorage 接上
+  const [trackingId, setTrackingId] = useState<string | null>(() =>
+    sessionStorage.getItem(KEY_ID),
+  )
   useEffect(() => {
-    const id = sessionStorage.getItem(KEY_ID)
-    if (!id) return
-    api
-      .getImport(id)
-      .then((p) => {
-        setPreview(p)
-        const saved: string[] = JSON.parse(sessionStorage.getItem(KEY_PICKED) ?? '[]')
-        setPicked(new Set(saved))
-      })
-      .catch(() => clearSaved()) // 後端重啟過就當作沒有
-  }, [])
+    if (!trackingId || preview) return
+    let stopped = false
+    let fails = 0
+    const started = Date.now()
+    const giveUp = () => {
+      clearSaved()
+      setTrackingId(null)
+      setPhase({ kind: 'idle' })
+    }
+    const poll = () => {
+      api
+        .getImport(trackingId)
+        .then((st) => {
+          if (stopped) return
+          fails = 0
+          if (st.status === 'ready') {
+            setPreview(st.preview)
+            setPhase({ kind: 'idle' })
+            // 切頁回來沿用之前的勾選；剛完成的新匯入用預設勾選
+            const saved = sessionStorage.getItem(KEY_PICKED)
+            if (saved) {
+              setPicked(new Set(JSON.parse(saved)))
+            } else {
+              remember(
+                new Set(
+                  st.preview.rows.filter((r) => r.default_checked).map((r) => r.row_id),
+                ),
+              )
+            }
+            const first = SECTIONS.find((s) =>
+              st.preview.rows.some((r) => r.field_key.startsWith(s.prefix)),
+            )
+            if (first) setActive(first.id)
+          } else if (st.status === 'failed') {
+            setError(st.error)
+            giveUp()
+          } else {
+            setPhase({
+              kind: 'analyzing',
+              seconds: Math.round((Date.now() - started) / 1000),
+              stage: st.stage,
+            })
+          }
+        })
+        .catch(() => {
+          // 後端 --reload 重啟時會斷幾秒，別因為一次失敗就放棄
+          if (!stopped && ++fails >= 5) giveUp()
+        })
+    }
+    poll()
+    const timer = setInterval(poll, 2000)
+    return () => {
+      stopped = true
+      clearInterval(timer)
+    }
+  }, [trackingId, preview])
 
   function clearSaved() {
     sessionStorage.removeItem(KEY_ID)
@@ -50,36 +100,16 @@ export default function ImportPage() {
   async function upload(file: File) {
     setError('')
     setPhase({ kind: 'uploading', percent: 0 })
-    const started = Date.now()
-    let ticker: ReturnType<typeof setInterval> | undefined
     try {
-      const result = await api.analyzeImport(file, (percent) => {
-        if (percent < 100) {
-          setPhase({ kind: 'uploading', percent })
-          return
-        }
-        // 檔案送完了，剩下的時間都花在解析與模型判斷
-        setPhase({ kind: 'analyzing', seconds: 0, stage: '讀取內容中' })
-        ticker ??= setInterval(
-          () =>
-            setPhase({
-              kind: 'analyzing',
-              seconds: Math.round((Date.now() - started) / 1000),
-              stage: '讀取內容中',
-            }),
-          1000,
-        )
-      })
-      setPreview(result)
-      const defaults = new Set(result.rows.filter((r) => r.default_checked).map((r) => r.row_id))
-      sessionStorage.setItem(KEY_ID, result.import_id)
-      remember(defaults)
-      const first = SECTIONS.find((s) => result.rows.some((r) => r.field_key.startsWith(s.prefix)))
-      if (first) setActive(first.id)
+      const accepted = await api.analyzeImport(file, (percent) =>
+        setPhase({ kind: 'uploading', percent }),
+      )
+      sessionStorage.setItem(KEY_ID, accepted.import_id)
+      sessionStorage.removeItem(KEY_PICKED) // 新的一次匯入，舊勾選不適用
+      setPhase({ kind: 'analyzing', seconds: 0, stage: '準備中' })
+      setTrackingId(accepted.import_id)
     } catch (e: any) {
       setError(e.requestId ? `${e.message}（追蹤碼 ${e.requestId}）` : e.message)
-    } finally {
-      if (ticker) clearInterval(ticker)
       setPhase({ kind: 'idle' })
     }
   }
@@ -146,7 +176,7 @@ export default function ImportPage() {
         </span>
       </div>
 
-      <div className="grid grid-cols-[13rem_1fr] gap-8 items-start">
+      <div className="grid grid-cols-[10rem_minmax(0,6fr)_minmax(0,5fr)] gap-5 items-start">
         <nav className="sticky top-6 space-y-1">
           {SECTIONS.map((s) => {
             const rows = rowsOf(s.prefix)
@@ -170,6 +200,14 @@ export default function ImportPage() {
             )
           })}
         </nav>
+
+        <div className="sticky top-6">
+          <ResumeDocView
+            importId={preview.import_id}
+            marks={preview.rows.map((r) => ({ id: r.row_id, text: r.incoming }))}
+            hoveredId={hovered}
+          />
+        </div>
 
         <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
           {shown.length === 0 ? (
@@ -198,6 +236,7 @@ export default function ImportPage() {
                     label={labelOf(row.field_key)}
                     checked={picked.has(row.row_id)}
                     onToggle={() => toggle(row.row_id)}
+                    onHover={setHovered}
                   />
                 ))}
               </tbody>
@@ -212,6 +251,7 @@ export default function ImportPage() {
             clearSaved()
             setPreview(null)
             setPicked(new Set())
+            setTrackingId(null)
           }}
           className="text-sm text-slate-500 hover:text-slate-800"
         >
@@ -235,15 +275,21 @@ function Row({
   label,
   checked,
   onToggle,
+  onHover,
 }: {
   row: ImportRow
   label: string
   checked: boolean
   onToggle: () => void
+  onHover: (rowId: string | null) => void
 }) {
   const willOverwrite = checked && row.current.trim() !== ''
   return (
-    <tr className={willOverwrite ? 'bg-amber-50/50' : ''}>
+    <tr
+      className={`${willOverwrite ? 'bg-amber-50/50' : ''} hover:bg-sky-50/60`}
+      onMouseEnter={() => onHover(row.row_id)}
+      onMouseLeave={() => onHover(null)}
+    >
       <td className="px-4 py-2.5">
         <input
           type="checkbox"

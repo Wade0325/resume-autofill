@@ -84,8 +84,7 @@ function Progress({ phase }: { phase: UploadPhase }) {
       </div>
       {!uploading && (
         <p className="text-xs text-slate-400 mt-3">
-          第一次遇到的格式要靠模型判讀，約 1～4 分鐘；看過的格式幾秒就好。
-          分析在伺服器進行，切到其他頁面不會中斷。
+          第一次遇到的格式要靠模型判讀，約 1～4 分鐘。
         </p>
       )}
     </div>

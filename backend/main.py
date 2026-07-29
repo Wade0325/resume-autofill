@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -40,6 +41,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Resume AutoFill", version="0.1.0", lifespan=lifespan)
 
+# 前端定期輪詢的端點：成功回應多到會洗版，降成 DEBUG；失敗仍照常記 WARNING。
+# 除了固定路徑，分析期間每兩秒一次的進度查詢（GET /api/jobs/{id}、
+# GET /api/imports/{id}）也算——上傳與完成事件另有自己的 log，不會因此消失
+POLLED_PATHS = {"/api/models", "/api/logs"}
+POLL_RE = re.compile(r"^/api/(jobs|imports)/[^/]+$")
+
 
 @app.middleware("http")
 async def request_context(request: Request, call_next):
@@ -64,7 +71,13 @@ async def request_context(request: Request, call_next):
                                 headers={"X-Request-Id": rid})
 
         elapsed = int((time.perf_counter() - t0) * 1000)
-        level = logging.WARNING if response.status_code >= 400 else logging.INFO
+        if response.status_code >= 400:
+            level = logging.WARNING
+        elif request.url.path in POLLED_PATHS or (
+                request.method == "GET" and POLL_RE.match(request.url.path)):
+            level = logging.DEBUG
+        else:
+            level = logging.INFO
         log.log(level, "%s %s → %d 耗時=%dms",
                 request.method, request.url.path, response.status_code, elapsed)
         response.headers["X-Request-Id"] = rid
