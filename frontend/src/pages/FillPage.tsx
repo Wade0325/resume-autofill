@@ -361,6 +361,7 @@ function SkipReason({ note }: { note: string }) {
 function sourceLabel(source: string) {
   const names: Record<string, string> = {
     rule: '規則',
+    learned: '學過',
     cache: '快取',
     model: '模型',
     manual: '手動',

@@ -76,16 +76,22 @@ def _mech_label(slot: Slot, headers: Dict[str, Dict[str, str]]) -> str:
 # --------------------------------------------------------------------------
 def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
                      cached: Optional[Dict[str, Any]] = None,
-                     headers: Optional[Dict[str, Dict[str, str]]] = None
+                     headers: Optional[Dict[str, Dict[str, str]]] = None,
+                     learned: Optional[Dict[str, Any]] = None
                      ) -> Dict[str, Decision]:
     """標籤驅動的對映：程式找標籤、定位置，模型只處理對照表外的標籤。
 
     反轉舊作法（枚舉所有空格、逐格問模型）：表格上印的標籤才是可靠的錨點，
     「值填在標籤右邊或下面」是確定性的幾何規則。錨不住的位置留白待人工，
     比模型硬猜填錯格安全；標籤全在對照表裡時，整條路零模型呼叫。
+
+    learned 是使用者修正累積出來的「標籤→欄位」全域字典（跨表格通用，
+    見 service.apply_fixes 的學習端）：A 公司教過的「服務單位＝公司名稱」，
+    B 公司的表格直接受益。解析順位：內建對照表 → 學過的 → 問模型。
     """
     cached = cached or {}
     headers = headers or {}
+    learned_keys = {sq: v.get("field_key", "") for sq, v in (learned or {}).items()}
     decisions: Dict[str, Decision] = {}
     pending: List[Slot] = []
     for slot in slots:
@@ -148,10 +154,12 @@ def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
                     # 提示字後面沒有別的空格可填 → 值就接在自己格尾
                     anchors.append((text, [by_loc[(t, r, c)]], "self", ctx))
 
-    # ---- 標籤 → 欄位代碼：對照表優先，剩下的一次小呼叫問模型 ----
-    # 對照表比對不看上下文（能精確對上欄位名的標籤本身就無歧義）；
-    # 模型解析要看：同字不同列首（姓名｜緊急連絡人）是不同的欄位
+    # ---- 標籤 → 欄位代碼：對照表 → 學過的 → 一次小呼叫問模型 ----
+    # 對照表與學過的比對不看上下文（能精確對上的標籤本身就無歧義，
+    # 泛用短標籤在學習端就被擋掉了）；模型解析要看：
+    # 同字不同列首（姓名｜緊急連絡人）是不同的欄位
     resolved: Dict[str, str] = {}
+    known: Dict[str, str] = {}        # 學過的命中（值可能是 __SKIP__＝學過「這不用填」）
     unknown: Dict[str, str] = {}      # composite key → 給模型看的顯示字串
     blocked = [_squash(b) for b in BLOCKED_LABELS]
     for label, _targets, _mode, ctx in anchors:
@@ -159,6 +167,9 @@ def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
         if not sq or sq in LABEL_MAP:
             if sq and sq not in resolved:
                 resolved[sq] = LABEL_MAP.get(sq, "")
+            continue
+        if sq in learned_keys:
+            known[sq] = learned_keys[sq]
             continue
         comp = f"{sq}|{_squash(ctx)}"
         if comp in unknown:
@@ -176,16 +187,19 @@ def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
             if mode != want:
                 continue
             sq = _squash(label)
-            key = resolved.get(sq) or model_keys.get(f"{sq}|{_squash(ctx)}", "")
+            key = (resolved.get(sq) or known.get(sq)
+                   or model_keys.get(f"{sq}|{_squash(ctx)}", ""))
             if key not in BY_KEY:
                 continue
-            source = "rule" if resolved.get(sq) else "model"
+            source = ("rule" if resolved.get(sq)
+                      else "learned" if known.get(sq) else "model")
             if "[]" not in key and mode == "below":
                 targets = targets[:1]      # 單值欄位只吃緊鄰的一格，不吃整欄
+            conf = {"rule": 1.0, "learned": 0.95}.get(source, 0.85)
             for s in targets:
                 if s.id not in decisions:
-                    decisions[s.id] = (key, 0, 1.0 if source == "rule" else 0.85,
-                                       source, label.replace("\n", " ")[:40])
+                    decisions[s.id] = (key, 0, conf, source,
+                                       label.replace("\n", " ")[:40])
 
     # ---- 錨不住的一律留白待人工；標籤用機械抽取的給使用者認格子 ----
     for s in pending:
@@ -193,8 +207,8 @@ def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
             decisions[s.id] = ("__UNKNOWN__", 0, 0.0, "rule", _mech_label(s, headers))
 
     anchored = sum(1 for s in pending if decisions[s.id][0] in BY_KEY)
-    log.info("錨定完成 可填=%d 留白=%d 對照表外標籤=%d",
-             anchored, len(pending) - anchored, len(unknown))
+    log.info("錨定完成 可填=%d 留白=%d 學過的標籤=%d 對照表外=%d",
+             anchored, len(pending) - anchored, len(known), len(unknown))
     _renumber(slots, decisions)
     return decisions
 
