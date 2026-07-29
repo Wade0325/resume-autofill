@@ -71,7 +71,10 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("experience[].end", "離職年月", kind="list"),
     FieldSpec("experience[].period", "任職期間", kind="list", derived=True),
     FieldSpec("experience[].description", "工作內容", kind="list"),
-    FieldSpec("experience[].salary", "薪資", kind="list"),
+    # 只存固定月薪的金額：表單絕大多數只印一格「月薪」，
+    # 津貼獎金那些拆項刻意不收，整坨照抄會把單格表單填得一塌糊塗
+    FieldSpec("experience[].salary", "月薪", kind="list",
+              hint="固定月薪的金額數字，例如 52,000。津貼、獎金不要"),
     FieldSpec("experience[].is_supervisor", "擔任主管", kind="choice", choices=["是", "否"]),
     FieldSpec("experience[].leave_reason", "離職原因", kind="list"),
 
@@ -161,7 +164,8 @@ LABEL_ALIASES = {
     "任職期間": "experience[].period",
     "工作期間": "experience[].period",
     "服務期間": "experience[].period",
-    "月薪": "experience[].salary",
+    "固定月薪": "experience[].salary",
+    "離職月薪": "experience[].salary",
     "地址": "contact.address_mailing",
     "身份證字號": "basic.national_id",
     "英文名": "basic.name_en",
