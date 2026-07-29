@@ -20,29 +20,36 @@ class FieldSpec:
 
 FIELDS: List[FieldSpec] = [
     # ---------- 基本資料 ----------
+    # 私密欄位（身分證字號、身分別…）一樣開放：值要不要填由使用者自己決定，
+    # 系統只提供服務。特別敏感的列在 SENSITIVE_KEYS，預設不自動填。
     FieldSpec("basic.name_zh", "中文姓名", hint="申請人的中文全名"),
     FieldSpec("basic.name_en", "英文姓名"),
+    FieldSpec("basic.name_passport", "護照全名", hint="與護照相同的英文全名"),
+    FieldSpec("basic.national_id", "身分證字號"),
     FieldSpec("basic.gender", "性別", kind="choice", choices=["男", "女"]),
     FieldSpec("basic.birthday", "出生年月日", kind="date", hint="西元 YYYY-MM-DD"),
     FieldSpec("basic.age", "年齡"),
+    FieldSpec("basic.nationality", "國籍"),
     FieldSpec("basic.marital_status", "婚姻狀況", kind="choice", choices=["未婚", "已婚"]),
     FieldSpec("basic.military", "兵役狀況", kind="choice", choices=["役畢", "免役", "未役", "替代役", "不適用"]),
-    # 出生地、身分證字號、血型、身高、體重、身心障礙刻意不收：
-    # 履歷表就算印了這些格子也不填。欄位不存在 → 白名單裡沒有 → 模型無從對映，
-    # 比「收了再靠設定擋住」更徹底。
+    FieldSpec("basic.identity_category", "身分別", kind="choice",
+              choices=["無", "身心障礙", "原住民"], hint="表格上的身分別勾選欄"),
+    FieldSpec("basic.hobbies", "興趣", hint="休閒興趣，例如 羽球、桌球"),
 
     # ---------- 聯絡方式 ----------
     FieldSpec("contact.mobile", "行動電話"),
     FieldSpec("contact.phone_home", "住家電話"),
     FieldSpec("contact.email", "電子郵件"),
-    # 地址只留一個。履歷表常見「戶籍地址」與「通訊地址」兩格，兩格都對映到這裡，
-    # 對絕大多數人來說填的本來就是同一個地址。
-    FieldSpec("contact.address_mailing", "地址"),
+    # 表格常見「戶籍地址」「通訊地址」兩格；只印一格「地址」的對映到通訊地址。
+    FieldSpec("contact.address_mailing", "通訊地址"),
+    FieldSpec("contact.address_household", "戶籍地址"),
 
     # ---------- 應徵資訊 ----------
     FieldSpec("job.applied_position", "應徵職務"),
     FieldSpec("job.expected_salary", "希望待遇", kind="money", hint="月薪金額"),
+    FieldSpec("job.expected_salary_year", "期望年薪", kind="money", hint="年薪金額"),
     FieldSpec("job.available_date", "可到職日", kind="date"),
+    FieldSpec("job.recruit_channel", "招募管道", hint="從哪裡得知職缺，例如 104人力銀行"),
 
     # ---------- 學歷（list，會展開成 education[0].xxx） ----------
     FieldSpec("education[].school", "學校名稱", kind="list"),
@@ -53,15 +60,19 @@ FIELDS: List[FieldSpec] = [
     # 只印一欄「就學期間」的表格用這個，值由入學與畢業合成
     FieldSpec("education[].period", "就學期間", kind="list", derived=True),
     FieldSpec("education[].status", "畢業狀態", kind="list"),
+    FieldSpec("education[].division", "日夜間部", kind="list", hint="日、夜或進修，照表格印的字填"),
+    FieldSpec("education[].club", "社團活動", kind="list"),
 
     # ---------- 經歷 ----------
     FieldSpec("experience[].company", "公司名稱", kind="list"),
+    FieldSpec("experience[].department", "部門", kind="list"),
     FieldSpec("experience[].title", "職稱", kind="list"),
     FieldSpec("experience[].start", "到職年月", kind="list"),
     FieldSpec("experience[].end", "離職年月", kind="list"),
     FieldSpec("experience[].period", "任職期間", kind="list", derived=True),
     FieldSpec("experience[].description", "工作內容", kind="list"),
     FieldSpec("experience[].salary", "薪資", kind="list"),
+    FieldSpec("experience[].is_supervisor", "擔任主管", kind="choice", choices=["是", "否"]),
     FieldSpec("experience[].leave_reason", "離職原因", kind="list"),
 
     # ---------- 專長 ----------
@@ -73,10 +84,37 @@ FIELDS: List[FieldSpec] = [
                        "職業小型車", "職業大貨車", "職業大客車"]),
     FieldSpec("skills.specialty", "專長", kind="longtext"),
 
+    # ---------- 家庭狀況（人事表常見的稱謂/姓名/年齡/職業表格） ----------
+    # 標籤刻意加「家人」前綴：表格印的「姓名」「職業」太通用，
+    # 若直接當標籤會在確定性對齊時搶走別區同名的格子。
+    FieldSpec("family[].relation", "家人稱謂", kind="list", hint="例如 父、母、兄"),
+    FieldSpec("family[].name", "家人姓名", kind="list"),
+    FieldSpec("family[].age", "家人年齡", kind="list"),
+    FieldSpec("family[].occupation", "家人職業", kind="list"),
+
+    # ---------- 任用諮詢人／推薦人（同上，標籤加前綴避免搶格子） ----------
+    FieldSpec("reference[].name", "諮詢人姓名", kind="list"),
+    FieldSpec("reference[].company", "諮詢人公司", kind="list"),
+    FieldSpec("reference[].title", "諮詢人職稱", kind="list"),
+    FieldSpec("reference[].phone", "諮詢人電話", kind="list"),
+    FieldSpec("reference[].relation", "諮詢人關係", kind="list", hint="與本人的關係，例如 直屬主管"),
+
     # ---------- 緊急聯絡人 ----------
     FieldSpec("emergency.name", "緊急聯絡人姓名"),
     FieldSpec("emergency.relation", "緊急聯絡人關係"),
     FieldSpec("emergency.phone", "緊急聯絡人電話"),
+
+    # ---------- 聲明事項（人事表常見的無/有勾選題） ----------
+    FieldSpec("declaration.relatives_in_company", "親友任職於應徵公司", kind="choice",
+              choices=["無", "有"]),
+    FieldSpec("declaration.other_positions", "於其他公司擔任負責人或董監事", kind="choice",
+              choices=["無", "有"]),
+    FieldSpec("declaration.china_investment", "大陸地區投資業務", kind="choice",
+              choices=["無", "有"]),
+    FieldSpec("declaration.non_compete", "與前公司簽有競業條款", kind="choice",
+              choices=["無", "有"]),
+    FieldSpec("declaration.ip_ownership", "擁有相關智慧財產權或專門技術", kind="choice",
+              choices=["無", "有"]),
 
     # ---------- 長文 ----------
     FieldSpec("autobiography", "自傳", kind="longtext"),
@@ -89,7 +127,7 @@ FIELD_KEYS = [f.key for f in FIELDS] + SPECIAL_KEYS
 BY_KEY = {f.key: f for f in FIELDS}
 
 # 高敏感欄位：預設不自動填，除非 config 明確開啟
-SENSITIVE_KEYS = {"basic.marital_status"}
+SENSITIVE_KEYS = {"basic.marital_status", "basic.national_id", "basic.identity_category"}
 
 
 def describe_fields(include_special: bool = True) -> str:
@@ -124,12 +162,24 @@ LABEL_ALIASES = {
     "工作期間": "experience[].period",
     "服務期間": "experience[].period",
     "月薪": "experience[].salary",
+    "地址": "contact.address_mailing",
+    "身份證字號": "basic.national_id",
+    "英文名": "basic.name_en",
+    "興趣專長": "basic.hobbies",
+    "月全薪": "job.expected_salary",
+    "日夜": "education[].division",
+    "日/夜": "education[].division",
+    "畢/肄": "education[].status",
 }
-BY_LABEL = {f.label: f.key for f in FIELDS}
+# 同名標籤（家庭與諮詢人都有「姓名」之類）對映沒有唯一答案，
+# 不能拿來做確定性對齊，留給模型憑上下文判斷。
+_label_counts: dict = {}
+for _f in FIELDS:
+    _label_counts[_f.label] = _label_counts.get(_f.label, 0) + 1
+BY_LABEL = {f.label: f.key for f in FIELDS if _label_counts[f.label] == 1}
 
-# 印著這些字的格子一律不填：欄位定義裡刻意沒有這些資訊（隱私白名單），
-# 以及「日/夜間部」「幾年制」這種個人資料不會有的表單微欄位。
+# 印著這些字的格子一律不填：個人資料裡沒有對應欄位（這幾項連用戶表單都沒開），
+# 以及「幾年制」這種個人資料不會有的表單微欄位。
 BLOCKED_LABELS = (
-    "身分證", "身份證", "血型", "身高", "體重", "出生地",
-    "身心障礙", "殘障手冊", "日/夜", "日夜", "年制",
+    "血型", "身高", "體重", "出生地", "殘障手冊", "年制",
 )
