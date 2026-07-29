@@ -95,6 +95,7 @@ app.include_router(models.router, prefix="/api")
 
 # 正式版把 build 好的前端交給同一個服務托管，使用者只會看到一個網址。
 # 開發時 dist 不存在，走 Vite dev server 的 proxy，這裡就跳過。
+# 打包版的目錄佈局刻意跟 repo 相同（app/backend + app/frontend/dist），這行兩邊通用
 _DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 if _DIST.is_dir():
     app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="assets")

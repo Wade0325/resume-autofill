@@ -32,14 +32,17 @@ def setup_logging(log_dir: Path, level: str = "INFO") -> None:
     id_filter = RequestIdFilter()
 
     # Windows 主控台預設 cp950，中文會變亂碼。檔案 handler 另外指定 utf-8。
+    # 凍結成無主控台的 exe 時 sys.stdout 是 None，console handler 直接省略
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except (AttributeError, OSError):
         pass
 
-    console = logging.StreamHandler(sys.stdout)
-    console.setFormatter(formatter)
-    console.addFilter(id_filter)
+    console = None
+    if sys.stdout is not None:
+        console = logging.StreamHandler(sys.stdout)
+        console.setFormatter(formatter)
+        console.addFilter(id_filter)
 
     # encoding 必須明寫：Windows 的預設是 cp950，中文 log 會直接拋 UnicodeEncodeError
     file_handler = logging.handlers.RotatingFileHandler(
@@ -51,7 +54,8 @@ def setup_logging(log_dir: Path, level: str = "INFO") -> None:
     root = logging.getLogger()
     root.handlers.clear()
     root.setLevel(level)
-    root.addHandler(console)
+    if console is not None:
+        root.addHandler(console)
     root.addHandler(file_handler)
 
     # uvicorn 自帶 handler，不清掉的話 log 檔會同時出現兩種格式。

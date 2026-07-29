@@ -86,3 +86,6 @@ desktop.ini
 # ---- Claude Code 本機設定 ----
 .claude/settings.local.json
 .claude/*.local.json
+
+# C# 啟動器建置產物
+launcher/**/obj/

@@ -339,14 +339,16 @@ python -m uvicorn backend.main:app --port 8090 --reload
 ## 8. 待討論
 
 已定案：**MIT 授權**、**llama.cpp** 推論引擎、**Qwen3.5-9B Q4_K_M** 模型、
-**建議規格 NVIDIA 8 GB VRAM**——CPU 推論可用但速度代價由使用者承擔，不另做優化。
+**建議規格 NVIDIA 8 GB VRAM**（CPU 推論可用但速度代價由使用者承擔，不另做優化）、
+**打包走內嵌 Python**——不凍結（PyInstaller 的隱藏相依與防毒誤判不值得冒），
+zip 內帶官方 embeddable Python＋套件＋原始碼，C# 啟動器（`launcher/`）拉起後端、
+開瀏覽器、常駐系統匣，結束時連 llama-server 一起收。組裝指令：
+`.\scripts\build-package.ps1 -Zip`，模型不隨附、由介面首次下載。
 
 以下細節尚未定案：
 
 * SQLite 資料表設計（個人資料的多筆結構、格式對映快取的儲存方式）
 * 前後端 API 介面定義
-* 啟動器細節：port 衝突處理、如何判斷 llama-server 真的 ready、關閉時確保不留孤兒 process
-* 打包方式：Python 端要不要凍結成 exe；模型 5.3 GB 要隨附還是首次啟動時下載
 * CPU 推論的打包：CUDA 版 llama-server 在無 NVIDIA 驅動的機器上起不來，
   需同捆 CPU 版二進位並在啟動時偵測選用
 
