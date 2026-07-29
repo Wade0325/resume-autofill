@@ -41,12 +41,6 @@ CATALOG = [
     {"name": "Qwen3.5-9B-Q4_K_M", "size_gb": 5.3, "note": "預設，判讀最準（約需 7.4 GB VRAM）",
      "url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf",
      "mmproj": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/mmproj-F16.gguf"},
-    {"name": "Qwen3.5-4B-Q4_K_M", "size_gb": 2.6, "note": "較省資源，複雜表格易誤判",
-     "url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
-     "mmproj": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf"},
-    {"name": "Qwen3.5-2B-Q4_K_M", "size_gb": 1.5, "note": "無獨顯、純 CPU 的退路",
-     "url": "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf",
-     "mmproj": "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/mmproj-F16.gguf"},
 ]
 
 

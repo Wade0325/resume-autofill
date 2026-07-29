@@ -2,7 +2,7 @@
     開發用：啟動 llama-server（正式版由 ResumeAutoFill.exe 在背景執行）
 
     用法：  .\scripts\start-llama-server.ps1
-            .\scripts\start-llama-server.ps1 -Model models\Qwen3.5-4B-Q4_K_M.gguf
+            .\scripts\start-llama-server.ps1 -Model models\Qwen3.5-27B-Q4_K_M.gguf
 #>
 param(
     [string]$Model   = "models\Qwen3.5-9B-Q4_K_M.gguf",

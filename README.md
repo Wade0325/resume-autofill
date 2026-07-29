@@ -163,9 +163,10 @@ llama-server 載入模型需要數秒，啟動器必須等它真的 ready 才開
 #    llama-b<build>-bin-win-cuda-13.3-x64.zip 與 cudart-llama-bin-win-cuda-13.3-x64.zip
 #    都解壓到 bin/          https://github.com/ggml-org/llama.cpp/releases
 
-# 2) 模型（官方 Qwen/Qwen3.5-4B 未提供 GGUF，使用 unsloth 的量化版）
-curl -L -o models/Qwen3.5-4B-Q4_K_M.gguf \
-  https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf
+# 2) 模型（官方 Qwen 未提供 GGUF，使用 unsloth 的量化版；
+#    也可以啟動後從介面右上角的模型選單下載）
+curl -L -o models/Qwen3.5-9B-Q4_K_M.gguf \
+  https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf
 
 # 3) 啟動推論服務（正式版由 ResumeAutoFill.exe 在背景執行）
 .\scripts\start-llama-server.ps1
@@ -175,32 +176,12 @@ curl -L -o models/Qwen3.5-4B-Q4_K_M.gguf \
 真實履歷光欄位對映就要 7000 tokens 以上，開 8192 會在生成到一半被截斷。
 `--temp 0` 讓判斷可重現，`--n-gpu-layers 999` 把整個模型放上 GPU。
 
-### 為什麼是 9B 而不是 4B
+### 模型
 
-合成的測試表格上兩者沒有差別，都是填入 33 格、標籤零損壞。
-差異要拿真實履歷（16 欄合併儲存格、77 個可填位置）才看得出來——
-關鍵指標是「模型認為自己在看哪一格」：
-
-| 位置 | 4B 讀到的標籤 | 9B 讀到的標籤 |
-|---|---|---|
-| tbl0.r10.c11 | 學　歷 | **入學年月** |
-| tbl0.r15.c7 | 服務單位 | **每月薪資** |
-| tbl0.r12.c4 | 家庭成員 | **職業** |
-
-4B 只是把區塊標題套到該區塊的每一格，它並不知道自己在看哪一格。後果是
-把「資訊工程師」填進家庭成員表的職業欄、把期望薪資填進「建議薪資」
-（公司內部欄位）。實測 4B 錯約 10/25 格，9B 錯約 4/17 格且未污染內部欄位。
-
-代價：
-
-| | VRAM（ctx 16384） | 標準表格 | 真實履歷 |
-|---|---|---|---|
-| Qwen3.5-4B | 5.5 GB | 76 秒 | 128 秒 |
-| Qwen3.5-9B | 7.4 GB | 95 秒 | 166 秒 |
-
-9B 全部層都在 GPU 上，餘裕約 0.7 GB——這個數字是在 Edge、Chrome、
-VS Code、Docker Desktop 全開的狀態下量的，不是理想值。
-硬體再吃緊的話改用 `-Model models\Qwen3.5-4B-Q4_K_M.gguf` 即可。
+預設 **Qwen3.5-9B Q4_K_M**（含 16K 上下文約需 7.4 GB VRAM，全部層在 GPU 上）。
+更小的模型實測會把區塊標題套到區塊內的每一格、分不清自己在看哪一格，
+填錯格的代價比省下的資源大，故不再提供。要更強的判讀可從模型選單
+下載 27B 或 35B-A3B，也可貼任意 GGUF 連結自訂。
 
 ### 其他評估過的選項
 
@@ -208,9 +189,7 @@ VS Code、Docker Desktop 全開的狀態下量的，不是理想值。
 
 | 模型 | 出處 | 參數 | 約需 VRAM | 授權 | 適用性 |
 |---|---|---|---|---|---|
-| **Qwen3.5-4B** | 阿里巴巴 🇨🇳 | 4B | ~2.5 GB | Apache 2.0 | ⭐ **已採用** |
-| **Qwen3.5-9B** | 阿里巴巴 🇨🇳 | 9B | ~7 GB（含 32K 上下文） | Apache 2.0 | 備案，遇到極端怪格式時的保險 |
-| Qwen3.5-2B / 0.8B | 阿里巴巴 🇨🇳 | 2B / 0.8B | ~1.5 GB / ~0.7 GB | Apache 2.0 | 無獨顯、純 CPU 跑的退路 |
+| **Qwen3.5-9B** | 阿里巴巴 🇨🇳 | 9B | ~7 GB（含 32K 上下文） | Apache 2.0 | ⭐ **已採用** |
 | Hunyuan dense 7B / 4B | 騰訊 🇨🇳 | 7B / 4B | ~4.5 GB / ~2.5 GB | 騰訊自訂條款 | 中文可用，原生 256K 上下文 |
 | MiniCPM 4.1 / 5 系列 | 面壁智能 OpenBMB 🇨🇳 | 1B～8B | ~1～5 GB | Apache 2.0 | 端側特化，低階硬體上速度優勢明顯 |
 | ERNIE 4.5 小型版 | 百度 🇨🇳 | 0.3B 起 | <1 GB | Apache 2.0 | 極輕量，能力較弱，當保底 |
@@ -285,7 +264,7 @@ scripts/
 
 規劃中
   launcher/      C# 啟動器
-  models/        Qwen3.5-4B-Q4_K_M.gguf（不進版控）
+  models/        Qwen3.5-9B-Q4_K_M.gguf（不進版控）
   bin/           llama-server.exe（不進版控）
 ```
 
@@ -355,15 +334,15 @@ python -m uvicorn backend.main:app --port 8090 --reload
 
 ## 8. 待討論
 
-已定案：**MIT 授權**、**llama.cpp** 推論引擎、**Qwen3.5-4B Q4_K_M** 模型。
+已定案：**MIT 授權**、**llama.cpp** 推論引擎、**Qwen3.5-9B Q4_K_M** 模型。
 
 以下細節尚未定案：
 
 * SQLite 資料表設計（個人資料的多筆結構、格式對映快取的儲存方式）
 * 前後端 API 介面定義
 * 啟動器細節：port 衝突處理、如何判斷 llama-server 真的 ready、關閉時確保不留孤兒 process
-* 打包方式：Python 端要不要凍結成 exe；模型 2.5 GB 要隨附還是首次啟動時下載
-* 沒有獨顯的使用者怎麼辦（CPU 推論會慢，是否降級到 Qwen3.5-2B 或純規則模式）
+* 打包方式：Python 端要不要凍結成 exe；模型 5.3 GB 要隨附還是首次啟動時下載
+* 沒有獨顯的使用者怎麼辦（CPU 推論會慢，或退回純規則模式）
 
 ---
 
