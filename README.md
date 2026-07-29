@@ -158,8 +158,9 @@ llama-server 載入模型需要數秒，啟動器必須等它真的 ready 才開
 4. **原生多模態** — 掛上視覺投影檔（mmproj）後，同一個模型直接吃頁面截圖做版面理解——匯入履歷的視覺模式就是這樣做的。
 5. **有無痛升級路徑** — 覺得判讀不夠準，從模型選單換同系列的 27B 或 35B-A3B（MoE），程式一行都不用改。
 
-**系統需求：Windows＋NVIDIA 顯卡、至少 8 GB VRAM。**未達標無法使用——
-本工具不提供 CPU 模式，模型跑不動就是跑不動，這是硬性門檻。
+**建議規格：Windows＋NVIDIA 顯卡、至少 8 GB VRAM。**沒有獨顯也能以
+CPU 推論執行（llama.cpp 原生支援），但一份表格的分析可能從幾分鐘變成
+幾十分鐘——速度的代價由使用者自行承擔，效能問題不在支援範圍內。
 
 ```bash
 # 1) llama.cpp 二進位檔（Windows + NVIDIA）
@@ -338,7 +339,7 @@ python -m uvicorn backend.main:app --port 8090 --reload
 ## 8. 待討論
 
 已定案：**MIT 授權**、**llama.cpp** 推論引擎、**Qwen3.5-9B Q4_K_M** 模型、
-**最低硬體需求 NVIDIA 顯卡 8 GB VRAM**——未達標即不支援，不做 CPU 降級或向下相容。
+**建議規格 NVIDIA 8 GB VRAM**——CPU 推論可用但速度代價由使用者承擔，不另做優化。
 
 以下細節尚未定案：
 
@@ -346,6 +347,8 @@ python -m uvicorn backend.main:app --port 8090 --reload
 * 前後端 API 介面定義
 * 啟動器細節：port 衝突處理、如何判斷 llama-server 真的 ready、關閉時確保不留孤兒 process
 * 打包方式：Python 端要不要凍結成 exe；模型 5.3 GB 要隨附還是首次啟動時下載
+* CPU 推論的打包：CUDA 版 llama-server 在無 NVIDIA 驅動的機器上起不來，
+  需同捆 CPU 版二進位並在啟動時偵測選用
 
 ---
 
