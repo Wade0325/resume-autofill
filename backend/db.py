@@ -246,14 +246,27 @@ def purge_old_jobs(hours: int = config.JOB_RETENTION_HOURS) -> int:
                    f"SELECT id FROM {table} WHERE created_at < ?", (cutoff,)).fetchall()]
         for table in ("job", "import_job"):
             conn.execute(f"DELETE FROM {table} WHERE created_at < ?", (cutoff,))
+        alive = {r["id"] for table in ("job", "import_job")
+                 for r in conn.execute(f"SELECT id FROM {table}").fetchall()}
     for jid in ids:
         _rmtree(config.JOBS_DIR / jid)
-    return len(ids)
+
+    # 資料庫查無此人的孤兒資料夾也要掃：紀錄刪了但當時資料夾沒刪成
+    # （檔案被轉檔鎖住之類），之後就再也不會被看見，會永久殘留
+    orphans = 0
+    if config.JOBS_DIR.exists():
+        for path in config.JOBS_DIR.iterdir():
+            if path.is_dir() and path.name not in alive:
+                _rmtree(path)
+                orphans += not path.exists()
+    return len(ids) + orphans
 
 
 def _rmtree(path: Path) -> None:
-    if not path.exists():
-        return
-    for child in path.iterdir():
-        child.unlink(missing_ok=True)
-    path.rmdir()
+    """刪不掉就留著（檔案還被鎖住），下次啟動的孤兒掃描會再試。"""
+    try:
+        for child in path.iterdir():
+            child.unlink(missing_ok=True)
+        path.rmdir()
+    except OSError:
+        pass
