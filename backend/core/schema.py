@@ -170,6 +170,14 @@ LABEL_ALIASES = {
     "日夜": "education[].division",
     "日/夜": "education[].division",
     "畢/肄": "education[].status",
+    "科系/所別": "education[].department",
+    # 學歷表的列首（大學/研究所…）右邊第一格就是學校名稱，
+    # 列首挑第幾筆學歷由列指派處理，這裡只負責錨定欄位
+    "大學": "education[].school",
+    "研究所": "education[].school",
+    "高中/專科": "education[].school",
+    "專科": "education[].school",
+    "高中": "education[].school",
 }
 # 同名標籤（家庭與諮詢人都有「姓名」之類）對映沒有唯一答案，
 # 不能拿來做確定性對齊，留給模型憑上下文判斷。

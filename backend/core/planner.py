@@ -104,6 +104,8 @@ def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
     texts = document.table_texts(path)
     by_loc = {(s.loc["table"], s.loc["row"], s.loc["col"]): s
               for s in pending if "table" in s.loc}
+    # 格尾附加型位置（「郵遞區號□□□」）自己印著提示字：既是可填位置也是標籤
+    tail_locs = {loc for loc, s in by_loc.items() if s.loc.get("tail_para")}
 
     # ---- 蒐集錨點：標籤文字 → 它能餵到的可填位置 ----
     # (標籤, 位置們, 錨定方式, 同列列首) 列首是解析語意的上下文：
@@ -128,10 +130,12 @@ def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
     for t, grid in enumerate(texts):
         for r, row in enumerate(grid):
             for c, text in enumerate(row):
-                if not text.strip() or (t, r, c) in by_loc:
+                is_tail = (t, r, c) in tail_locs
+                if not text.strip() or ((t, r, c) in by_loc and not is_tail):
                     continue
                 ctx = next((x for x in reversed(row[:c])
                             if x.strip() and x != text), "")
+                right: List[Slot] = []
                 if not (c + 1 < len(row) and row[c + 1] == text):
                     right = _scan_right(grid, by_loc, t, r, c)
                     if right:
@@ -140,6 +144,9 @@ def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
                     below = _scan_below(grid, by_loc, t, r, c)
                     if below:
                         anchors.append((text, below, "below", ctx))
+                if is_tail and not right:
+                    # 提示字後面沒有別的空格可填 → 值就接在自己格尾
+                    anchors.append((text, [by_loc[(t, r, c)]], "self", ctx))
 
     # ---- 標籤 → 欄位代碼：對照表優先，剩下的一次小呼叫問模型 ----
     # 對照表比對不看上下文（能精確對上欄位名的標籤本身就無歧義）；

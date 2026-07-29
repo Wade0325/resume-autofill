@@ -265,13 +265,11 @@ def _paragraph_line(para: Paragraph, index: int, slots: List[Slot]) -> str:
 def _table_lines(table: Table, table_index: int, slots: List[Slot],
                  overwritable: Set[str]) -> List[str]:
     out = []
+    seen: Set[int] = set()   # 合併儲存格（含垂直合併）只處理一次，跨列去重
     for r, row in enumerate(_grid(table)):
-        rendered, seen = [], set()
+        rendered = []
         for c, cell in enumerate(row):
-            if cell is None:
-                continue
-            # 合併儲存格會在多個座標回傳同一個物件
-            if id(cell._tc) in seen:
+            if cell is None or id(cell._tc) in seen:
                 continue
             seen.add(id(cell._tc))
             rendered.append(_cell_render(cell, table_index, r, c, slots, overwritable))
@@ -301,18 +299,35 @@ def _cell_render(cell: _Cell, table_index: int, r: int, c: int,
         slots.append(Slot(id=sid, kind="cell", loc=loc, existing=text))
         return f"{{{{{sid}}}}}{text}".replace("\n", " ")
 
+    # 「郵遞區號□□□」「備註：」這類格子：印著短提示，人在提示後面接著寫。
+    # 值附加在格尾（必要時補段落），不動印好的提示字。
+    # 垂直合併的大格常長這樣——提示在主格、書寫空間是合併出來的視覺留白
+    if len(squash(text)) <= 14 and re.search(r"[：:□]\s*$", text.strip()):
+        slots.append(Slot(id=sid, kind="cell", loc={**loc, "tail_para": True}))
+        return f"{text} {{{{{sid}}}}}".replace("\n", " ")
+
     return text.replace("\n", " ")
 
 
 def _grid(table: Table) -> List[List[_Cell]]:
-    """把合併儲存格攤平成矩形網格，同一個 cell 會在它涵蓋的每個座標出現。"""
+    """把合併儲存格攤平成矩形網格，同一個 cell 會在它涵蓋的每個座標出現。
+
+    垂直合併的延續格映射回上一列的主格：延續格的 XML 內容 Word 不渲染，
+    直接讀會誤判成空白可填位置，寫進去的字也永遠看不見。
+    """
     rows: List[List[_Cell]] = []
     for row in table.rows:
         cells: List[_Cell] = []
         for tc in row._tr.tc_lst:
-            cell = _Cell(tc, table)
             span = tc.tcPr.find(qn("w:gridSpan")) if tc.tcPr is not None else None
             width = int(span.get(qn("w:val"))) if span is not None else 1
+            vmerge = tc.tcPr.find(qn("w:vMerge")) if tc.tcPr is not None else None
+            if (vmerge is not None
+                    and vmerge.get(qn("w:val"), "continue") != "restart"
+                    and rows and len(rows[-1]) > len(cells)):
+                cell = rows[-1][len(cells)]
+            else:
+                cell = _Cell(tc, table)
             cells.extend([cell] * width)
         rows.append(cells)
     return rows

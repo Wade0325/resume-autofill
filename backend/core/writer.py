@@ -103,6 +103,28 @@ def _write_into_cell(table: Table, row: int, col: int, text: str,
     return True
 
 
+def _append_into_cell(table: Table, row: int, col: int, text: str,
+                      highlight: bool) -> bool:
+    """寫進儲存格尾端的空白段落，保留格子裡印好的提示字（郵遞區號□□□）。"""
+    grid = _grid(table)
+    if row >= len(grid) or col >= len(grid[row]) or grid[row][col] is None:
+        return False
+    cell = grid[row][col]
+    para = next((p for p in reversed(cell.paragraphs) if not p.text.strip()), None)
+    if para is None:
+        para = cell.add_paragraph()
+    coalesce_runs(para)
+    if para.runs:
+        _set_run_text(para.runs[0], text, highlight)
+        return True
+    run = para.add_run()
+    donor = next((r for p in cell.paragraphs for r in p.runs if r.text.strip()), None)
+    if donor is not None:
+        _clone_rpr(donor, run)
+    _set_run_text(run, text, highlight)
+    return True
+
+
 def _replace_span(para, start: int, end: int, text: str, highlight: bool) -> bool:
     """把段落文字的 [start, end) 區間換成 text，只動到牽涉到的 run。"""
     coalesce_runs(para)
@@ -238,8 +260,13 @@ def apply_ops(src_path: str, out_path: str, ops: List[Any],
             elif kind == "formfield":
                 done = _fill_formfield(doc, loc["ff_index"], op.value)
             elif kind == "cell":
-                done = _write_into_cell(doc.tables[loc["table"]],
-                                        loc["row"], loc["col"], op.value, highlight)
+                table = doc.tables[loc["table"]]
+                if loc.get("tail_para"):
+                    done = _append_into_cell(table, loc["row"], loc["col"],
+                                             op.value, highlight)
+                else:
+                    done = _write_into_cell(table, loc["row"], loc["col"],
+                                            op.value, highlight)
             elif kind == "inline":
                 done = _fill_inline(doc.paragraphs[loc["para"]], op.value,
                                     highlight, loc.get("blank_index", 0))
