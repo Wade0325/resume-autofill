@@ -1,9 +1,9 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 export type UploadPhase =
   | { kind: 'idle' }
   | { kind: 'uploading'; percent: number }
-  | { kind: 'analyzing'; seconds: number; stage: string }
+  | { kind: 'analyzing'; startedAt: number; stage: string }
 
 type Props = {
   title: string
@@ -63,17 +63,26 @@ export default function Dropzone({ title, hint, phase, onFile }: Props) {
 function Progress({ phase }: { phase: UploadPhase }) {
   // 上傳有明確百分比；解析與模型判斷沒有可回報的進度，
   // 所以改用已經過的秒數，至少讓人知道它還在動。
+  // 秒數由這裡每秒自己跳——狀態輪詢是兩秒一次，跟著它跳會一次跳兩秒
+  const [, tick] = useState(0)
+  useEffect(() => {
+    if (phase.kind !== 'analyzing') return
+    const timer = setInterval(() => tick((n) => n + 1), 1000)
+    return () => clearInterval(timer)
+  }, [phase.kind])
+
   const uploading = phase.kind === 'uploading'
   const percent = uploading ? phase.percent : 100
-
   const stage = phase.kind === 'analyzing' ? phase.stage : ''
+  const seconds =
+    phase.kind === 'analyzing' ? Math.max(0, Math.round((Date.now() - phase.startedAt) / 1000)) : 0
 
   return (
     <div className="max-w-sm mx-auto">
       <div className="flex justify-between text-sm mb-2">
         <span className="text-slate-700">{uploading ? '上傳中' : stage || '分析中'}</span>
         <span className="text-slate-500 tabular-nums">
-          {uploading ? `${percent}%` : `已 ${phase.kind === 'analyzing' ? phase.seconds : 0} 秒`}
+          {uploading ? `${percent}%` : `已 ${seconds} 秒`}
         </span>
       </div>
       <div className="h-2 bg-slate-200 rounded-full overflow-hidden">

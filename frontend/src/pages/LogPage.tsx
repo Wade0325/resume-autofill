@@ -26,7 +26,8 @@ export default function LogPage() {
   useEffect(() => {
     load()
     if (!live) return
-    const timer = setInterval(load, 3000)
+    // 分頁在背景時看不到畫面，打了也是白打；切回來下一輪自然補上
+    const timer = setInterval(() => !document.hidden && load(), 3000)
     return () => clearInterval(timer)
   }, [load, live])
 

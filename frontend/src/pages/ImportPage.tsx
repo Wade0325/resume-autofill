@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, type FieldSpec, type ImportPreview, type ImportRow } from '../api'
 import { SECTIONS } from '../sections'
 import Dropzone, { type UploadPhase } from '../components/Dropzone'
-import ResumeDocView from '../components/ResumeDocView'
+
+// pdf.js 佔了主 bundle 一半以上，等真的要顯示履歷對照時再載
+const ResumeDocView = lazy(() => import('../components/ResumeDocView'))
 
 // 切到別頁再切回來時要能接續。只存 id 與勾選狀態，列表本身回頭跟後端重拿，
 // 免得 sessionStorage 裡放一份會過期的副本。
@@ -69,7 +71,7 @@ export default function ImportPage() {
           } else {
             setPhase({
               kind: 'analyzing',
-              seconds: Math.round((Date.now() - started) / 1000),
+              startedAt: started,
               stage: st.stage,
             })
           }
@@ -106,7 +108,7 @@ export default function ImportPage() {
       )
       sessionStorage.setItem(KEY_ID, accepted.import_id)
       sessionStorage.removeItem(KEY_PICKED) // 新的一次匯入，舊勾選不適用
-      setPhase({ kind: 'analyzing', seconds: 0, stage: '準備中' })
+      setPhase({ kind: 'analyzing', startedAt: Date.now(), stage: '準備中' })
       setTrackingId(accepted.import_id)
     } catch (e: any) {
       setError(e.requestId ? `${e.message}（追蹤碼 ${e.requestId}）` : e.message)
@@ -202,11 +204,15 @@ export default function ImportPage() {
         </nav>
 
         <div className="sticky top-6">
-          <ResumeDocView
-            importId={preview.import_id}
-            marks={preview.rows.map((r) => ({ id: r.row_id, text: r.incoming }))}
-            hoveredId={hovered}
-          />
+          <Suspense
+            fallback={<div className="text-sm text-slate-400 py-8 text-center">履歷預覽載入中…</div>}
+          >
+            <ResumeDocView
+              importId={preview.import_id}
+              marks={preview.rows.map((r) => ({ id: r.row_id, text: r.incoming }))}
+              hoveredId={hovered}
+            />
+          </Suspense>
         </div>
 
         <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">

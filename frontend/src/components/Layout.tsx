@@ -66,11 +66,15 @@ function ModelMenu() {
       .catch(() => setOffline(true))
   }, [])
 
-  // 切換或下載進行中就抓快一點，讓進度看起來是活的
+  // 切換或下載進行中就抓快一點，讓進度看起來是活的。
+  // 分頁在背景時暫停——這是常駐輪詢，掛著一天就是幾千個白打的請求
   const busy = !!info && (!!info.starting || info.models.some((m) => m.downloading))
   useEffect(() => {
     refresh()
-    const timer = setInterval(refresh, open || busy ? 2000 : 10000)
+    const timer = setInterval(
+      () => !document.hidden && refresh(),
+      open || busy ? 2000 : 10000,
+    )
     return () => clearInterval(timer)
   }, [refresh, open, busy])
 

@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type FieldSpec, type Plan, type PlanItem, type PreviewOut } from '../api'
 import DocPreview from '../components/DocPreview'
 import Dropzone, { type UploadPhase } from '../components/Dropzone'
-import PdfCompare from '../components/PdfCompare'
+
+// pdf.js 佔了主 bundle 一半以上，等真的要顯示預覽時再載
+const PdfCompare = lazy(() => import('../components/PdfCompare'))
 
 // 切到別頁再切回來時要能接續，不必重傳檔案重跑一次模型
 const KEY_JOB = 'fill.jobId'
@@ -52,7 +54,7 @@ export default function FillPage() {
           } else {
             setPhase({
               kind: 'analyzing',
-              seconds: Math.round((Date.now() - started) / 1000),
+              startedAt: started,
               stage: st.stage,
             })
           }
@@ -108,7 +110,7 @@ export default function FillPage() {
         setPhase({ kind: 'uploading', percent }),
       )
       sessionStorage.setItem(KEY_JOB, accepted.job_id)
-      setPhase({ kind: 'analyzing', seconds: 0, stage: '準備中' })
+      setPhase({ kind: 'analyzing', startedAt: Date.now(), stage: '準備中' })
       setTrackingId(accepted.job_id)
     } catch (e: any) {
       setError(e.requestId ? `${e.message}（追蹤碼 ${e.requestId}）` : e.message)
@@ -184,7 +186,9 @@ export default function FillPage() {
       )}
 
       {pdfOk ? (
-        <PdfCompare jobId={plan.job_id} version={previewVersion} onUnavailable={onPdfUnavailable} />
+        <Suspense fallback={<div className="text-sm text-slate-400 py-8 text-center">預覽載入中…</div>}>
+          <PdfCompare jobId={plan.job_id} version={previewVersion} onUnavailable={onPdfUnavailable} />
+        </Suspense>
       ) : (
         <>
           <div className="text-xs text-slate-500">{pdfMsg}——改用結構化對照顯示。</div>
