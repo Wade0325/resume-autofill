@@ -76,15 +76,20 @@ def _analyze_worker(job_id: str, filename: str) -> None:
     t0 = time.perf_counter()
     try:
         # 先讀出這份文件已經有的值，才分得出哪些非空格子是使用者資料（可覆蓋）、
-        # 哪些是表格印好的欄位名稱（不能碰）
+        # 哪些是表格印好的欄位名稱（不能碰）。
+        # 空白範本（多數場景）沒有已填值，這一步 15~44 秒是白等——
+        # 先用規則掃有沒有「值長相」的內容，沒有就整步跳過
         db.update_job(job_id, stage="讀取文件內容")
-        try:
-            existing = reader.read(document.text_only(str(src)),
-                                   config.LLM_HOST, config.LLM_MODEL)
-        except llm.LlmUnavailable:
-            # 錨定引擎不靠模型也能填空白範本；只是分不出已填值可否覆蓋
-            log.warning("模型不可用，跳過既有值判讀，僅填空白位置")
-            existing = {}
+        probe = document.text_only(str(src))
+        existing: Dict[str, Any] = {}
+        if not document.has_user_values(probe):
+            log.info("看起來是空白範本，跳過既有值判讀")
+        else:
+            try:
+                existing = reader.read(probe, config.LLM_HOST, config.LLM_MODEL)
+            except llm.LlmUnavailable:
+                # 錨定引擎不靠模型也能填空白範本；只是分不出已填值可否覆蓋
+                log.warning("模型不可用，跳過既有值判讀，僅填空白位置")
         text, slots = document.load(str(src), _values_of(existing))
         fp = document.fingerprint(slots)
         cached = db.get_template(fp)

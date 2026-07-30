@@ -113,6 +113,27 @@ def load(path: str, overwritable: Optional[Set[str]] = None) -> Tuple[str, List[
 # load() 加在可填位置上的 {{id}} 標記
 MARKER_RE = re.compile(r"\{\{[^{}]*\}\}")
 
+# 「使用者填過的值」的高置信長相。訊號刻意保守：
+# 誤判成「有」只是多花一次模型呼叫，誤判成「沒有」會把已填值
+# 當成表格印字（不覆蓋、還可能被當標籤），所以只認這幾種
+_VALUE_HINT_RES = (
+    re.compile(r"\d{7,}"),                       # 電話、身分證這種長數字串
+    re.compile(r"[\w.+-]+@[\w-]+\.\w{2,}"),      # email
+    re.compile(r"\d{4}\s*[年/.\-]\s*\d{1,2}"),   # 年月（2016/9、1998年3月）
+    re.compile(r"\d{1,3},\d{3}"),                # 千分位金額（52,000）
+    re.compile(f"[{CHECKED_CHARS}●]"),           # 已勾選的選項
+)
+
+
+def has_user_values(text: str) -> bool:
+    """這份文件看起來有沒有使用者填過的值——決定要不要花一次模型呼叫
+    去判讀既有內容（空白範本佔多數，那一步 15~44 秒完全是白等）。
+
+    已知極端例外：整份只填了純中文（有姓名沒電話沒日期）的文件會被
+    誤判為空白，那些值會被當成印字不覆蓋——履歷幾乎不可能長這樣，接受。
+    """
+    return any(r.search(text) for r in _VALUE_HINT_RES)
+
 
 def text_only(path: str) -> str:
     """只要全文，不帶位置標記（匯入用）。
