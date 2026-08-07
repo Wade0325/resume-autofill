@@ -10,7 +10,7 @@ docx 寫回器 (Format-preserving Writer)
   2. 只改動目標 run 的 <w:t> 文字，其餘 XML 一律不碰
   3. 空白格沒有任何 run 可繼承時，從同一列借一個 run 的 <w:rPr> 複製過來
 
---highlight 模式會把填入的字加上黃色底色，方便人工快速掃過一遍再取消標示。
+highlight 模式會把填入的字加上黃色底色，只給網頁預覽用；下載的成品一律不標。
 """
 
 from __future__ import annotations

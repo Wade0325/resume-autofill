@@ -33,7 +33,6 @@ JOB_RETENTION_HOURS = 24
 
 DEFAULT_SETTINGS = {
     "min_confidence": 0.60,
-    "highlight_filled": True,
 }
 
 

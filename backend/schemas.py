@@ -29,7 +29,6 @@ class HealthOut(BaseModel):
 
 class SettingsIn(BaseModel):
     min_confidence: float = Field(0.60, ge=0.0, le=1.0)
-    highlight_filled: bool = True
 
 
 class PlanItem(BaseModel):

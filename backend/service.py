@@ -265,8 +265,9 @@ def write_output(job_id: str) -> Optional[Dict[str, Any]]:
         min_confidence=settings["min_confidence"])
 
     t0 = time.perf_counter()
-    result = writer.apply_ops(str(input_path(job_id)), str(output_path(job_id)),
-                              ops, highlight=settings["highlight_filled"])
+    # 下載的成品不標黃底：要核對填在哪一格，看網頁上的左右對照就好，
+    # 黃底留在成品裡使用者還得自己去 Word 清掉
+    result = writer.apply_ops(str(input_path(job_id)), str(output_path(job_id)), ops)
     log.info("寫檔完成 written=%d failed=%d 耗時=%dms",
              result["written"], result["failed"], int((time.perf_counter() - t0) * 1000))
     for f in result["fail"]:
