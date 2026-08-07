@@ -266,8 +266,12 @@ def apply_ops(src_path: str, out_path: str, ops: List[Any],
                     done = _write_into_cell(table, loc["row"], loc["col"],
                                             op.value, highlight)
             elif kind == "inline":
-                done = _fill_inline(doc.paragraphs[loc["para"]], op.value,
-                                    highlight, loc.get("blank_index", 0))
+                if "table" in loc:
+                    cell = _grid(doc.tables[loc["table"]])[loc["row"]][loc["col"]]
+                    para = cell.paragraphs[loc["para_in_cell"]]
+                else:
+                    para = doc.paragraphs[loc["para"]]
+                done = _fill_inline(para, op.value, highlight, loc.get("blank_index", 0))
             elif kind == "checkbox":
                 if "para" in loc:
                     done = _fill_checkbox(doc.paragraphs[loc["para"]], op.value, highlight)

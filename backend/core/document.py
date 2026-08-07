@@ -172,8 +172,8 @@ def slot_headers(path: str, slots: List[Slot]) -> Dict[str, Dict[str, str]]:
     for ti, tslots in by_table.items():
         if ti >= len(tables):
             continue
-        texts = [[cell_text(c) if c is not None else "" for c in row]
-                 for row in _grid(tables[ti])]
+        grid = _grid(tables[ti])
+        texts = [[cell_text(c) if c is not None else "" for c in row] for row in grid]
         for s in tslots:
             r, c = s.loc["row"], s.loc["col"]
             if r >= len(texts):
@@ -185,6 +185,10 @@ def slot_headers(path: str, slots: List[Slot]) -> Dict[str, Dict[str, str]]:
                 if c < len(texts[rr]) and texts[rr][c].strip() and not is_blank(texts[rr][c]):
                     col_hdr = texts[rr][c]
                     break
+            # 儲存格段落裡的底線：底線前面印的字（「…，原因」）比列首精準
+            pic = s.loc.get("para_in_cell")
+            if "blank_index" in s.loc and pic is not None and grid[r][c] is not None:
+                row_hdr = _para_label(grid[r][c].paragraphs[pic].text, s)
             out[s.id] = {"row": row_hdr.replace("\n", " ")[:20],
                          "col": col_hdr.replace("\n", " ")[:20]}
 
@@ -205,6 +209,10 @@ def _para_label(text: str, slot: Slot) -> str:
         if bi is not None and bi < len(blanks):
             start = blanks[bi - 1].end() if bi else 0
             head = text[start:blanks[bi].start()]
+            # 方框以前的字是勾選群的標籤，不是這條底線的：
+            # 「□退伍 □免役，原因＿＿」的底線該叫「免役，原因」，不是整串
+            box = max(head.rfind(ch) for ch in CHECKBOX_CHARS + CHECKED_CHARS)
+            head = head[box + 1:] if box >= 0 else head
         else:                       # pN.tail：結尾冒號型
             head = text
     return head.strip(" 　:：").replace("\n", " ")[-20:]
@@ -246,25 +254,9 @@ def _paragraph_line(para: Paragraph, index: int, slots: List[Slot]) -> str:
     text = para.text.strip()
     if not text:
         return ""
-
-    if any(ch in text for ch in CHECKBOX_CHARS + CHECKED_CHARS):
-        options = checkbox_options(text)
-        if options:
-            sid = f"p{index}.chk"
-            slots.append(Slot(id=sid, kind="checkbox", loc={"para": index},
-                              options=options, existing=text))
-            return f"{{{{{sid}}}}} {text}"
-
-    blanks = list(BLANK_RUN_RE.finditer(text))
-    if blanks:
-        out, cursor = [], 0
-        for bi, m in enumerate(blanks):
-            sid = f"p{index}.b{bi}"
-            slots.append(Slot(id=sid, kind="inline",
-                              loc={"para": index, "blank_index": bi}))
-            out.append(text[cursor:m.start()] + f"{{{{{sid}}}}}")
-            cursor = m.end()
-        return "".join(out) + text[cursor:]
+    rendered = _para_render(text, f"p{index}", {"para": index}, slots)
+    if "{{" in rendered:
+        return rendered
 
     if TRAILING_COLON_RE.search(text):
         sid = f"p{index}.tail"
@@ -272,6 +264,29 @@ def _paragraph_line(para: Paragraph, index: int, slots: List[Slot]) -> str:
         return f"{text}{{{{{sid}}}}}"
 
     return text
+
+
+def _para_render(text: str, sid: str, loc: Dict[str, Any], slots: List[Slot]) -> str:
+    """一個段落的可填位置：勾選群一個，段落裡的每條底線各一個。
+
+    表格儲存格與文件段落共用——同樣是「一段字裡有方框和底線」，
+    差別只在 loc 怎麼指到那個段落。
+    """
+    text = text.strip()
+    out, cursor = [], 0
+    options = checkbox_options(text) if any(
+        ch in text for ch in CHECKBOX_CHARS + CHECKED_CHARS) else []
+    if options:
+        slots.append(Slot(id=f"{sid}.chk", kind="checkbox", loc=loc,
+                          options=options, existing=text))
+        out.append(f"{{{{{sid}.chk}}}} ")
+
+    for bi, m in enumerate(BLANK_RUN_RE.finditer(text)):
+        slots.append(Slot(id=f"{sid}.b{bi}", kind="inline",
+                          loc={**loc, "blank_index": bi}))
+        out.append(text[cursor:m.start()] + f"{{{{{sid}.b{bi}}}}}")
+        cursor = m.end()
+    return "".join(out) + text[cursor:]
 
 
 def _table_lines(table: Table, table_index: int, slots: List[Slot],
@@ -297,24 +312,13 @@ def _cell_render(cell: _Cell, table_index: int, r: int, c: int,
     loc = {"table": table_index, "row": r, "col": c}
 
     if any(ch in text for ch in CHECKBOX_CHARS + CHECKED_CHARS):
-        # 一格裡印了好幾題（六道是非題各佔一段）時，整格當一個位置只勾得到第一題。
-        # 每個有選項的段落各自成為一個位置，題目文字就是它自己的標籤。
-        paras = [(i, p.text) for i, p in enumerate(cell.paragraphs) if checkbox_options(p.text)]
-        if len(paras) > 1:
-            rendered = []
-            for i, ptext in paras:
-                psid = f"{sid}.p{i}"
-                slots.append(Slot(id=psid, kind="checkbox",
-                                  loc={**loc, "para_in_cell": i},
-                                  options=checkbox_options(ptext), existing=ptext))
-                rendered.append(f"{{{{{psid}}}}} {ptext}")
+        # 勾選格逐段處理，跟一般段落同一套規則：每段的勾選群是一個位置，
+        # 段落裡的底線各自也是一個位置。一格印六道是非題（各佔一段）時
+        # 才勾得到每一題；「□免役，原因＿＿」的底線才填得進去。
+        rendered = [_para_render(p.text, f"{sid}.p{i}", {**loc, "para_in_cell": i}, slots)
+                    for i, p in enumerate(cell.paragraphs)]
+        if any("{{" in x for x in rendered):
             return " ".join(rendered).replace("\n", " ")
-
-        options = checkbox_options(text)
-        if options:
-            slots.append(Slot(id=sid, kind="checkbox", loc=loc,
-                              options=options, existing=text))
-            return f"{{{{{sid}}}}} {text}".replace("\n", " ")
 
     if is_blank(text):
         slots.append(Slot(id=sid, kind="cell", loc=loc))

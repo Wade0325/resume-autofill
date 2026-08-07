@@ -102,8 +102,10 @@ def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
         return decisions
 
     texts = document.table_texts(path)
+    # 底線位置不進來搶：同一格的勾選群才是旁邊標籤要錨定的對象，
+    # 底線自己會用「前面印的字」當標籤
     by_loc = {(s.loc["table"], s.loc["row"], s.loc["col"]): s
-              for s in pending if "table" in s.loc}
+              for s in pending if "table" in s.loc and "blank_index" not in s.loc}
     # 格尾附加型位置（「郵遞區號□□□」）自己印著提示字：既是可填位置也是標籤
     tail_locs = {loc for loc, s in by_loc.items() if s.loc.get("tail_para")}
 
@@ -118,7 +120,7 @@ def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
                              s.existing)[0].strip(" 　:：")
             if label:
                 anchors.append((label, [s], "self", ""))
-        elif "para" in s.loc:
+        elif "para" in s.loc or "blank_index" in s.loc:
             label = headers.get(s.id, {}).get("row", "")
             if label:
                 anchors.append((label, [s], "self", ""))
