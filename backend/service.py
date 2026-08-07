@@ -329,9 +329,8 @@ def _import_worker(import_id: str, filename: str) -> None:
         db.update_import(import_id, stage="讀取文件內容")
         text = convert.pdf_to_text(src.read_bytes()) if is_pdf else document.text_only(str(src))
 
-        # PDF 的文字順序是繪製順序，排版資訊得靠截圖補；.docx 攤平後本來就帶著
-        # 表格結構，附截圖反而讓模型改去讀圖——實測兩份文件都是純文字比較準
-        # （欄位標題被當成值、姓名被當成職稱那類錯誤明顯變多）
+        # .docx 攤平後本來就帶著表格結構，附截圖反而讓模型改去讀圖——實測純文字
+        # 比較準（欄位標題被當成值、姓名被當成職稱那類錯誤明顯變多）
         images: List[bytes] = []
         if is_pdf and llm.supports_vision(config.LLM_HOST):
             try:
