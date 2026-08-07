@@ -17,16 +17,19 @@ from __future__ import annotations
 
 import copy
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Sequence
 
 from docx import Document
 from docx.oxml.ns import qn
 from docx.table import Table
 
-from .document import BLANK_RUN_RE, CHECKBOX_CHARS, _grid
+from .document import BLANK_RUN_RE, CHECKBOX_CHARS, CHECKED_CHARS, _grid
 
 # 只列 CHECKBOX_CHARS 裡的字元——document.py 刻意把 ○〇◯ 排除在方框之外
 CHECK_MAP = {"□": "■", "☐": "☑", "▢": "■", "◻": "◼"}
+# 不能用 CHECK_MAP 反轉：□ 與 ▢ 都對應到 ■，反轉時會挑到 ▢，
+# 還原出來的框就跟原本長得不一樣了
+UNCHECK_MAP = {"■": "□", "☑": "☐", "◼": "◻"}
 
 
 def coalesce_runs(paragraph) -> None:
@@ -168,23 +171,46 @@ def _fill_inline(para, text: str, highlight: bool, blank_index: int = 0) -> bool
     return _replace_span(para, len(full), len(full), text, highlight)
 
 
-def _fill_checkbox(para, option: str, highlight: bool) -> bool:
-    """勾掉緊接在方框後面的那個選項。
+def _option_box(text: str, option: str) -> Optional[int]:
+    """緊接在這個選項前面的方框位置（已勾未勾都算）。
 
     要一路找到「前面真的有方框」的那次出現為止：選項字常常也出現在題目裡
     （「您是否曾…？ □是 □否」的「是否」），只看第一次出現會定位到題目上。
     """
-    full = para.text
     start = 0
     while True:
-        idx = full.find(option, start)
+        idx = text.find(option, start)
         if idx < 0:
-            return False
+            return None
         for j in range(idx - 1, max(-1, idx - 4), -1):
-            ch = full[j]
-            if ch in CHECKBOX_CHARS:
-                return _replace_span(para, j, j + 1, CHECK_MAP.get(ch, "■"), highlight)
+            if text[j] in CHECKBOX_CHARS or text[j] in CHECKED_CHARS:
+                return j
         start = idx + 1
+
+
+def _fill_checkbox(para, option: str, highlight: bool,
+                   clear: Sequence[str] = ()) -> bool:
+    """勾掉這個選項；範本上已經勾著的同組選項先還原。
+
+    範本不一定是空白的——公司先勾好、或使用者上傳自己填過的履歷都很常見。
+    不還原舊的就會變成「■無 ■有」兩個都勾；目標本來就勾對時也要算成功，
+    否則會回報成「有 N 格沒填上」的假警報。
+    """
+    pos = _option_box(para.text, option)
+    if pos is None:
+        return False
+    if para.text[pos] in CHECKED_CHARS:
+        return True
+
+    for other in clear:
+        p = _option_box(para.text, other)
+        if p is not None and para.text[p] in CHECKED_CHARS:
+            _replace_span(para, p, p + 1, UNCHECK_MAP.get(para.text[p], "□"), False)
+
+    pos = _option_box(para.text, option)
+    if pos is None:
+        return False
+    return _replace_span(para, pos, pos + 1, CHECK_MAP.get(para.text[pos], "■"), highlight)
 
 
 def _fill_sdt(doc, index: int, text: str) -> bool:
@@ -275,14 +301,15 @@ def apply_ops(src_path: str, out_path: str, ops: List[Any],
                 done = _fill_inline(para, op.value, highlight, loc.get("blank_index", 0))
             elif kind == "checkbox":
                 if "para" in loc:
-                    done = _fill_checkbox(doc.paragraphs[loc["para"]], op.value, highlight)
+                    done = _fill_checkbox(doc.paragraphs[loc["para"]], op.value,
+                                          highlight, op.clear)
                 else:
                     grid = _grid(doc.tables[loc["table"]])
                     cell = grid[loc["row"]][loc["col"]]
                     idx = loc.get("para_in_cell")
                     paras = [cell.paragraphs[idx]] if idx is not None else cell.paragraphs
                     for p in paras:
-                        if _fill_checkbox(p, op.value, highlight):
+                        if _fill_checkbox(p, op.value, highlight, op.clear):
                             done = True
                             break
         except Exception as e:                    # 單一格失敗不影響其他欄位

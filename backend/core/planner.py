@@ -39,6 +39,7 @@ class FillOp:
     label: str = ""           # 表格上印在這格旁邊的字，機械抽取自列首／欄首
     note: str = ""
     ordinal: int = 0
+    clear: Tuple[str, ...] = ()   # 勾這個之前要先還原的同組選項
 
 
 Decision = Tuple[str, int, float, str, str]   # field_key, ordinal, confidence, source, label
@@ -507,15 +508,21 @@ def build_plan(slots: List[Slot], profile: Dict[str, Any],
                                   "個人資料中此欄位為空", ordinal))
             continue
 
+        clear: Tuple[str, ...] = ()
         if slot.kind == "checkbox":
             picked = _pick_option(slot.options, str(value))
             if not picked:
                 skipped.append(FillOp(slot, key, str(value), conf, source, label,
                                       "勾選選項對不上", ordinal))
                 continue
+            # 同一格可能印了兩組選項（「婚姻：□單身 □已婚  兵役：□役畢 □免役」），
+            # 只還原這個欄位自己的其他選項，否則填婚姻會把兵役的勾一起清掉
+            others = {_pick_option(slot.options, c) for c in BY_KEY[key].choices}
+            clear = tuple(o for o in others if o and o != picked)
             value = picked
 
-        ops.append(FillOp(slot, key, str(value), conf, source, label, ordinal=ordinal))
+        ops.append(FillOp(slot, key, str(value), conf, source, label,
+                          ordinal=ordinal, clear=clear))
 
     ops.sort(key=lambda o: o.slot.id)
     skipped.sort(key=lambda o: o.slot.id)
