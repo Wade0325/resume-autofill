@@ -158,8 +158,8 @@ export default function ImportPage() {
           hint="或點擊選擇檔案"
           phase={phase}
           onFile={upload}
-          accept=".pdf,.doc,.docx"
-          note="接受 104 履歷的 .pdf，以及 .docx 與舊版 .doc"
+          accept=".pdf,.docx"
+          note="接受 104 履歷的 .pdf 與 Word 的 .docx"
         />
       </div>
     )

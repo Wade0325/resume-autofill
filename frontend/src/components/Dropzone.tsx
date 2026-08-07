@@ -19,8 +19,8 @@ export default function Dropzone({
   hint,
   phase,
   onFile,
-  accept = '.doc,.docx',
-  note = '接受 .docx 與舊版 .doc（.doc 會自動轉檔）',
+  accept = '.docx',
+  note = '接受 .docx（舊版 .doc 請先用 Word 另存新檔）',
 }: Props) {
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)

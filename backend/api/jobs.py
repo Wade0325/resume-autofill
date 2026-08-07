@@ -7,7 +7,6 @@ from fastapi import APIRouter, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 
 from .. import actions, config, db, service
-from ..core.convert import ConversionError, doc_to_docx
 from ..schemas import MappingsIn, OutputOut, PlanOut
 
 log = logging.getLogger(__name__)
@@ -18,23 +17,14 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 async def create_job(file: UploadFile = File(...)) -> dict:
     """收檔即回，分析在背景跑；用 GET /jobs/{id} 輪詢進度。"""
     name = file.filename or ""
-    if not name.lower().endswith((".doc", ".docx")):
-        raise HTTPException(400, "只接受 .doc 或 .docx 檔案")
+    if not name.lower().endswith(".docx"):
+        raise HTTPException(400, "只接受 .docx 檔案。舊版 .doc 請先用 Word 另存成 .docx")
 
     content = await file.read()
     if len(content) > config.MAX_UPLOAD_BYTES:
         raise HTTPException(413, f"檔案超過 {config.MAX_UPLOAD_BYTES // 1024 // 1024} MB 上限")
     if not content:
         raise HTTPException(400, "檔案是空的")
-
-    if name.lower().endswith(".doc"):
-        try:
-            content = doc_to_docx(content)
-            log.info("轉檔 .doc → .docx %s", name)
-        except ConversionError as e:
-            log.warning("轉檔失敗 %s：%s", name, e)
-            actions.problem("上傳履歷「%s」失敗：%s", name, e)
-            raise HTTPException(400, str(e))
 
     job_id = service.analyze(name, content)
     return {"job_id": job_id, "status": "processing", "filename": name}

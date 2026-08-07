@@ -1,7 +1,7 @@
-"""舊版 .doc → .docx 轉檔。
+"""借用 LibreOffice 把 .docx 轉成 PDF：排版預覽與視覺模式的頁面截圖都需要。
 
-python-docx 只認得 OOXML；.doc（Word 97-2003 二進位格式）沒有可靠的
-純 Python 解析器，所以借用本機 LibreOffice 的無頭模式轉檔。
+只收 .docx——.doc（Word 97-2003 二進位格式）沒有可靠的純 Python 解析器，
+轉檔品質也不保證，請使用者先用 Word 另存新檔比較實在。
 找不到 LibreOffice 時丟出可以直接顯示給使用者的訊息。
 """
 from __future__ import annotations
@@ -34,14 +34,6 @@ def find_soffice() -> Optional[str]:
         return override if Path(override).exists() else None
     return shutil.which("soffice") or next(
         (c for c in _CANDIDATES if Path(c).exists()), None)
-
-
-def doc_to_docx(content: bytes) -> bytes:
-    if not find_soffice():
-        raise ConversionError(
-            "轉換 .doc 需要 LibreOffice 但找不到。請安裝 LibreOffice，"
-            "或先用 Word 另存成 .docx 再上傳")
-    return _convert(content, "input.doc", "docx")
 
 
 def docx_to_pdf(content: bytes) -> bytes:

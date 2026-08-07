@@ -5,8 +5,7 @@ import logging
 
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile
 
-from .. import actions, config, service
-from ..core.convert import ConversionError, doc_to_docx
+from .. import config, service
 from ..schemas import ImportApplyIn, ImportApplyOut
 
 log = logging.getLogger(__name__)
@@ -17,23 +16,14 @@ router = APIRouter(prefix="/imports", tags=["imports"])
 async def create_import(file: UploadFile = File(...)) -> dict:
     """收檔即回，讀取在背景跑；用 GET /imports/{id} 輪詢進度。"""
     name = file.filename or ""
-    if not name.lower().endswith((".doc", ".docx", ".pdf")):
-        raise HTTPException(400, "只接受 .pdf、.docx 或 .doc 檔案")
+    if not name.lower().endswith((".pdf", ".docx")):
+        raise HTTPException(400, "只接受 .pdf 或 .docx 檔案。舊版 .doc 請先用 Word 另存成 .docx")
 
     content = await file.read()
     if len(content) > config.MAX_UPLOAD_BYTES:
         raise HTTPException(413, f"檔案超過 {config.MAX_UPLOAD_BYTES // 1024 // 1024} MB 上限")
     if not content:
         raise HTTPException(400, "檔案是空的")
-
-    if name.lower().endswith(".doc"):
-        try:
-            content = doc_to_docx(content)
-            log.info("轉檔 .doc → .docx %s", name)
-        except ConversionError as e:
-            log.warning("轉檔失敗 %s：%s", name, e)
-            actions.problem("上傳履歷「%s」失敗：%s", name, e)
-            raise HTTPException(400, str(e))
 
     return service.analyze_import(name, content)
 
