@@ -103,7 +103,7 @@ export default function ProfilePage() {
   const section = SECTIONS.find((s) => s.id === active)!
   const total = useMemo(() => countFilled(fields, profile), [fields, profile])
   // 有紅框（2月31日這種湊不出來的日期）就不讓存，否則會原樣填進履歷
-  const badDates = useMemo(() => countBadDates(fields, profile), [fields, profile])
+  const badDate = useMemo(() => hasBadDate(fields, profile), [fields, profile])
 
   if (error && fields.length === 0) return <ErrorBox message={error} />
 
@@ -120,7 +120,7 @@ export default function ProfilePage() {
           {dirty && <span className="text-sm text-amber-600">有未儲存的變更</span>}
           <button
             onClick={save}
-            disabled={!dirty || saving || badDates > 0}
+            disabled={!dirty || saving || badDate}
             className="px-5 py-2 rounded-md bg-sky-600 text-white text-sm font-medium
                        hover:bg-sky-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
           >
@@ -186,7 +186,7 @@ export default function ProfilePage() {
           from={section.title}
           to={SECTIONS.find((s) => s.id === pending)!.title}
           saving={saving}
-          canSave={badDates === 0}
+          canSave={!badDate}
           onSave={saveThenSwitch}
           onDiscard={discardThenSwitch}
           onCancel={() => setPending(null)}
@@ -303,21 +303,15 @@ function writePath(obj: Profile, path: string, value: string) {
   cur[parts[parts.length - 1]] = value
 }
 
-function countBadDates(fields: FieldSpec[], profile: Profile): number {
-  let n = 0
-  for (const f of fields) {
-    if (f.kind !== 'date') continue
-    if (f.key.includes('[].')) {
-      const [root, sub] = f.key.split('[].')
-      const rows: Record<string, string>[] = profile[root] ?? []
-      n += rows.filter((row) => isImpossibleDate(row[sub] ?? '')).length
-    } else if (isImpossibleDate(readPath(profile, f.key))) {
-      n += 1
-    }
-  }
-  return n
+function hasBadDate(fields: FieldSpec[], profile: Profile): boolean {
+  return fields.some((f) => {
+    if (f.kind !== 'date') return false
+    if (!f.key.includes('[].')) return isImpossibleDate(readPath(profile, f.key))
+    const [root, sub] = f.key.split('[].')
+    const rows: Record<string, string>[] = profile[root] ?? []
+    return rows.some((row) => isImpossibleDate(row[sub] ?? ''))
+  })
 }
-
 
 /** 傳 section 就只算該主題，不傳則算全部。多筆資料的區塊回傳筆數（顯示成「N 筆」）。 */
 function countFilled(fields: FieldSpec[], profile: Profile, section?: Section) {

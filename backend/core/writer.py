@@ -25,7 +25,8 @@ from docx.table import Table
 
 from .document import BLANK_RUN_RE, CHECKBOX_CHARS, _grid
 
-CHECK_MAP = {"□": "■", "☐": "☑", "▢": "■", "◻": "◼", "○": "●", "〇": "●", "◯": "●"}
+# 只列 CHECKBOX_CHARS 裡的字元——document.py 刻意把 ○〇◯ 排除在方框之外
+CHECK_MAP = {"□": "■", "☐": "☑", "▢": "■", "◻": "◼"}
 
 
 def coalesce_runs(paragraph) -> None:

@@ -2,12 +2,11 @@ const NOW = new Date().getFullYear()
 const YEARS = Array.from({ length: 101 }, (_, i) => String(NOW + 10 - i))
 const MONTHS = Array.from({ length: 12 }, (_, i) => String(i + 1))
 
-const SELECT_CLASS =
+const selectClass = (bad = false) =>
   'rounded-md border px-2 py-2 text-sm bg-white ' +
   'focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500 ' +
-  'disabled:bg-slate-50 disabled:text-slate-400'
-const BORDER = 'border-slate-300'
-const BORDER_BAD = 'border-rose-500'
+  'disabled:bg-slate-50 disabled:text-slate-400 ' +
+  (bad ? 'border-rose-500' : 'border-slate-300')
 
 type Parts = { y: string; m: string; d: string }
 
@@ -26,7 +25,7 @@ export default function DateSelect({ value, onChange }: Props) {
     return (
       <div>
         <input
-          className={`w-full ${SELECT_CLASS} ${BORDER}`}
+          className={`w-full ${selectClass()}`}
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -41,7 +40,7 @@ export default function DateSelect({ value, onChange }: Props) {
   const set = (patch: Partial<Parts>) => onChange(format({ ...parts, ...patch }))
   // 不自動改掉使用者選的日：換月讓原本合法的日變得不存在時，值照樣留著，
   // 只把那一格框成紅色讓使用者自己決定要改哪一邊
-  const dayBad = Boolean(parts.d) && Number(parts.d) > daysInMonth(parts.y, parts.m)
+  const dayBad = isBadDay(parts)
   // 選項照月份給；換月讓原本選好的日超出範圍時額外留著它，
   // 否則 select 找不到對應 option 會顯示空白，紅框裡看不到是哪一天出問題
   const days = Array.from({ length: daysInMonth(parts.y, parts.m) }, (_, i) => String(i + 1))
@@ -50,7 +49,7 @@ export default function DateSelect({ value, onChange }: Props) {
   return (
     <div className="flex items-center gap-1.5">
       <select
-        className={`${SELECT_CLASS} ${BORDER} w-24`}
+        className={`${selectClass()} w-24`}
         value={parts.y}
         onChange={(e) => set(e.target.value ? { y: e.target.value } : { y: '', m: '', d: '' })}
       >
@@ -64,7 +63,7 @@ export default function DateSelect({ value, onChange }: Props) {
       <span className="text-sm text-slate-600">年</span>
 
       <select
-        className={`${SELECT_CLASS} ${BORDER} w-16`}
+        className={`${selectClass()} w-16`}
         value={parts.m}
         disabled={!parts.y}
         onChange={(e) => set(e.target.value ? { m: e.target.value } : { m: '', d: '' })}
@@ -79,7 +78,7 @@ export default function DateSelect({ value, onChange }: Props) {
       <span className="text-sm text-slate-600">月</span>
 
       <select
-        className={`${SELECT_CLASS} ${dayBad ? BORDER_BAD : BORDER} w-16`}
+        className={`${selectClass(dayBad)} w-16`}
         value={parts.d}
         disabled={!parts.m}
         onChange={(e) => set({ d: e.target.value })}
@@ -129,12 +128,15 @@ function pad(n: string): string {
   return n.padStart(2, '0')
 }
 
+function isBadDay({ y, m, d }: Parts): boolean {
+  return Boolean(d) && Number(d) > daysInMonth(y, m)
+}
+
 /** 這個值是日期、但那個組合不存在（2月31日）。認不得的舊寫法不算，那有文字框接手。 */
 export function isImpossibleDate(value: string): boolean {
   const p = parseDate(value)
-  return !!p && !!p.d && Number(p.d) > daysInMonth(p.y, p.m)
+  return p !== null && isBadDay(p)
 }
-
 
 /** 該年月有幾天；年或月還沒選時當作 31 天，不去判它不合理。 */
 function daysInMonth(y: string, m: string): number {
