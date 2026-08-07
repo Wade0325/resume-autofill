@@ -52,16 +52,19 @@ def docx_to_pdf(content: bytes) -> bytes:
 
 
 def docx_to_page_pngs(content: bytes, max_pages: int = 3, scale: float = 2.0) -> list[bytes]:
-    """視覺模式用：把文件每一頁畫成 PNG 截圖（LibreOffice → PDF → 點陣圖）。
+    """視覺模式用：把 Word 每一頁畫成 PNG 截圖（LibreOffice → PDF → 點陣圖）。"""
+    return pdf_to_page_pngs(docx_to_pdf(content), max_pages, scale)
 
-    scale 2.0 約為 144 DPI，表格細字仍可辨識；頁數上限是為了守住
+
+def pdf_to_page_pngs(content: bytes, max_pages: int = 3, scale: float = 2.0) -> list[bytes]:
+    """scale 2.0 約為 144 DPI，表格細字仍可辨識；頁數上限是為了守住
     模型的上下文長度（每頁截圖約吃 1~2k tokens）。
     """
     import io
 
     import pypdfium2 as pdfium
 
-    pdf = pdfium.PdfDocument(docx_to_pdf(content))
+    pdf = pdfium.PdfDocument(content)
     out: list[bytes] = []
     try:
         for i in range(min(len(pdf), max_pages)):
@@ -78,6 +81,25 @@ def docx_to_page_pngs(content: bytes, max_pages: int = 3, scale: float = 2.0) ->
     finally:
         pdf.close()
     return out
+
+
+def pdf_to_text(content: bytes) -> str:
+    """PDF 逐頁取字。
+
+    一定要 NFKC：PDF 的字型常把中文對映到康熙部首區（「工」存成 U+2F2F ⼯），
+    肉眼一樣但碼位不同。匯入會逐字驗證模型抽出的值有沒有出現在原文，
+    不正規化的話每個含中文的值都會對不上而被丟掉。
+    """
+    import unicodedata
+
+    import pypdfium2 as pdfium
+
+    pdf = pdfium.PdfDocument(content)
+    try:
+        pages = [pdf[i].get_textpage().get_text_bounded() for i in range(len(pdf))]
+    finally:
+        pdf.close()
+    return unicodedata.normalize("NFKC", "\n".join(pages)).strip()
 
 
 def _convert(content: bytes, src_name: str, target: str) -> bytes:

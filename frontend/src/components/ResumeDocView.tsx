@@ -169,6 +169,10 @@ function PageCanvas({ page }: { page: PDFPageProxy }) {
 
 const SQUASH_RE = /[\s　]+/g
 
+// NFKC 要跟後端 convert.pdf_to_text 一致：PDF 字型常把中文對映到康熙部首區
+// （「工」存成 U+2F2F），肉眼一樣但碼位不同，不正規化就框不出抽到的值
+const squash = (s: string) => s.normalize('NFKC').replace(SQUASH_RE, '')
+
 function findBoxes(pages: PageData[], marks: Mark[]): Record<string, Box[]> {
   if (pages.length === 0) return {}
 
@@ -176,7 +180,7 @@ function findBoxes(pages: PageData[], marks: Mark[]): Record<string, Box[]> {
   const owner: { p: number; i: number }[] = [] // hay 每個字元來自哪一頁的哪個片段
   pages.forEach((pg, p) =>
     pg.items.forEach((it, i) => {
-      const sq = it.str.replace(SQUASH_RE, '')
+      const sq = squash(it.str)
       hay += sq
       for (let k = 0; k < sq.length; k++) owner.push({ p, i })
     }),
@@ -184,7 +188,7 @@ function findBoxes(pages: PageData[], marks: Mark[]): Record<string, Box[]> {
 
   const out: Record<string, Box[]> = {}
   for (const m of marks) {
-    const needle = m.text.replace(SQUASH_RE, '')
+    const needle = squash(m.text)
     if (!needle) continue
     const at = hay.indexOf(needle) // 同值多次出現時取第一處，足夠指出位置
     if (at < 0) continue

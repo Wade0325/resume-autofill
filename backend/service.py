@@ -26,7 +26,9 @@ def job_dir(job_id: str) -> Path:
 
 
 def input_path(job_id: str) -> Path:
-    return job_dir(job_id) / "input.docx"
+    """上傳的原檔。填寫一律是 .docx，匯入還收 104 履歷的 .pdf。"""
+    pdf = job_dir(job_id) / "input.pdf"
+    return pdf if pdf.exists() else job_dir(job_id) / "input.docx"
 
 
 def output_path(job_id: str) -> Path:
@@ -46,9 +48,9 @@ def _values_of(extracted: Dict[str, Any]) -> set:
     return out
 
 
-def _save_upload(job_id: str, content: bytes) -> Path:
+def _save_upload(job_id: str, content: bytes, suffix: str = ".docx") -> Path:
     job_dir(job_id).mkdir(parents=True, exist_ok=True)
-    path = input_path(job_id)
+    path = job_dir(job_id) / f"input{suffix}"
     path.write_bytes(content)
     return path
 
@@ -326,7 +328,7 @@ def analyze_import(filename: str, content: bytes) -> Dict[str, Any]:
     """收下檔案就回 import_id，讀取在背景執行緒跑（與填寫的 analyze 同一套理由：
     模型讀一份履歷要幾分鐘，同步請求會讓切頁的使用者丟失結果）。"""
     import_id = uuid.uuid4().hex[:12]
-    _save_upload(import_id, content)
+    _save_upload(import_id, content, ".pdf" if filename.lower().endswith(".pdf") else ".docx")
     log.info("匯入上傳 %s (%.1f KB) import=%s", filename, len(content) / 1024, import_id)
     db.create_import(import_id, filename)
     threading.Thread(target=_import_worker, args=(import_id, filename),
@@ -338,15 +340,17 @@ def _import_worker(import_id: str, filename: str) -> None:
     src = input_path(import_id)
     t0 = time.perf_counter()
     try:
+        is_pdf = src.suffix == ".pdf"
         db.update_import(import_id, stage="讀取文件內容")
-        text = document.text_only(str(src))
+        text = convert.pdf_to_text(src.read_bytes()) if is_pdf else document.text_only(str(src))
 
         # 模型有視覺能力（掛了 mmproj）就附上頁面截圖：排版資訊補回攤平文字丟掉的部分
         images: List[bytes] = []
         if llm.supports_vision(config.LLM_HOST):
             try:
                 db.update_import(import_id, stage="擷取頁面截圖")
-                images = convert.docx_to_page_pngs(src.read_bytes())
+                raw = src.read_bytes()
+                images = convert.pdf_to_page_pngs(raw) if is_pdf else convert.docx_to_page_pngs(raw)
                 log.info("視覺模式：附 %d 頁截圖", len(images))
             except Exception as e:
                 log.warning("截圖產生失敗，改用純文字讀取：%s", e)
@@ -384,9 +388,12 @@ def render_import_pdf(import_id: str) -> Optional[bytes]:
     """上傳履歷的排版預覽 PDF。轉一次就快取在上傳目錄。"""
     if db.get_import(import_id) is None or not input_path(import_id).exists():
         return None
+    src = input_path(import_id)
+    if src.suffix == ".pdf":       # 104 履歷本來就是 PDF，不需要 LibreOffice
+        return src.read_bytes()
     cache = job_dir(import_id) / "original.pdf"
     if not cache.exists():
-        cache.write_bytes(convert.docx_to_pdf(input_path(import_id).read_bytes()))
+        cache.write_bytes(convert.docx_to_pdf(src.read_bytes()))
     return cache.read_bytes()
 
 

@@ -17,8 +17,8 @@ router = APIRouter(prefix="/imports", tags=["imports"])
 async def create_import(file: UploadFile = File(...)) -> dict:
     """收檔即回，讀取在背景跑；用 GET /imports/{id} 輪詢進度。"""
     name = file.filename or ""
-    if not name.lower().endswith((".doc", ".docx")):
-        raise HTTPException(400, "只接受 .doc 或 .docx 檔案")
+    if not name.lower().endswith((".doc", ".docx", ".pdf")):
+        raise HTTPException(400, "只接受 .pdf、.docx 或 .doc 檔案")
 
     content = await file.read()
     if len(content) > config.MAX_UPLOAD_BYTES:

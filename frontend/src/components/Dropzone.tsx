@@ -10,9 +10,18 @@ type Props = {
   hint: string
   phase: UploadPhase
   onFile: (file: File) => void
+  accept?: string
+  note?: string
 }
 
-export default function Dropzone({ title, hint, phase, onFile }: Props) {
+export default function Dropzone({
+  title,
+  hint,
+  phase,
+  onFile,
+  accept = '.doc,.docx',
+  note = '接受 .docx 與舊版 .doc（.doc 會自動轉檔）',
+}: Props) {
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const busy = phase.kind !== 'idle'
@@ -42,7 +51,7 @@ export default function Dropzone({ title, hint, phase, onFile }: Props) {
       <input
         ref={inputRef}
         type="file"
-        accept=".doc,.docx"
+        accept={accept}
         className="hidden"
         onChange={(e) => {
           take(e.target.files)
@@ -53,7 +62,7 @@ export default function Dropzone({ title, hint, phase, onFile }: Props) {
         <>
           <p className="text-slate-800 font-medium">{title}</p>
           <p className="text-sm text-slate-500 mt-1">{hint}</p>
-          <p className="text-xs text-slate-400 mt-3">接受 .docx 與舊版 .doc（.doc 會自動轉檔）</p>
+          <p className="text-xs text-slate-400 mt-3">{note}</p>
         </>
       )}
     </div>

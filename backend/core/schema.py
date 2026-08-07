@@ -26,9 +26,10 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("basic.name_passport", "護照全名", hint="與護照相同的英文全名"),
     FieldSpec("basic.national_id", "身分證字號"),
     FieldSpec("basic.gender", "性別", kind="choice", choices=["男", "女"]),
-    FieldSpec("basic.birthday", "出生年月日", kind="date", hint="西元年月日，例如 1996年04月15日"),
+    FieldSpec("basic.birthday", "出生年月日", kind="date",
+              hint="西元年月日，例如 1996年04月15日。只寫「28歲」是年齡，不是生日"),
     FieldSpec("basic.age", "年齡"),
-    FieldSpec("basic.nationality", "國籍"),
+    FieldSpec("basic.nationality", "國籍", hint="例如 中華民國"),
     FieldSpec("basic.birthplace", "出生地"),
     FieldSpec("basic.height", "身高", hint="公分數字，例如 175"),
     FieldSpec("basic.weight", "體重", hint="公斤數字，例如 68"),
@@ -37,7 +38,7 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("basic.marital_status", "婚姻狀況", kind="choice", choices=["未婚", "已婚"]),
     FieldSpec("basic.military", "兵役狀況", kind="choice", choices=["役畢", "免役", "未役", "替代役", "不適用"]),
     FieldSpec("basic.military_exempt_reason", "免役原因",
-              hint="兵役狀況為免役時才填，例如 體位不合格"),
+              hint="免役的原因本身，例如 體位不合格。不要填「免役」兩個字"),
     FieldSpec("basic.identity_category", "身分別", kind="choice",
               choices=["無", "身心障礙", "原住民"], hint="表格上的身分別勾選欄"),
     FieldSpec("basic.transport", "交通工具", kind="choice",
@@ -60,17 +61,18 @@ FIELDS: List[FieldSpec] = [
     # education[] 這種 key 會展開成 education[0].xxx
     FieldSpec("education[].school", "學校名稱", kind="list"),
     FieldSpec("education[].department", "科系", kind="list"),
-    FieldSpec("education[].degree", "學位", kind="list"),
+    FieldSpec("education[].degree", "學位", kind="list", hint="例如 大學、碩士、專科"),
     FieldSpec("education[].start", "入學年月", kind="date", hint="西元年月，例如 2014年09月"),
     FieldSpec("education[].end", "畢業年月", kind="date", hint="西元年月，例如 2018年06月"),
     # 只印一欄「就學期間」的表格用這個，值由入學與畢業合成
     FieldSpec("education[].period", "就學期間", kind="list", derived=True),
-    FieldSpec("education[].status", "畢業狀態", kind="list"),
-    FieldSpec("education[].division", "日夜間部", kind="list", hint="日、夜或進修，照表格印的字填"),
+    FieldSpec("education[].status", "畢業狀態", kind="list", hint="畢業或肄業"),
+    FieldSpec("education[].division", "日夜間部", kind="list", hint="只有寫日間部／夜間部／進修部時才填"),
     FieldSpec("education[].club", "社團活動", kind="list"),
 
     FieldSpec("experience[].company", "公司名稱", kind="list"),
-    FieldSpec("experience[].department", "部門", kind="list"),
+    FieldSpec("experience[].department", "部門", kind="list",
+              hint="部門名稱，例如 研發部。職稱不要填在這裡"),
     FieldSpec("experience[].title", "職稱", kind="list"),
     FieldSpec("experience[].start", "到職年月", kind="date", hint="西元年月，例如 2019年03月"),
     FieldSpec("experience[].end", "離職年月", kind="date", hint="西元年月，例如 2023年08月"),
@@ -153,9 +155,11 @@ FIELD_KEYS = [f.key for f in FIELDS] + SPECIAL_KEYS
 BY_KEY = {f.key: f for f in FIELDS}
 
 
-def describe_fields(include_special: bool = True) -> str:
+def describe_fields(include_special: bool = True, skip_derived: bool = False) -> str:
     lines = []
     for f in FIELDS:
+        if skip_derived and f.derived:
+            continue
         extra = f" 選項={f.choices}" if f.choices else ""
         hint = f" — {f.hint}" if f.hint else ""
         lines.append(f"- {f.key}: {f.label}{extra}{hint}")

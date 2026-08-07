@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from . import document, llm
-from .schema import FIELDS, describe_fields
+from .schema import BY_KEY, FIELDS, describe_fields
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ def read(text: str, host: str, model: str,
     合併儲存格、標籤與值的歸屬比攤平文字好判斷。逐字驗證照舊，
     看圖看錯的值會因為不在原文中而被丟掉。
     """
-    user = f"可抽取的欄位：\n{describe_fields(include_special=False)}\n\n履歷全文：\n{text}"
+    user = f"可抽取的欄位：\n{describe_fields(include_special=False, skip_derived=True)}\n\n履歷全文：\n{text}"
     if images:
         content: List[Dict[str, Any]] = [{"type": "text", "text": user}]
         for img in images:
@@ -64,6 +65,9 @@ def _schema() -> Dict[str, Any]:
     rows: Dict[str, Dict[str, Any]] = {}
 
     for f in FIELDS:
+        # 合成欄位（就學期間＝入學＋畢業）由起訖兩欄算出來，抽了也進不了表單
+        if f.derived:
+            continue
         if "[]." in f.key:
             root, sub = f.key.split("[].", 1)
             rows.setdefault(root, {})[sub] = {"type": "string"}
@@ -74,6 +78,18 @@ def _schema() -> Dict[str, Any]:
         props[root] = {"type": "array",
                        "items": {"type": "object", "properties": sub_props}}
     return {"type": "object", "properties": props}
+
+
+def _plausible(key: str, value: str, haystack: str) -> bool:
+    """值必須逐字出現在原文，日期欄位還要真的像個日期。
+
+    模型很愛把年齡當生日（104 履歷只印「28歲」），那個值確實出現在原文，
+    光靠逐字驗證擋不住，會直接蓋掉使用者原本填好的生日。
+    """
+    if document.squash(value) not in haystack:
+        return False
+    spec = BY_KEY.get(key)
+    return not (spec and spec.kind == "date" and not re.search(r"\d{3}", value))
 
 
 def _keep_verbatim(data: Dict[str, Any], source: str) -> Dict[str, Any]:
@@ -88,7 +104,8 @@ def _keep_verbatim(data: Dict[str, Any], source: str) -> Dict[str, Any]:
                 if not isinstance(row, dict):
                     continue
                 clean = {k: v.strip() for k, v in row.items()
-                         if isinstance(v, str) and v.strip() and document.squash(v) in haystack}
+                         if isinstance(v, str) and v.strip()
+                         and _plausible(f"{key}[].{k}", v, haystack)}
                 dropped += [f"{key}[].{k}" for k, v in row.items()
                             if isinstance(v, str) and v.strip() and k not in clean]
                 if clean:
@@ -96,7 +113,7 @@ def _keep_verbatim(data: Dict[str, Any], source: str) -> Dict[str, Any]:
             if rows:
                 kept[key] = rows
         elif isinstance(value, str) and value.strip():
-            if document.squash(value) in haystack:
+            if _plausible(key, value, haystack):
                 kept[key] = value.strip()
             else:
                 dropped.append(key)
