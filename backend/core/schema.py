@@ -19,7 +19,6 @@ class FieldSpec:
 
 
 FIELDS: List[FieldSpec] = [
-    # ---------- 基本資料 ----------
     # 私密欄位（身分證字號、身分別…）一樣開放：值要不要填由使用者自己決定，
     # 系統只提供服務。
     FieldSpec("basic.name_zh", "中文姓名", hint="申請人的中文全名"),
@@ -27,7 +26,7 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("basic.name_passport", "護照全名", hint="與護照相同的英文全名"),
     FieldSpec("basic.national_id", "身分證字號"),
     FieldSpec("basic.gender", "性別", kind="choice", choices=["男", "女"]),
-    FieldSpec("basic.birthday", "出生年月日", kind="date", hint="西元 YYYY-MM-DD"),
+    FieldSpec("basic.birthday", "出生年月日", kind="date", hint="西元年月日，例如 1996年04月15日"),
     FieldSpec("basic.age", "年齡"),
     FieldSpec("basic.nationality", "國籍"),
     FieldSpec("basic.marital_status", "婚姻狀況", kind="choice", choices=["未婚", "已婚"]),
@@ -36,7 +35,6 @@ FIELDS: List[FieldSpec] = [
               choices=["無", "身心障礙", "原住民"], hint="表格上的身分別勾選欄"),
     FieldSpec("basic.hobbies", "興趣", hint="休閒興趣，例如 羽球、桌球"),
 
-    # ---------- 聯絡方式 ----------
     FieldSpec("contact.mobile", "行動電話"),
     FieldSpec("contact.phone_home", "住家電話"),
     FieldSpec("contact.email", "電子郵件"),
@@ -44,31 +42,29 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("contact.address_mailing", "通訊地址"),
     FieldSpec("contact.address_household", "戶籍地址"),
 
-    # ---------- 應徵資訊 ----------
     # 應徵職務刻意不收：每間公司都不一樣，存了也只會填錯，留白讓使用者手寫
     FieldSpec("job.expected_salary", "希望待遇", kind="money", hint="月薪金額"),
     FieldSpec("job.expected_salary_year", "期望年薪", kind="money", hint="年薪金額"),
-    FieldSpec("job.available_date", "可到職日", kind="date"),
+    FieldSpec("job.available_date", "可到職日", kind="date", hint="西元年月日，例如 2026年09月01日"),
     FieldSpec("job.recruit_channel", "招募管道", hint="從哪裡得知職缺，例如 104人力銀行"),
 
-    # ---------- 學歷（list，會展開成 education[0].xxx） ----------
+    # education[] 這種 key 會展開成 education[0].xxx
     FieldSpec("education[].school", "學校名稱", kind="list"),
     FieldSpec("education[].department", "科系", kind="list"),
     FieldSpec("education[].degree", "學位", kind="list"),
-    FieldSpec("education[].start", "入學年月", kind="list"),
-    FieldSpec("education[].end", "畢業年月", kind="list"),
+    FieldSpec("education[].start", "入學年月", kind="date", hint="西元年月，例如 2014年09月"),
+    FieldSpec("education[].end", "畢業年月", kind="date", hint="西元年月，例如 2018年06月"),
     # 只印一欄「就學期間」的表格用這個，值由入學與畢業合成
     FieldSpec("education[].period", "就學期間", kind="list", derived=True),
     FieldSpec("education[].status", "畢業狀態", kind="list"),
     FieldSpec("education[].division", "日夜間部", kind="list", hint="日、夜或進修，照表格印的字填"),
     FieldSpec("education[].club", "社團活動", kind="list"),
 
-    # ---------- 經歷 ----------
     FieldSpec("experience[].company", "公司名稱", kind="list"),
     FieldSpec("experience[].department", "部門", kind="list"),
     FieldSpec("experience[].title", "職稱", kind="list"),
-    FieldSpec("experience[].start", "到職年月", kind="list"),
-    FieldSpec("experience[].end", "離職年月", kind="list"),
+    FieldSpec("experience[].start", "到職年月", kind="date", hint="西元年月，例如 2019年03月"),
+    FieldSpec("experience[].end", "離職年月", kind="date", hint="西元年月，例如 2023年08月"),
     FieldSpec("experience[].period", "任職期間", kind="list", derived=True),
     FieldSpec("experience[].description", "工作內容", kind="list"),
     # 只存固定月薪的金額：表單絕大多數只印一格「月薪」，
@@ -78,7 +74,6 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("experience[].is_supervisor", "擔任主管", kind="choice", choices=["是", "否"]),
     FieldSpec("experience[].leave_reason", "離職原因", kind="list"),
 
-    # ---------- 專長 ----------
     FieldSpec("skills.languages", "語文能力", kind="longtext"),
     FieldSpec("skills.certificates", "專業證照", kind="longtext"),
     FieldSpec("skills.computer", "電腦技能", kind="longtext"),
@@ -87,7 +82,6 @@ FIELDS: List[FieldSpec] = [
                        "職業小型車", "職業大貨車", "職業大客車"]),
     FieldSpec("skills.specialty", "專長", kind="longtext"),
 
-    # ---------- 家庭狀況（人事表常見的稱謂/姓名/年齡/職業表格） ----------
     # 標籤刻意加「家人」前綴：表格印的「姓名」「職業」太通用，
     # 若直接當標籤會在確定性對齊時搶走別區同名的格子。
     FieldSpec("family[].relation", "家人稱謂", kind="list", hint="例如 父、母、兄"),
@@ -95,19 +89,17 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("family[].age", "家人年齡", kind="list"),
     FieldSpec("family[].occupation", "家人職業", kind="list"),
 
-    # ---------- 任用諮詢人／推薦人（同上，標籤加前綴避免搶格子） ----------
+    # 標籤同樣加前綴，理由同家庭狀況
     FieldSpec("reference[].name", "諮詢人姓名", kind="list"),
     FieldSpec("reference[].company", "諮詢人公司", kind="list"),
     FieldSpec("reference[].title", "諮詢人職稱", kind="list"),
     FieldSpec("reference[].phone", "諮詢人電話", kind="list"),
     FieldSpec("reference[].relation", "諮詢人關係", kind="list", hint="與本人的關係，例如 直屬主管"),
 
-    # ---------- 緊急聯絡人 ----------
     FieldSpec("emergency.name", "緊急聯絡人姓名"),
     FieldSpec("emergency.relation", "緊急聯絡人關係"),
     FieldSpec("emergency.phone", "緊急聯絡人電話"),
 
-    # ---------- 聲明事項（人事表常見的無/有勾選題） ----------
     FieldSpec("declaration.relatives_in_company", "親友任職於應徵公司", kind="choice",
               choices=["無", "有"]),
     FieldSpec("declaration.other_positions", "於其他公司擔任負責人或董監事", kind="choice",
@@ -119,11 +111,10 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("declaration.ip_ownership", "擁有相關智慧財產權或專門技術", kind="choice",
               choices=["無", "有"]),
 
-    # ---------- 長文 ----------
     FieldSpec("autobiography", "自傳", kind="longtext"),
 ]
 
-# 給 LLM 用的白名單。SKIP 代表「這格不是要填的空白」，NONE 代表「找不到對應資料」。
+# 給 LLM 用的白名單。__SKIP__ 代表「這格不是要填的空白」，__UNKNOWN__ 代表「找不到對應資料」。
 SPECIAL_KEYS = ["__SKIP__", "__UNKNOWN__"]
 FIELD_KEYS = [f.key for f in FIELDS] + SPECIAL_KEYS
 

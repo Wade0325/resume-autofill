@@ -1,4 +1,5 @@
 import type { FieldSpec } from '../api'
+import DateSelect from './DateSelect'
 
 type Props = {
   spec: FieldSpec
@@ -20,6 +21,10 @@ export default function Field({ spec, value, onChange }: Props) {
 }
 
 function renderInput(spec: FieldSpec, value: string, onChange: (v: string) => void) {
+  if (spec.kind === 'date') {
+    return <DateSelect value={value} onChange={onChange} />
+  }
+
   if (spec.kind === 'choice') {
     return (
       <select className={INPUT_CLASS} value={value} onChange={(e) => onChange(e.target.value)}>
@@ -62,14 +67,11 @@ function renderInput(spec: FieldSpec, value: string, onChange: (v: string) => vo
     )
   }
 
-  // date 用 text 而非 <input type="date">：履歷表上的日期格式很雜
-  // （2014/09、民國 83 年），限制成 ISO 反而讓人沒辦法照原樣填
   return (
     <input
       className={INPUT_CLASS}
       type="text"
       value={value}
-      placeholder={spec.kind === 'date' ? '例如 1996-04-15' : ''}
       onChange={(e) => onChange(e.target.value)}
     />
   )
