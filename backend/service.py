@@ -329,13 +329,14 @@ def _import_worker(import_id: str, filename: str) -> None:
         db.update_import(import_id, stage="讀取文件內容")
         text = convert.pdf_to_text(src.read_bytes()) if is_pdf else document.text_only(str(src))
 
-        # 模型有視覺能力（掛了 mmproj）就附上頁面截圖：排版資訊補回攤平文字丟掉的部分
+        # PDF 的文字順序是繪製順序，排版資訊得靠截圖補；.docx 攤平後本來就帶著
+        # 表格結構，附截圖反而讓模型改去讀圖——實測兩份文件都是純文字比較準
+        # （欄位標題被當成值、姓名被當成職稱那類錯誤明顯變多）
         images: List[bytes] = []
-        if llm.supports_vision(config.LLM_HOST):
+        if is_pdf and llm.supports_vision(config.LLM_HOST):
             try:
                 db.update_import(import_id, stage="擷取頁面截圖")
-                raw = src.read_bytes()
-                images = convert.pdf_to_page_pngs(raw) if is_pdf else convert.docx_to_page_pngs(raw)
+                images = convert.pdf_to_page_pngs(src.read_bytes())
                 log.info("視覺模式：附 %d 頁截圖", len(images))
             except Exception as e:
                 log.warning("截圖產生失敗，改用純文字讀取：%s", e)
