@@ -4,6 +4,7 @@ import { api, type FieldSpec, type Profile } from '../api'
 import { SECTIONS, type Section } from '../sections'
 import Field from '../components/Field'
 import RepeatList from '../components/RepeatList'
+import { isImpossibleDate } from '../components/DateSelect'
 import { ErrorBox } from '../components/common'
 
 export default function ProfilePage() {
@@ -101,6 +102,8 @@ export default function ProfilePage() {
 
   const section = SECTIONS.find((s) => s.id === active)!
   const total = useMemo(() => countFilled(fields, profile), [fields, profile])
+  // 有紅框（2月31日這種湊不出來的日期）就不讓存，否則會原樣填進履歷
+  const badDates = useMemo(() => countBadDates(fields, profile), [fields, profile])
 
   if (error && fields.length === 0) return <ErrorBox message={error} />
 
@@ -117,7 +120,7 @@ export default function ProfilePage() {
           {dirty && <span className="text-sm text-amber-600">有未儲存的變更</span>}
           <button
             onClick={save}
-            disabled={!dirty || saving}
+            disabled={!dirty || saving || badDates > 0}
             className="px-5 py-2 rounded-md bg-sky-600 text-white text-sm font-medium
                        hover:bg-sky-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
           >
@@ -183,6 +186,7 @@ export default function ProfilePage() {
           from={section.title}
           to={SECTIONS.find((s) => s.id === pending)!.title}
           saving={saving}
+          canSave={badDates === 0}
           onSave={saveThenSwitch}
           onDiscard={discardThenSwitch}
           onCancel={() => setPending(null)}
@@ -233,6 +237,7 @@ function UnsavedDialog({
   from,
   to,
   saving,
+  canSave,
   onSave,
   onDiscard,
   onCancel,
@@ -240,6 +245,7 @@ function UnsavedDialog({
   from: string
   to: string
   saving: boolean
+  canSave: boolean
   onSave: () => void
   onDiscard: () => void
   onCancel: () => void
@@ -266,7 +272,7 @@ function UnsavedDialog({
           </button>
           <button
             onClick={onSave}
-            disabled={saving}
+            disabled={saving || !canSave}
             className="px-4 py-2 text-sm rounded-md bg-sky-600 text-white font-medium
                        hover:bg-sky-700 disabled:bg-slate-300"
           >
@@ -296,6 +302,22 @@ function writePath(obj: Profile, path: string, value: string) {
   }
   cur[parts[parts.length - 1]] = value
 }
+
+function countBadDates(fields: FieldSpec[], profile: Profile): number {
+  let n = 0
+  for (const f of fields) {
+    if (f.kind !== 'date') continue
+    if (f.key.includes('[].')) {
+      const [root, sub] = f.key.split('[].')
+      const rows: Record<string, string>[] = profile[root] ?? []
+      n += rows.filter((row) => isImpossibleDate(row[sub] ?? '')).length
+    } else if (isImpossibleDate(readPath(profile, f.key))) {
+      n += 1
+    }
+  }
+  return n
+}
+
 
 /** 傳 section 就只算該主題，不傳則算全部。多筆資料的區塊回傳筆數（顯示成「N 筆」）。 */
 function countFilled(fields: FieldSpec[], profile: Profile, section?: Section) {

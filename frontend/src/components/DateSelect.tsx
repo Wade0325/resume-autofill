@@ -128,6 +128,13 @@ function pad(n: string): string {
   return n.padStart(2, '0')
 }
 
+/** 這個值是日期、但那個組合不存在（2月31日）。認不得的舊寫法不算，那有文字框接手。 */
+export function isImpossibleDate(value: string): boolean {
+  const p = parseDate(value)
+  return !!p && !!p.d && Number(p.d) > daysInMonth(p.y, p.m)
+}
+
+
 /** 該年月有幾天；年或月還沒選時當作 31 天，不去判它不合理。 */
 function daysInMonth(y: string, m: string): number {
   return y && m ? new Date(Number(y), Number(m), 0).getDate() : 31
