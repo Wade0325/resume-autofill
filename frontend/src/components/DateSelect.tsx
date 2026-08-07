@@ -1,11 +1,16 @@
 const NOW = new Date().getFullYear()
 const YEARS = Array.from({ length: 101 }, (_, i) => String(NOW + 10 - i))
 const MONTHS = Array.from({ length: 12 }, (_, i) => String(i + 1))
+// 日一律列 1~31：換月之後原本選好的日可能超出該月天數，選項若跟著縮短，
+// 那個值就顯示不出來（select 找不到對應 option 會變空白），使用者看不到問題在哪
+const DAYS = Array.from({ length: 31 }, (_, i) => String(i + 1))
 
 const SELECT_CLASS =
-  'rounded-md border border-slate-300 px-2 py-2 text-sm bg-white ' +
+  'rounded-md border px-2 py-2 text-sm bg-white ' +
   'focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500 ' +
   'disabled:bg-slate-50 disabled:text-slate-400'
+const BORDER = 'border-slate-300'
+const BORDER_BAD = 'border-rose-500 text-rose-700'
 
 type Parts = { y: string; m: string; d: string }
 
@@ -24,7 +29,7 @@ export default function DateSelect({ value, onChange }: Props) {
     return (
       <div>
         <input
-          className={`w-full ${SELECT_CLASS}`}
+          className={`w-full ${SELECT_CLASS} ${BORDER}`}
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -37,11 +42,14 @@ export default function DateSelect({ value, onChange }: Props) {
   }
 
   const set = (patch: Partial<Parts>) => onChange(format({ ...parts, ...patch }))
+  // 不自動改掉使用者選的日：換月讓原本合法的日變得不存在時，值照樣留著，
+  // 只把那一格框成紅色讓使用者自己決定要改哪一邊
+  const dayBad = Boolean(parts.d) && Number(parts.d) > daysInMonth(parts.y, parts.m)
 
   return (
     <div className="flex items-center gap-1.5">
       <select
-        className={`${SELECT_CLASS} w-24`}
+        className={`${SELECT_CLASS} ${BORDER} w-24`}
         value={parts.y}
         onChange={(e) => set(e.target.value ? { y: e.target.value } : { y: '', m: '', d: '' })}
       >
@@ -55,7 +63,7 @@ export default function DateSelect({ value, onChange }: Props) {
       <span className="text-sm text-slate-600">年</span>
 
       <select
-        className={`${SELECT_CLASS} w-16`}
+        className={`${SELECT_CLASS} ${BORDER} w-16`}
         value={parts.m}
         disabled={!parts.y}
         onChange={(e) => set(e.target.value ? { m: e.target.value } : { m: '', d: '' })}
@@ -70,13 +78,13 @@ export default function DateSelect({ value, onChange }: Props) {
       <span className="text-sm text-slate-600">月</span>
 
       <select
-        className={`${SELECT_CLASS} w-16`}
+        className={`${SELECT_CLASS} ${dayBad ? BORDER_BAD : BORDER} w-16`}
         value={parts.d}
         disabled={!parts.m}
         onChange={(e) => set({ d: e.target.value })}
       >
         <option value="">--</option>
-        {daysIn(parts.y, parts.m).map((d) => (
+        {DAYS.map((d) => (
           <option key={d} value={d}>
             {d}
           </option>
@@ -113,17 +121,14 @@ function format({ y, m, d }: Parts): string {
   if (!y) return ''
   if (!m) return `${y}年`
   if (!d) return `${y}年${pad(m)}月`
-  // 選了 1月31日 再把月改成 2、或把 2月29日 的年改成平年，都會留下不存在的
-  // 日期。這裡是產生值的唯一出口，夾在這裡才涵蓋得到每一條路徑。
-  const day = Math.min(Number(d), daysIn(y, m).length)
-  return `${y}年${pad(m)}月${pad(String(day))}日`
+  return `${y}年${pad(m)}月${pad(d)}日`
 }
 
 function pad(n: string): string {
   return n.padStart(2, '0')
 }
 
-function daysIn(y: string, m: string): string[] {
-  const count = y && m ? new Date(Number(y), Number(m), 0).getDate() : 31
-  return Array.from({ length: count }, (_, i) => String(i + 1))
+/** 該年月有幾天；年或月還沒選時當作 31 天，不去判它不合理。 */
+function daysInMonth(y: string, m: string): number {
+  return y && m ? new Date(Number(y), Number(m), 0).getDate() : 31
 }
