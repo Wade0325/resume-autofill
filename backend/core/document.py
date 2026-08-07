@@ -297,6 +297,19 @@ def _cell_render(cell: _Cell, table_index: int, r: int, c: int,
     loc = {"table": table_index, "row": r, "col": c}
 
     if any(ch in text for ch in CHECKBOX_CHARS + CHECKED_CHARS):
+        # 一格裡印了好幾題（六道是非題各佔一段）時，整格當一個位置只勾得到第一題。
+        # 每個有選項的段落各自成為一個位置，題目文字就是它自己的標籤。
+        paras = [(i, p.text) for i, p in enumerate(cell.paragraphs) if checkbox_options(p.text)]
+        if len(paras) > 1:
+            rendered = []
+            for i, ptext in paras:
+                psid = f"{sid}.p{i}"
+                slots.append(Slot(id=psid, kind="checkbox",
+                                  loc={**loc, "para_in_cell": i},
+                                  options=checkbox_options(ptext), existing=ptext))
+                rendered.append(f"{{{{{psid}}}}} {ptext}")
+            return " ".join(rendered).replace("\n", " ")
+
         options = checkbox_options(text)
         if options:
             slots.append(Slot(id=sid, kind="checkbox", loc=loc,

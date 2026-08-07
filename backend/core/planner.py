@@ -154,7 +154,7 @@ def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
     known: Dict[str, str] = {}        # 學過的命中（值可能是 __SKIP__＝學過「這不用填」）
     unknown: Dict[str, str] = {}      # composite key → 給模型看的顯示字串
     blocked = [_squash(b) for b in BLOCKED_LABELS]
-    for label, _targets, _mode, ctx in anchors:
+    for label, _targets, mode, ctx in anchors:
         sq = _squash(label)
         if not sq or sq in LABEL_MAP:
             if sq and sq not in resolved:
@@ -166,8 +166,11 @@ def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
         comp = f"{sq}|{_squash(ctx)}"
         if comp in unknown:
             continue
-        if len(sq) <= 20 and not sq.isdigit() and not any(b in sq for b in blocked):
-            shown = label.replace("\n", " ").strip()[:20]
+        # 印在自己身上的標籤（勾選題整句問句）可以長一點；旁邊格子當標籤的
+        # 一長就多半是說明文字，超過就別送進模型了
+        cap = 32 if mode == "self" else 20
+        if len(sq) <= cap and not sq.isdigit() and not any(b in sq for b in blocked):
+            shown = label.replace("\n", " ").strip()[:cap]
             if ctx:
                 shown += f"｜{ctx.replace(chr(10), ' ').strip()[:12]}"
             unknown[comp] = shown

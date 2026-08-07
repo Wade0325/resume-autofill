@@ -168,15 +168,22 @@ def _fill_inline(para, text: str, highlight: bool, blank_index: int = 0) -> bool
 
 
 def _fill_checkbox(para, option: str, highlight: bool) -> bool:
+    """勾掉緊接在方框後面的那個選項。
+
+    要一路找到「前面真的有方框」的那次出現為止：選項字常常也出現在題目裡
+    （「您是否曾…？ □是 □否」的「是否」），只看第一次出現會定位到題目上。
+    """
     full = para.text
-    idx = full.find(option)
-    if idx < 0:
-        return False
-    for j in range(idx - 1, max(-1, idx - 4), -1):
-        ch = full[j]
-        if ch in CHECKBOX_CHARS:
-            return _replace_span(para, j, j + 1, CHECK_MAP.get(ch, "■"), highlight)
-    return False
+    start = 0
+    while True:
+        idx = full.find(option, start)
+        if idx < 0:
+            return False
+        for j in range(idx - 1, max(-1, idx - 4), -1):
+            ch = full[j]
+            if ch in CHECKBOX_CHARS:
+                return _replace_span(para, j, j + 1, CHECK_MAP.get(ch, "■"), highlight)
+        start = idx + 1
 
 
 def _fill_sdt(doc, index: int, text: str) -> bool:
@@ -267,7 +274,9 @@ def apply_ops(src_path: str, out_path: str, ops: List[Any],
                 else:
                     grid = _grid(doc.tables[loc["table"]])
                     cell = grid[loc["row"]][loc["col"]]
-                    for p in cell.paragraphs:
+                    idx = loc.get("para_in_cell")
+                    paras = [cell.paragraphs[idx]] if idx is not None else cell.paragraphs
+                    for p in paras:
                         if _fill_checkbox(p, op.value, highlight):
                             done = True
                             break
