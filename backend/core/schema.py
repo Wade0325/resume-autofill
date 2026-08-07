@@ -36,6 +36,8 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("basic.health", "健康狀況", kind="choice", choices=["優", "良", "可", "差"]),
     FieldSpec("basic.marital_status", "婚姻狀況", kind="choice", choices=["未婚", "已婚"]),
     FieldSpec("basic.military", "兵役狀況", kind="choice", choices=["役畢", "免役", "未役", "替代役", "不適用"]),
+    FieldSpec("basic.military_exempt_reason", "免役原因",
+              hint="兵役狀況為免役時才填，例如 體位不合格"),
     FieldSpec("basic.identity_category", "身分別", kind="choice",
               choices=["無", "身心障礙", "原住民"], hint="表格上的身分別勾選欄"),
     FieldSpec("basic.transport", "交通工具", kind="choice",

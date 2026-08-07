@@ -15,6 +15,7 @@ export default function Field({ spec, value, onChange }: Props) {
   return (
     <label className="block">
       <span className="text-sm text-slate-700">{spec.label}</span>
+      {spec.hint && <span className="ml-2 text-xs text-slate-400">{spec.hint}</span>}
       <div className="mt-1">{renderInput(spec, value, onChange)}</div>
     </label>
   )
