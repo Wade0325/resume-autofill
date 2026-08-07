@@ -113,7 +113,10 @@ function format({ y, m, d }: Parts): string {
   if (!y) return ''
   if (!m) return `${y}年`
   if (!d) return `${y}年${pad(m)}月`
-  return `${y}年${pad(m)}月${pad(d)}日`
+  // 選了 1月31日 再把月改成 2、或把 2月29日 的年改成平年，都會留下不存在的
+  // 日期。這裡是產生值的唯一出口，夾在這裡才涵蓋得到每一條路徑。
+  const day = Math.min(Number(d), daysIn(y, m).length)
+  return `${y}年${pad(m)}月${pad(String(day))}日`
 }
 
 function pad(n: string): string {
