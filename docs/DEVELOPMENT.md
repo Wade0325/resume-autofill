@@ -271,7 +271,20 @@ metadata 帶著那次用的 JSON Schema、usage 帶 token 數。頁面截圖會�
 ——base64 幾百 KB 塞進 trace 只會讓畫面爆掉。
 
 **只用本機自架的 Langfuse。**提示詞裡是完整的履歷內容（身分證字號、生日、
-地址），送到雲端等於把個資上傳第三方，違背這個工具的定位。
+地址），送到雲端等於把個資上傳第三方。SDK 沒指定位址時的預設值就是雲端，
+所以 `llm._tracer()` 會擋掉：沒設 `LANGFUSE_BASE_URL` 或指向雲端就不啟用。
+
+Langfuse 內建 MCP 端點（`/api/public/mcp`），已用 local scope 註冊給這個專案：
+
+```powershell
+$t = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("$pk`:$sk"))
+claude mcp add --transport http --scope local langfuse `
+    http://localhost:3000/api/public/mcp --header "Authorization: Basic $t"
+```
+
+金鑰存在 `~/.claude.json` 的專案區段，不進版控。注意這個 MCP **沒有讀取
+trace／observation 的工具**（54 個工具都是 prompt、dataset、score、evaluator
+那些），要撈 trace 內容還是走 REST 的 `/api/public/traces`。
 
 ### Log
 
