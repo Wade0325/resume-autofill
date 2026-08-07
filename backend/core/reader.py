@@ -80,8 +80,13 @@ def _schema() -> Dict[str, Any]:
     return {"type": "object", "properties": props}
 
 
+# 日期欄位的值只能由日期會用到的字元組成。跟前端 DateSelect.parseDate 的
+# 同名判準必須一致——民國年、2016/9 都要放行，「28歲」「2年10個月」要擋掉。
+DATE_ONLY_RE = re.compile(r"^[\d\s年月日民國/.-]+$")
+
+
 def _plausible(key: str, value: str, haystack: str) -> bool:
-    """值必須逐字出現在原文，日期欄位還要真的像個日期。
+    """值必須逐字出現在原文，日期欄位還要真的長得像日期。
 
     模型很愛把年齡當生日（104 履歷只印「28歲」），那個值確實出現在原文，
     光靠逐字驗證擋不住，會直接蓋掉使用者原本填好的生日。
@@ -89,7 +94,7 @@ def _plausible(key: str, value: str, haystack: str) -> bool:
     if document.squash(value) not in haystack:
         return False
     spec = BY_KEY.get(key)
-    return not (spec and spec.kind == "date" and not re.search(r"\d{3}", value))
+    return not (spec and spec.kind == "date" and not DATE_ONLY_RE.match(value.strip()))
 
 
 def _keep_verbatim(data: Dict[str, Any], source: str) -> Dict[str, Any]:
