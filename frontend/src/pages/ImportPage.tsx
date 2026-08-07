@@ -212,6 +212,7 @@ export default function ImportPage() {
           >
             <ResumeDocView
               importId={preview.import_id}
+              filename={preview.filename}
               marks={preview.rows.map((r) => ({ id: r.row_id, text: r.incoming }))}
               hoveredId={hovered}
             />

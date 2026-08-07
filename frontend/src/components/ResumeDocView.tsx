@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { renderAsync } from 'docx-preview'
 import * as pdfjs from 'pdfjs-dist'
 import type { PDFPageProxy } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
@@ -6,12 +7,11 @@ import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
 
 /**
- * 匯入頁中間欄：上傳履歷的真排版（LibreOffice 轉 PDF、pdf.js 渲染），
- * 並把抽到的每個值框出來。
+ * 匯入頁中間欄：上傳履歷的真排版，並把抽到的每個值框出來。
+ * PDF 用 pdf.js，Word 用 docx-preview——兩種都在瀏覽器渲染，不經過轉檔。
  *
  * 定位不經過模型：reader 抽出的值本來就強制逐字出現在原文，
- * 所以拿 pdf.js 的文字層做子字串搜尋就能找到值的座標。
- * 滑過右欄的列 → hoveredId 變化 → 對應框加粗並捲到可見處。
+ * 子字串搜尋就找得到座標。滑過右欄的列 → 對應框加粗並捲到可見處。
  */
 
 export type Mark = { id: string; text: string }
@@ -24,13 +24,16 @@ const SCALE = 2 // 2 倍解析度再縮到欄寬，文字才不會糊
 
 export default function ResumeDocView({
   importId,
+  filename,
   marks,
   hoveredId,
 }: {
   importId: string
+  filename: string
   marks: Mark[]
   hoveredId: string | null
 }) {
+  const isPdf = filename.toLowerCase().endsWith('.pdf')
   const [pages, setPages] = useState<PageData[]>([])
   const [loading, setLoading] = useState(true)
   const [unavailable, setUnavailable] = useState('')
@@ -41,8 +44,12 @@ export default function ResumeDocView({
     const token = { cancelled: false }
     setLoading(true)
     setUnavailable('')
+    if (!isPdf) {
+      setLoading(false)
+      return
+    }
     ;(async () => {
-      const res = await fetch(`/api/imports/${importId}/preview.pdf`)
+      const res = await fetch(`/api/imports/${importId}/source`)
       if (!res.ok) {
         let detail = `HTTP ${res.status}`
         try {
@@ -79,7 +86,7 @@ export default function ResumeDocView({
     return () => {
       token.cancelled = true
     }
-  }, [importId])
+  }, [importId, isPdf])
 
   const boxMap = useMemo(() => findBoxes(pages, marks), [pages, marks])
 
@@ -105,9 +112,13 @@ export default function ResumeDocView({
         </p>
       ) : (
         <div ref={scrollRef} className="overflow-auto max-h-[78vh] bg-slate-100 p-3 space-y-3">
-          {pages.map((pg, idx) => (
-            <PageView key={idx} data={pg} pageIndex={idx} boxMap={boxMap} hoveredId={hoveredId} />
-          ))}
+          {isPdf ? (
+            pages.map((pg, idx) => (
+              <PageView key={idx} data={pg} pageIndex={idx} boxMap={boxMap} hoveredId={hoveredId} />
+            ))
+          ) : (
+            <DocxView importId={importId} marks={marks} hoveredId={hoveredId} onDone={setLoading} />
+          )}
         </div>
       )}
     </div>
@@ -152,6 +163,108 @@ function PageView({
     </div>
   )
 }
+
+/** Word 履歷：docx-preview 渲染，抽到的值用 Range 量出位置畫框。 */
+function DocxView({
+  importId,
+  marks,
+  hoveredId,
+  onDone,
+}: {
+  importId: string
+  marks: Mark[]
+  hoveredId: string | null
+  onDone: (loading: boolean) => void
+}) {
+  const hostRef = useRef<HTMLDivElement>(null)
+  const [boxes, setBoxes] = useState<Record<string, Box[]>>({})
+
+  useEffect(() => {
+    const token = { cancelled: false }
+    onDone(true)
+    ;(async () => {
+      const res = await fetch(`/api/imports/${importId}/source`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const blob = await res.blob()
+      const host = hostRef.current!
+      host.replaceChildren()
+      host.style.zoom = '1'
+      const width = host.clientWidth
+      await renderAsync(blob, host, undefined, { className: 'docx', inWrapper: false })
+      if (token.cancelled) return
+      // 文件用實際紙張寬度渲染，縮到欄寬才塞得下（zoom 會重排，transform 不會）
+      const page = host.querySelector('section')
+      if (page) host.style.zoom = String(width / page.offsetWidth)
+      setBoxes(locate(host, marks))
+      onDone(false)
+    })().catch(() => !token.cancelled && onDone(false))
+    return () => {
+      token.cancelled = true
+    }
+  }, [importId, marks, onDone])
+
+  return (
+    <div className="relative">
+      <div ref={hostRef} className="bg-white border border-slate-300 shadow-sm" />
+      {Object.entries(boxes).map(([id, list]) =>
+        list.map((b, i) => (
+          <div
+            key={`${id}.${i}`}
+            data-mark={id}
+            className={`absolute pointer-events-none rounded-sm transition-colors ${
+              id === hoveredId
+                ? 'border-2 border-sky-500 bg-sky-400/25'
+                : 'border border-amber-400/70 bg-amber-300/15'
+            }`}
+            style={{
+              left: `${b.left * 100}%`,
+              top: `${b.top * 100}%`,
+              width: `${b.width * 100}%`,
+              height: `${b.height * 100}%`,
+            }}
+          />
+        )),
+      )}
+    </div>
+  )
+}
+
+/** 走過所有文字節點攤成一串，命中的字元用 Range 量位置——getClientRects 會自動分行。 */
+function locate(host: HTMLElement, marks: Mark[]): Record<string, Box[]> {
+  const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT)
+  let hay = ''
+  const owner: { node: Text; offset: number }[] = []
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const text = (n as Text).data
+    for (let i = 0; i < text.length; i++) {
+      const c = squash(text[i])
+      for (let k = 0; k < c.length; k++) owner.push({ node: n as Text, offset: i })
+      hay += c
+    }
+  }
+
+  const base = host.parentElement!.getBoundingClientRect()
+  const out: Record<string, Box[]> = {}
+  for (const m of marks) {
+    const needle = squash(m.text)
+    if (!needle) continue
+    const at = hay.indexOf(needle)
+    if (at < 0) continue
+    const range = document.createRange()
+    range.setStart(owner[at].node, owner[at].offset)
+    const end = owner[at + needle.length - 1]
+    range.setEnd(end.node, end.offset + 1)
+    out[m.id] = [...range.getClientRects()].map((r) => ({
+      page: 0,
+      left: (r.left - base.left) / base.width,
+      top: (r.top - base.top) / base.height,
+      width: r.width / base.width,
+      height: r.height / base.height,
+    }))
+  }
+  return out
+}
+
 
 function PageCanvas({ page }: { page: PDFPageProxy }) {
   const ref = useRef<HTMLCanvasElement>(null)

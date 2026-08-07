@@ -369,17 +369,10 @@ def _import_worker(import_id: str, filename: str) -> None:
         actions.problem("上傳履歷「%s」失敗：檔案無法解析", filename)
 
 
-def render_import_pdf(import_id: str) -> Optional[bytes]:
-    """上傳履歷的排版預覽 PDF。轉一次就快取在上傳目錄。"""
+def import_source(import_id: str) -> Optional[bytes]:
     if db.get_import(import_id) is None or not input_path(import_id).exists():
         return None
-    src = input_path(import_id)
-    if src.suffix == ".pdf":       # 104 履歷本來就是 PDF，不需要 LibreOffice
-        return src.read_bytes()
-    cache = job_dir(import_id) / "original.pdf"
-    if not cache.exists():
-        cache.write_bytes(convert.docx_to_pdf(src.read_bytes()))
-    return cache.read_bytes()
+    return input_path(import_id).read_bytes()
 
 
 def get_import(import_id: str) -> Optional[Dict[str, Any]]:

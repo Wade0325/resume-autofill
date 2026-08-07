@@ -11,6 +11,8 @@ from ..schemas import ImportApplyIn, ImportApplyOut
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/imports", tags=["imports"])
 
+DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
 
 @router.post("")
 async def create_import(file: UploadFile = File(...)) -> dict:
@@ -36,16 +38,14 @@ def read_import(import_id: str) -> dict:
     return state
 
 
-@router.get("/{import_id}/preview.pdf")
-def preview_pdf(import_id: str) -> Response:
-    """上傳履歷的排版預覽。LibreOffice 不在時回 503，前端只顯示欄位清單。"""
-    try:
-        pdf = service.render_import_pdf(import_id)
-    except ConversionError as e:
-        raise HTTPException(503, str(e))
-    if pdf is None:
+@router.get("/{import_id}/source")
+def source(import_id: str) -> Response:
+    """上傳的原檔，交給前端自己渲染（PDF 用 pdf.js、docx 用 docx-preview）。"""
+    content = service.import_source(import_id)
+    if content is None:
         raise HTTPException(404, "找不到這次匯入的檔案")
-    return Response(content=pdf, media_type="application/pdf")
+    kind = "application/pdf" if service.input_path(import_id).suffix == ".pdf" else DOCX_MEDIA_TYPE
+    return Response(content=content, media_type=kind)
 
 
 @router.post("/{import_id}/apply", response_model=ImportApplyOut)
