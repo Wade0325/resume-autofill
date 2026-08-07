@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import document, llm
 from .document import Slot
 from .schema import (BLOCKED_LABELS, BY_KEY, BY_LABEL, DERIVED_FROM, FIELD_KEYS,
-                     LABEL_ALIASES, describe_fields)
+                     LABEL_ALIASES, OPTION_SYNONYMS, describe_fields)
 
 log = logging.getLogger(__name__)
 
@@ -541,12 +541,20 @@ def _pick_option(options: List[str], value: str) -> Optional[str]:
     # 包含比對只在雙方都夠長時才有意義。「可到職日 □隨時 □__週 ■8月17日」
     # 會解析出選項「8」，單字元一比就命中 2026-08-17，把日期勾成「8」。
     for o in options:
-        squashed = _squash(o)
-        if len(squashed) < 2 or len(target) < 2:
-            continue
-        if squashed in target or target in squashed:
-            return o
+        for alt in _alternatives(_squash(o)):
+            if alt == target:
+                return o
+            if len(alt) >= 2 and len(target) >= 2 and (alt in target or target in alt):
+                return o
     return None
+
+
+def _alternatives(squashed: str) -> List[str]:
+    for group in OPTION_SYNONYMS:
+        words = [_squash(g) for g in group]
+        if squashed in words:
+            return words
+    return [squashed]
 
 
 def _squash(text: str) -> str:

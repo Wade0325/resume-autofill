@@ -29,10 +29,17 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("basic.birthday", "出生年月日", kind="date", hint="西元年月日，例如 1996年04月15日"),
     FieldSpec("basic.age", "年齡"),
     FieldSpec("basic.nationality", "國籍"),
+    FieldSpec("basic.birthplace", "出生地"),
+    FieldSpec("basic.height", "身高", hint="公分數字，例如 175"),
+    FieldSpec("basic.weight", "體重", hint="公斤數字，例如 68"),
+    FieldSpec("basic.blood_type", "血型", kind="choice", choices=["A", "B", "O", "AB"]),
+    FieldSpec("basic.health", "健康狀況", kind="choice", choices=["優", "良", "可", "差"]),
     FieldSpec("basic.marital_status", "婚姻狀況", kind="choice", choices=["未婚", "已婚"]),
     FieldSpec("basic.military", "兵役狀況", kind="choice", choices=["役畢", "免役", "未役", "替代役", "不適用"]),
     FieldSpec("basic.identity_category", "身分別", kind="choice",
               choices=["無", "身心障礙", "原住民"], hint="表格上的身分別勾選欄"),
+    FieldSpec("basic.transport", "交通工具", kind="choice",
+              choices=["汽車", "機車", "大眾交通工具", "其他"], hint="通勤方式"),
     FieldSpec("basic.hobbies", "興趣", hint="休閒興趣，例如 羽球、桌球"),
 
     FieldSpec("contact.mobile", "行動電話"),
@@ -72,6 +79,8 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("experience[].salary", "月薪", kind="list",
               hint="固定月薪的金額數字，例如 52,000。津貼、獎金不要"),
     FieldSpec("experience[].is_supervisor", "擔任主管", kind="choice", choices=["是", "否"]),
+    FieldSpec("experience[].supervisor_title", "報告對象職稱", kind="list",
+              hint="當時直屬主管的職稱，例如 研發部經理"),
     FieldSpec("experience[].leave_reason", "離職原因", kind="list"),
 
     FieldSpec("skills.languages", "語文能力", kind="longtext"),
@@ -82,18 +91,27 @@ FIELDS: List[FieldSpec] = [
                        "職業小型車", "職業大貨車", "職業大客車"]),
     FieldSpec("skills.specialty", "專長", kind="longtext"),
 
+    # 表格只印一格「專業證照」時用 skills.certificates；
+    # 印成證照名稱／機構／字號的表格用這組多筆欄位
+    FieldSpec("certificate[].name", "證照名稱", kind="list"),
+    FieldSpec("certificate[].issuer", "考試機構", kind="list", hint="發證或考試的單位"),
+    FieldSpec("certificate[].number_date", "證照字號與取得日期", kind="list"),
+
     # 標籤刻意加「家人」前綴：表格印的「姓名」「職業」太通用，
     # 若直接當標籤會在確定性對齊時搶走別區同名的格子。
     FieldSpec("family[].relation", "家人稱謂", kind="list", hint="例如 父、母、兄"),
     FieldSpec("family[].name", "家人姓名", kind="list"),
     FieldSpec("family[].age", "家人年齡", kind="list"),
     FieldSpec("family[].occupation", "家人職業", kind="list"),
+    FieldSpec("family[].company", "家人服務機關", kind="list"),
+    FieldSpec("family[].contact", "家人住址電話", kind="list"),
 
     # 標籤同樣加前綴，理由同家庭狀況
     FieldSpec("reference[].name", "諮詢人姓名", kind="list"),
     FieldSpec("reference[].company", "諮詢人公司", kind="list"),
     FieldSpec("reference[].title", "諮詢人職稱", kind="list"),
     FieldSpec("reference[].phone", "諮詢人電話", kind="list"),
+    FieldSpec("reference[].location", "諮詢人公司所在地", kind="list", hint="縣市即可"),
     FieldSpec("reference[].relation", "諮詢人關係", kind="list", hint="與本人的關係，例如 直屬主管"),
 
     FieldSpec("emergency.name", "緊急聯絡人姓名"),
@@ -110,6 +128,18 @@ FIELDS: List[FieldSpec] = [
               choices=["無", "有"]),
     FieldSpec("declaration.ip_ownership", "擁有相關智慧財產權或專門技術", kind="choice",
               choices=["無", "有"]),
+    FieldSpec("declaration.criminal_record", "曾因刑事犯罪遭偵查或起訴", kind="choice",
+              choices=["無", "有"]),
+    FieldSpec("declaration.wanted", "遭任何國家通緝", kind="choice", choices=["無", "有"]),
+    FieldSpec("declaration.infectious_disease", "曾感染重大傳染病", kind="choice",
+              choices=["無", "有"]),
+    FieldSpec("declaration.drug_use", "曾吸食毒品", kind="choice", choices=["無", "有"]),
+    FieldSpec("declaration.dismissed", "曾遭免職或開除", kind="choice", choices=["無", "有"]),
+    FieldSpec("declaration.forged_documents", "持用不實證件或文件", kind="choice",
+              choices=["無", "有"]),
+    FieldSpec("declaration.debt", "負債狀況", kind="choice", choices=["無", "有"]),
+    FieldSpec("declaration.disability_certificate", "領有身心障礙手冊或曾患重大傷病",
+              kind="choice", choices=["無", "有"]),
 
     FieldSpec("autobiography", "自傳", kind="longtext"),
 ]
@@ -163,6 +193,13 @@ LABEL_ALIASES = {
     "日/夜": "education[].division",
     "畢/肄": "education[].status",
     "科系/所別": "education[].department",
+    "就讀學校": "education[].school",
+    "服務單位": "experience[].company",
+    "服務時間": "experience[].period",
+    "出生日期": "basic.birthday",
+    "可上班日期": "job.available_date",
+    "資訊來源": "job.recruit_channel",
+    "手機": "contact.mobile",
     # 學歷表的列首（大學/研究所…）右邊第一格就是學校名稱，
     # 列首挑第幾筆學歷由列指派處理，這裡只負責錨定欄位
     "大學": "education[].school",
@@ -178,10 +215,23 @@ for _f in FIELDS:
     _label_counts[_f.label] = _label_counts.get(_f.label, 0) + 1
 BY_LABEL = {f.label: f.key for f in FIELDS if _label_counts[f.label] == 1}
 
-# 印著這些字的格子一律不填：個人資料裡沒有對應欄位（這幾項連用戶表單都沒開），
-# 以及「幾年制」這種個人資料不會有的表單微欄位。
+# 印著這些字的格子一律不填。血型、身高、體重、出生地、身心障礙原本在這裡，
+# 2026-08-07 表單需要而補了對應欄位，就必須從這裡拿掉——留著會讓新欄位永遠填不進去。
 BLOCKED_LABELS = (
-    "血型", "身高", "體重", "出生地", "殘障手冊", "年制",
+    # 「幾年制」這種個人資料不會有的表單微欄位
+    "年制",
     # 每間公司不一樣的值，填了必錯，一律留白讓使用者手寫
-    "應徵職務", "應徵職位",
+    "應徵職務", "應徵職位", "應徵職缺",
+)
+
+# 勾選題是拿個人資料的值去比對表單上印出來的選項字串，同義不同字就整格填不進去：
+# 表單印「□是 □否」而資料存「無」、印「□退伍」而資料存「役畢」、
+# 印「駕照□汽車」而資料存「普通小型車」。
+OPTION_SYNONYMS = (
+    ("無", "否"),
+    ("有", "是"),
+    ("未婚", "單身"),
+    ("役畢", "退伍"),
+    ("普通小型車", "汽車"),
+    ("普通重型機車", "機車"),
 )
