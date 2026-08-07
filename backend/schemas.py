@@ -11,7 +11,6 @@ class FieldSpecOut(BaseModel):
     label: str
     kind: str
     choices: List[str] = []
-    hint: str = ""                    # 同一句話給模型看，也顯示在表單欄位下方
     derived: bool = False             # 由其他欄位合成，個人資料表單不顯示
 
 

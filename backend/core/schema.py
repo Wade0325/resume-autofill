@@ -14,7 +14,7 @@ class FieldSpec:
     label: str
     kind: str = "text"       # text | date | money | choice | longtext | list
     choices: List[str] = field(default_factory=list)
-    hint: str = ""           # 給模型的一句話說明
+    hint: str = ""           # 只給模型看，不會出現在表單上
     derived: bool = False    # 值由其他欄位合成，不出現在個人資料表單
 
 
@@ -42,7 +42,7 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("basic.identity_category", "身分別", kind="choice",
               choices=["無", "身心障礙", "原住民"], hint="表格上的身分別勾選欄"),
     FieldSpec("basic.transport", "交通工具", kind="choice",
-              choices=["汽車", "機車", "大眾交通工具", "其他"], hint="通勤方式"),
+              choices=["汽車", "機車", "大眾交通工具", "其他"]),
     FieldSpec("basic.hobbies", "興趣", hint="休閒興趣，例如 羽球、桌球"),
 
     FieldSpec("contact.mobile", "行動電話"),
