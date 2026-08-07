@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
+from contextlib import nullcontext
 from typing import Any, Dict, List, Union
 
 import requests
@@ -17,6 +19,24 @@ log = logging.getLogger(__name__)
 
 HEALTH_TIMEOUT = 0.5   # localhost 服務活著就是毫秒級回應
 CALL_TIMEOUT = 600
+
+
+_LANGFUSE: Any = False    # False＝還沒初始化，None＝確定不啟用
+
+
+def _tracer():
+    """開發時把每次呼叫送進 Langfuse。沒設金鑰或沒裝套件就完全不啟用——
+    正式版不該多一個相依，也不該把履歷內容送去任何地方。"""
+    global _LANGFUSE
+    if _LANGFUSE is False:
+        _LANGFUSE = None
+        if os.environ.get("LANGFUSE_PUBLIC_KEY"):
+            try:
+                from langfuse import Langfuse
+                _LANGFUSE = Langfuse()
+            except Exception as e:
+                log.warning("Langfuse 未啟用：%s", e)
+    return _LANGFUSE
 
 
 class LlmUnavailable(RuntimeError):
@@ -47,6 +67,18 @@ def supports_vision(host: str) -> bool:
 UserContent = Union[str, List[Dict[str, Any]]]
 
 
+def _traceable(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """截圖是幾百 KB 的 base64，送進 trace 只會把畫面塞爆，換成標記。"""
+    out = []
+    for m in messages:
+        content = m["content"]
+        if isinstance(content, list):
+            content = [p if p.get("type") != "image_url" else {"type": "image_url", "image_url": "<截圖>"}
+                       for p in content]
+        out.append({**m, "content": content})
+    return out
+
+
 def ask(host: str, system: str, user: UserContent, schema: Dict[str, Any],
         model: str = "local", label: str = "") -> Dict[str, Any]:
     payload = {
@@ -70,15 +102,30 @@ def ask(host: str, system: str, user: UserContent, schema: Dict[str, Any],
     images = 0 if isinstance(user, str) else sum(
         1 for p in user if isinstance(p, dict) and p.get("type") == "image_url")
 
-    t0 = time.perf_counter()
-    try:
-        r = requests.post(f"{host}/v1/chat/completions", json=payload, timeout=CALL_TIMEOUT)
-        r.raise_for_status()
-    except requests.RequestException as e:
-        raise LlmUnavailable(f"模型服務無法連線（{host}）：{e}") from e
+    tracer = _tracer()
+    traced = (tracer.start_as_current_generation(
+        name=label or "llm", model=model,
+        input=_traceable(payload["messages"]),
+        metadata={"schema": schema, "images": images})
+        if tracer else nullcontext())
 
-    choice = r.json()["choices"][0]
-    content = choice["message"]["content"] or ""
+    t0 = time.perf_counter()
+    with traced as generation:
+        try:
+            r = requests.post(f"{host}/v1/chat/completions", json=payload, timeout=CALL_TIMEOUT)
+            r.raise_for_status()
+        except requests.RequestException as e:
+            raise LlmUnavailable(f"模型服務無法連線（{host}）：{e}") from e
+
+        body = r.json()
+        choice = body["choices"][0]
+        content = choice["message"]["content"] or ""
+        if generation is not None:
+            usage = body.get("usage") or {}
+            generation.update(output=content, usage_details={
+                "input": usage.get("prompt_tokens", 0),
+                "output": usage.get("completion_tokens", 0)})
+
     log.info("模型呼叫 %s 提示=%d字 圖片=%d finish=%s 回應=%d字 耗時=%dms",
              label or "-", prompt_chars, images, choice.get("finish_reason"), len(content),
              int((time.perf_counter() - t0) * 1000))

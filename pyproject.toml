@@ -19,5 +19,10 @@ dependencies = [
     "pillow>=10",                # pypdfium2 輸出點陣圖轉 PNG
 ]
 
+[project.optional-dependencies]
+# 開發用的追蹤。設了 LANGFUSE_* 環境變數才會啟用，打包版不含它
+# 自架的 Langfuse 是 v3 架構，SDK 要跟著留在 v3
+dev = ["langfuse>=3,<4"]
+
 [tool.setuptools.packages.find]
 include = ["backend*"]

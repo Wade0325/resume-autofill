@@ -10,6 +10,22 @@ from pathlib import Path
 _ROOT = Path(os.environ.get("RESUME_AUTOFILL_ROOT",
                             Path(__file__).resolve().parent.parent))
 
+def _load_env_file() -> None:
+    """開發用的 .env（目前只有 Langfuse 金鑰）。真正的環境變數優先，
+    檔案不存在就跳過——不為了這件事引入額外套件。"""
+    path = _ROOT / ".env"
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip())
+
+
+_load_env_file()
+
 HOME = Path(os.environ.get("RESUME_AUTOFILL_HOME", _ROOT / "data"))
 DB_PATH = HOME / "app.db"
 JOBS_DIR = HOME / "jobs"

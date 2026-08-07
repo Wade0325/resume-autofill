@@ -252,6 +252,27 @@ tools/label_value.py         標籤值抽取實驗（逐行整理／截圖直出
 tests/prompt_test.py         最小 prompt 實驗場：一張截圖＋prompt 丟模型
 ```
 
+### 看模型實際收到什麼（Langfuse）
+
+`llm.ask` 是所有模型呼叫的唯一出入口，包了選擇性的 Langfuse 追蹤。
+金鑰填在根目錄的 `.env`（不入版控），填好重啟後端就開始送，留空就完全不啟用：
+
+```powershell
+pip install -e ".[dev]"
+# 編輯 .env 填入 LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY
+.\dev.ps1 backend
+```
+
+自架的 Langfuse 是 v3 架構，SDK 要跟著留在 v3（`langfuse>=3,<4`）——
+v4 換了資料模型與攝取端點，對 v3 伺服器送不進去。
+
+每次呼叫是一筆 generation：input 是完整的 system＋user 訊息、output 是模型回應、
+metadata 帶著那次用的 JSON Schema、usage 帶 token 數。頁面截圖會換成「<截圖>」
+——base64 幾百 KB 塞進 trace 只會讓畫面爆掉。
+
+**只用本機自架的 Langfuse。**提示詞裡是完整的履歷內容（身分證字號、生日、
+地址），送到雲端等於把個資上傳第三方，違背這個工具的定位。
+
 ### Log
 
 `data/logs/app.log`（程式根目錄下，UTF-8，5 MB × 5 輪替）。
