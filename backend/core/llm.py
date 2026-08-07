@@ -28,14 +28,22 @@ def _tracer():
     """開發時把每次呼叫送進 Langfuse。沒設金鑰或沒裝套件就完全不啟用——
     正式版不該多一個相依，也不該把履歷內容送去任何地方。"""
     global _LANGFUSE
-    if _LANGFUSE is False:
-        _LANGFUSE = None
-        if os.environ.get("LANGFUSE_PUBLIC_KEY"):
-            try:
-                from langfuse import Langfuse
-                _LANGFUSE = Langfuse()
-            except Exception as e:
-                log.warning("Langfuse 未啟用：%s", e)
+    if _LANGFUSE is not False:
+        return _LANGFUSE
+    _LANGFUSE = None
+    base = os.environ.get("LANGFUSE_BASE_URL", "")
+    if not os.environ.get("LANGFUSE_PUBLIC_KEY"):
+        return None
+    # SDK 沒指定位址時的預設值是 cloud.langfuse.com。提示詞裡是完整的履歷，
+    # 少設一個變數就把個資送上雲端——寧可不啟用也不能走那條路
+    if "cloud.langfuse.com" in base or not base:
+        log.warning("Langfuse 未啟用：LANGFUSE_BASE_URL 沒指向自架位址")
+        return None
+    try:
+        from langfuse import Langfuse
+        _LANGFUSE = Langfuse(base_url=base)
+    except Exception as e:
+        log.warning("Langfuse 未啟用：%s", e)
     return _LANGFUSE
 
 
