@@ -119,7 +119,7 @@
 ## 從原始碼執行（開發者）
 
 ```powershell
-.\dev.ps1           # 後端（8090）＋前端（5173）各開一個視窗，開發看 http://localhost:5173
+.\dev.ps1           # 後端（8090）＋前端（5177）各開一個視窗，開發看 http://localhost:5177
 .\dev.ps1 stop      # 全部停掉
 ```
 

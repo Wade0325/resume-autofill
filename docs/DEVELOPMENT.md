@@ -205,7 +205,7 @@ llama.cpp 把 schema 轉成 **GBNF grammar**，生成的每一步只允許符合
 ```powershell
 .\dev.ps1                # 後端＋前端各開一個視窗（日常開發）
 .\dev.ps1 backend        # 只跑後端，port 8090，目前視窗，Ctrl+C 結束
-.\dev.ps1 frontend       # 只跑前端，port 5173（proxy 已設）
+.\dev.ps1 frontend       # 只跑前端，port 5177（proxy 已設）
 .\dev.ps1 llm            # 只跑推論引擎，port 8085，等同 scripts\start-llama-server.ps1
 .\dev.ps1 stop           # 停掉這三個埠上的服務
 ```
@@ -224,6 +224,8 @@ cd frontend; npm install; npm run dev
 
 - `http://localhost:8090/docs` 是 API 互動文件。
 - 前端 build 後（`npm run build`）由後端托管，`http://localhost:8090/` 即完整介面。
+  **開發時不要用這個網址**：它給的是 `frontend/dist` 裡上次 build 的靜態檔，沒有熱更新，
+  改了原始碼也不會變。開發一律用 Vite 的 5177。
 - `--reload` 是整個行程重啟；資料都在 SQLite 與檔案裡所以無影響，正式啟動不要帶。
 - llama-server 的 `--ctx-size 16384` 不是隨便訂的：整份文件＋輸出，8192 會在生成中被截斷。
   `--temp 0` 讓判斷可重現；`--reasoning off` 關掉 Qwen 的 thinking 模式。

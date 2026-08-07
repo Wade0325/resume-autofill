@@ -11,7 +11,7 @@ param([ValidateSet("all", "backend", "frontend", "llm", "stop")][string]$Service
 
 $svc = [ordered]@{
     backend  = @{ Port = 8090; Dir = $PSScriptRoot;            Cmd = "python -m uvicorn backend.main:app --port 8090 --reload" }
-    frontend = @{ Port = 5173; Dir = "$PSScriptRoot\frontend"; Cmd = "npm run dev" }
+    frontend = @{ Port = 5177; Dir = "$PSScriptRoot\frontend"; Cmd = "npm run dev" }
     llm      = @{ Port = 8085; Dir = $PSScriptRoot;            Cmd = ".\scripts\start-llama-server.ps1" }
 }
 
@@ -34,4 +34,8 @@ foreach ($n in $(if ($all) { "backend", "frontend" } else { $Service })) {
     if ($all) { Start-Process powershell -WorkingDirectory $s.Dir -ArgumentList "-NoExit", "-Command", $s.Cmd }
     else      { Start-Process powershell -WorkingDirectory $s.Dir -ArgumentList "-Command", $s.Cmd -NoNewWindow -Wait }
 }
-if ($all) { "`n開發請開 http://localhost:5173　（API 文件 http://127.0.0.1:8090/docs，停止 .\dev.ps1 stop）" }
+if ($all) {
+    "`n開發請開 http://localhost:5177"
+    "8090 只拿來看 API（/docs）。用 8090 開介面會是上次 npm run build 的舊畫面，改了程式也不會變"
+    "停止： .\dev.ps1 stop"
+}
