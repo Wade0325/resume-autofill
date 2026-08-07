@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Set
 
 from docx import Document
@@ -21,6 +22,8 @@ from docx.text.paragraph import Paragraph
 
 from .document import (BLANK_RUN_RE, CHECKBOX_CHARS, CHECKED_CHARS,
                        TRAILING_COLON_RE, cell_text, iter_block_items)
+
+BOX_RE = re.compile(f"[{CHECKBOX_CHARS}{CHECKED_CHARS}]")
 
 
 def build(path: str, slot_ids: Set[str]) -> List[Dict[str, Any]]:
@@ -40,29 +43,48 @@ def build(path: str, slot_ids: Set[str]) -> List[Dict[str, Any]]:
     return blocks
 
 
+def _para_segs(text: str, base: str, slot_ids: Set[str]) -> List[Dict[str, str]]:
+    """一個段落的標記，id 必須跟 document._para_render 一致。
+
+    勾選群要拿到整段文字——前端 checkOption 靠整段去找方框。底線只有在
+    所有方框之後才切出來（「□免役，原因＿＿」）；夾在方框之間就整段不切
+    （「□是,請說明＿＿ □否」），切了會把後面的方框分到別段，勾「否」
+    就顯示不出來。
+    """
+    boxes = [m.start() for m in BOX_RE.finditer(text)]
+    blanks = list(BLANK_RUN_RE.finditer(text))
+    chk = f"{base}.chk"
+
+    if boxes and chk in slot_ids:
+        if not blanks or blanks[0].start() < boxes[-1]:
+            return [{"t": text, "s": chk}]
+        segs = [{"t": text[:blanks[0].start()], "s": chk}]
+        cursor = blanks[0].start()
+    else:
+        segs, cursor = [], 0
+
+    for bi, m in enumerate(blanks):
+        if m.start() < cursor:
+            continue
+        if text[cursor:m.start()]:
+            segs.append({"t": text[cursor:m.start()]})
+        # 底線本身就是要被填掉的空格，原文留著讓左邊看得到
+        sid = f"{base}.b{bi}"
+        segs.append({"t": m.group(), "s": sid} if sid in slot_ids else {"t": m.group()})
+        cursor = m.end()
+    if text[cursor:]:
+        segs.append({"t": text[cursor:]})
+    return segs
+
+
 def _paragraph_segs(para: Paragraph, index: int,
                     slot_ids: Set[str]) -> List[Dict[str, str]]:
     text = para.text.strip()
     if not text:
         return []
 
-    chk = f"p{index}.chk"
-    if chk in slot_ids and any(ch in text for ch in CHECKBOX_CHARS + CHECKED_CHARS):
-        return [{"t": text, "s": chk}]
-
-    blanks = list(BLANK_RUN_RE.finditer(text))
-    if blanks:
-        segs, cursor = [], 0
-        for bi, m in enumerate(blanks):
-            sid = f"p{index}.b{bi}"
-            if text[cursor:m.start()]:
-                segs.append({"t": text[cursor:m.start()]})
-            # 底線本身就是要被填掉的空格，原文留著讓左邊看得到
-            segs.append({"t": m.group(), "s": sid} if sid in slot_ids
-                        else {"t": m.group()})
-            cursor = m.end()
-        if text[cursor:]:
-            segs.append({"t": text[cursor:]})
+    segs = _para_segs(text, f"p{index}", slot_ids)
+    if any(s.get("s") for s in segs):
         return segs
 
     tail = f"p{index}.tail"
@@ -84,12 +106,27 @@ def _table_block(table: Table, table_index: int,
             width = int(span.get(qn("w:val"))) if span is not None else 1
             cell = _Cell(tc, table)
             sid = f"tbl{table_index}.r{r}.c{col}"
-            text = cell_text(cell).replace("\n", " ")
-            cells.append({
-                "colspan": width,
-                "segs": [{"t": text, "s": sid} if sid in slot_ids else {"t": text}],
-            })
+            cells.append({"colspan": width, "segs": _cell_segs(cell, sid, slot_ids)})
             col += width
         grid_cols = max(grid_cols, col)
         rows.append({"cells": cells})
     return {"kind": "table", "grid_cols": grid_cols, "rows": rows}
+
+
+def _cell_segs(cell: _Cell, sid: str, slot_ids: Set[str]) -> List[Dict[str, str]]:
+    """勾選格逐段落標記（document._para_render 讓每段各自是一個位置，
+    一格印六道是非題時每題都要能分別顯示），其餘整格一段。"""
+    if BOX_RE.search(cell_text(cell)):
+        segs: List[Dict[str, str]] = []
+        for i, para in enumerate(cell.paragraphs):
+            text = para.text.strip()
+            if not text:
+                continue
+            if segs:
+                segs.append({"t": " "})
+            segs += _para_segs(text, f"{sid}.p{i}", slot_ids)
+        if segs:
+            return segs
+
+    text = cell_text(cell).replace("\n", " ")
+    return [{"t": text, "s": sid} if sid in slot_ids else {"t": text}]
