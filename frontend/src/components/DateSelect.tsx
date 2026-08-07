@@ -1,16 +1,13 @@
 const NOW = new Date().getFullYear()
 const YEARS = Array.from({ length: 101 }, (_, i) => String(NOW + 10 - i))
 const MONTHS = Array.from({ length: 12 }, (_, i) => String(i + 1))
-// 日一律列 1~31：換月之後原本選好的日可能超出該月天數，選項若跟著縮短，
-// 那個值就顯示不出來（select 找不到對應 option 會變空白），使用者看不到問題在哪
-const DAYS = Array.from({ length: 31 }, (_, i) => String(i + 1))
 
 const SELECT_CLASS =
   'rounded-md border px-2 py-2 text-sm bg-white ' +
   'focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500 ' +
   'disabled:bg-slate-50 disabled:text-slate-400'
 const BORDER = 'border-slate-300'
-const BORDER_BAD = 'border-rose-500 text-rose-700'
+const BORDER_BAD = 'border-rose-500'
 
 type Parts = { y: string; m: string; d: string }
 
@@ -45,6 +42,10 @@ export default function DateSelect({ value, onChange }: Props) {
   // 不自動改掉使用者選的日：換月讓原本合法的日變得不存在時，值照樣留著，
   // 只把那一格框成紅色讓使用者自己決定要改哪一邊
   const dayBad = Boolean(parts.d) && Number(parts.d) > daysInMonth(parts.y, parts.m)
+  // 選項照月份給；換月讓原本選好的日超出範圍時額外留著它，
+  // 否則 select 找不到對應 option 會顯示空白，紅框裡看不到是哪一天出問題
+  const days = Array.from({ length: daysInMonth(parts.y, parts.m) }, (_, i) => String(i + 1))
+  if (dayBad) days.push(parts.d)
 
   return (
     <div className="flex items-center gap-1.5">
@@ -84,7 +85,7 @@ export default function DateSelect({ value, onChange }: Props) {
         onChange={(e) => set({ d: e.target.value })}
       >
         <option value="">--</option>
-        {DAYS.map((d) => (
+        {days.map((d) => (
           <option key={d} value={d}>
             {d}
           </option>
