@@ -203,10 +203,24 @@ llama.cpp 把 schema 轉成 **GBNF grammar**，生成的每一步只允許符合
 ## 6. 開發環境
 
 ```powershell
-.\scripts\start-llama-server.ps1                        # 推論引擎，port 8085
-cd frontend; npm install; npm run dev                    # 前端 dev server，port 5173（proxy 已設）
-python -m uvicorn backend.main:app --port 8090 --reload  # 後端，port 8090
+.\dev.ps1                # 後端＋前端各開一個視窗（日常開發）
+.\dev.ps1 backend        # 只跑後端，port 8090，目前視窗，Ctrl+C 結束
+.\dev.ps1 frontend       # 只跑前端，port 5173（proxy 已設）
+.\dev.ps1 llm            # 只跑推論引擎，port 8085，等同 scripts\start-llama-server.ps1
+.\dev.ps1 stop           # 停掉這三個埠上的服務
 ```
+
+`dev.ps1` 只是把下面三行包起來，直接下也一樣：
+
+```powershell
+python -m uvicorn backend.main:app --port 8090 --reload
+cd frontend; npm install; npm run dev
+.\scripts\start-llama-server.ps1
+```
+
+- `stop` 用 `taskkill /T` 連子行程一起殺：uvicorn 的 `--reload` 是「監看父行程＋服務子行程」兩個，
+  只殺父的話子行程會變孤兒繼續佔著 8090，症狀是重啟時說埠被佔用但看不到人。
+- `dev.ps1` 必須存成 **UTF-8 with BOM**；PowerShell 5.1 沒 BOM 會用 ANSI 讀，中文變亂碼直接解析失敗。
 
 - `http://localhost:8090/docs` 是 API 互動文件。
 - 前端 build 後（`npm run build`）由後端托管，`http://localhost:8090/` 即完整介面。

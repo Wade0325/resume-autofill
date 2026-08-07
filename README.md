@@ -119,10 +119,12 @@
 ## 從原始碼執行（開發者）
 
 ```powershell
-.\scripts\start-llama-server.ps1                        # 推論引擎（port 8085）
-cd frontend; npm install; npm run dev                    # 前端開發伺服器（port 5173）
-python -m uvicorn backend.main:app --port 8090 --reload  # 後端（port 8090）
+.\dev.ps1           # 後端（8090）＋前端（5173）各開一個視窗，開發看 http://localhost:5173
+.\dev.ps1 stop      # 全部停掉
 ```
+
+`.\dev.ps1 backend` / `frontend` / `llm` 可只跑單一服務（跑在目前視窗，Ctrl+C 結束）。
+推論引擎平常不用手動起——介面模型選單按「切換」時後端會自己拉起來。
 
 架構設計、AI 選型理由、處理流程與打包方式見 **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)**。
 打包發佈版：`.\scripts\build-package.ps1 -Zip`。
