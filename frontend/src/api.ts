@@ -38,14 +38,6 @@ export type JobState =
   | { status: 'failed'; error: string; filename: string }
   | { status: 'ready'; plan: Plan }
 
-export type PreviewSeg = { t: string; s?: string }
-export type PreviewCell = { colspan: number; segs: PreviewSeg[] }
-export type PreviewBlock =
-  | { kind: 'p'; segs: PreviewSeg[] }
-  | { kind: 'table'; grid_cols: number; rows: { cells: PreviewCell[] }[] }
-
-export type PreviewOut = { job_id: string; blocks: PreviewBlock[] }
-
 export type ImportRow = {
   row_id: string
   field_key: string
@@ -181,7 +173,6 @@ export const api = {
   analyze: (file: File, onProgress?: (pct: number) => void) =>
     upload<{ job_id: string; status: string; filename: string }>('/jobs', file, onProgress),
   getJob: (jobId: string) => request<JobState>(`/jobs/${jobId}`),
-  getPreview: (jobId: string) => request<PreviewOut>(`/jobs/${jobId}/preview`),
   fixMappings: (jobId: string, fixes: { slot_id: string; field_key: string }[]) =>
     request<Plan>(`/jobs/${jobId}/mappings`, {
       method: 'PATCH',

@@ -1,12 +1,11 @@
-import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, type FieldSpec, type Plan, type PlanItem, type PreviewOut } from '../api'
-import DocPreview from '../components/DocPreview'
+import { api, type FieldSpec, type Plan, type PlanItem } from '../api'
 import Dropzone, { type UploadPhase } from '../components/Dropzone'
 import { Header, ErrorBox } from '../components/common'
 
 // pdf.js 佔了主 bundle 一半以上，等真的要顯示預覽時再載
-const PdfCompare = lazy(() => import('../components/PdfCompare'))
+const DocxCompare = lazy(() => import('../components/DocxCompare'))
 
 // 切到別頁再切回來時要能接續，不必重傳檔案重跑一次模型
 const KEY_JOB = 'fill.jobId'
@@ -14,9 +13,6 @@ const KEY_JOB = 'fill.jobId'
 export default function FillPage() {
   const [fields, setFields] = useState<FieldSpec[]>([])
   const [plan, setPlan] = useState<Plan | null>(null)
-  const [preview, setPreview] = useState<PreviewOut | null>(null)
-  const [pdfOk, setPdfOk] = useState(true)
-  const [pdfMsg, setPdfMsg] = useState('')
   const [previewVersion, setPreviewVersion] = useState(0)
   const [phase, setPhase] = useState<UploadPhase>({ kind: 'idle' })
   const [busy, setBusy] = useState(false)
@@ -75,21 +71,7 @@ export default function FillPage() {
 
   // 預覽抓不到就退回只有清單，不擋主流程
   const jobId = plan?.job_id
-  useEffect(() => {
-    setPdfOk(true)
-    setPreviewVersion(0)
-    if (!jobId) {
-      setPreview(null)
-      return
-    }
-    api.getPreview(jobId).then(setPreview).catch(() => setPreview(null))
-  }, [jobId])
-
-  // 這台機器沒有 LibreOffice：PDF 永遠做不出來，退回結構化對照
-  const onPdfUnavailable = useCallback((message: string) => {
-    setPdfOk(false)
-    setPdfMsg(message)
-  }, [])
+  useEffect(() => setPreviewVersion(0), [jobId])
 
   async function run<T>(work: () => Promise<T>): Promise<T | undefined> {
     setBusy(true)
@@ -126,7 +108,7 @@ export default function FillPage() {
     )
     if (result) {
       setPlan(result)
-      setPreviewVersion((v) => v + 1) // 讓右邊的 PDF 重新產生
+      setPreviewVersion((v) => v + 1) // 讓右邊重新渲染
     }
   }
 
@@ -186,18 +168,11 @@ export default function FillPage() {
         </div>
       )}
 
-      {pdfOk ? (
-        <Suspense fallback={<div className="text-sm text-slate-400 py-8 text-center">預覽載入中…</div>}>
-          <PdfCompare jobId={plan.job_id} version={previewVersion} onUnavailable={onPdfUnavailable} />
-        </Suspense>
-      ) : (
-        <>
-          <div className="text-xs text-slate-500">{pdfMsg}——改用結構化對照顯示。</div>
-          {preview && <DocPreview blocks={preview.blocks} items={plan.items} />}
-        </>
-      )}
+      <Suspense fallback={<div className="text-sm text-slate-400 py-8 text-center">預覽載入中…</div>}>
+        <DocxCompare jobId={plan.job_id} version={previewVersion} />
+      </Suspense>
 
-      <details open={!pdfOk && !preview} className="group">
+      <details className="group">
         <summary className="cursor-pointer text-sm text-slate-600 hover:text-slate-900 select-none py-1">
           <span className="group-open:hidden">▸</span>
           <span className="hidden group-open:inline">▾</span> 檢視與修正對映清單（{plan.items.length} 個位置）

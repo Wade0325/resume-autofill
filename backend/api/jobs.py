@@ -12,6 +12,8 @@ from ..schemas import MappingsIn, OutputOut, PlanOut
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
+DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
 
 @router.post("")
 async def create_job(file: UploadFile = File(...)) -> dict:
@@ -49,28 +51,16 @@ def _ensure_ready(job_id: str) -> None:
         raise HTTPException(409, job.get("error") or "這次分析失敗了，請重新上傳")
 
 
-@router.get("/{job_id}/preview.pdf")
-def preview_pdf(job_id: str, which: str = "original") -> Response:
-    """排版預覽。LibreOffice 不在時回 503，前端退回結構化對照。"""
+@router.get("/{job_id}/preview.docx")
+def preview_docx(job_id: str, which: str = "original") -> Response:
+    """左右對照用的原稿與填寫後文件，前端自己渲染。"""
     if which not in ("original", "filled"):
         raise HTTPException(422, "which 必須是 original 或 filled")
     _ensure_ready(job_id)
-    try:
-        pdf = service.render_preview_pdf(job_id, which)
-    except ConversionError as e:
-        raise HTTPException(503, str(e))
-    if pdf is None:
+    content = service.preview_docx(job_id, which)
+    if content is None:
         raise HTTPException(404, "找不到這個 job")
-    return Response(content=pdf, media_type="application/pdf")
-
-
-@router.get("/{job_id}/preview")
-def read_preview(job_id: str) -> dict:
-    _ensure_ready(job_id)
-    result = service.get_preview(job_id)
-    if result is None:
-        raise HTTPException(404, "找不到這個 job")
-    return result
+    return Response(content=content, media_type=DOCX_MEDIA_TYPE)
 
 
 @router.patch("/{job_id}/mappings", response_model=PlanOut)
@@ -104,4 +94,4 @@ def download_output(job_id: str) -> FileResponse:
     actions.record("下載履歷「%s_已填寫.docx」成功", stem)
     return FileResponse(
         path, filename=f"{stem}_已填寫.docx",
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        media_type=DOCX_MEDIA_TYPE)
