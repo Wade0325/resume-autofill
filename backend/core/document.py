@@ -37,9 +37,6 @@ class Slot:
         return asdict(self)
 
 
-# --------------------------------------------------------------------------
-# 走訪工具
-# --------------------------------------------------------------------------
 def iter_block_items(parent) -> Iterator[Any]:
     body = parent.element.body if isinstance(parent, _Doc) else parent._tc
     for child in body.iterchildren():
@@ -74,9 +71,6 @@ def checkbox_options(text: str) -> List[str]:
     return out
 
 
-# --------------------------------------------------------------------------
-# 主要出口
-# --------------------------------------------------------------------------
 def load(path: str, overwritable: Optional[Set[str]] = None) -> Tuple[str, List[Slot]]:
     """回傳（帶位置標記的全文, 位置清單）。
 
@@ -222,9 +216,6 @@ def fingerprint(slots: List[Slot]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-# --------------------------------------------------------------------------
-# 各種位置
-# --------------------------------------------------------------------------
 def _content_controls(doc) -> List[Slot]:
     out = []
     for i, sdt in enumerate(doc.element.body.iter(qn("w:sdt"))):

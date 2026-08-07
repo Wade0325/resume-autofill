@@ -11,10 +11,9 @@ from __future__ import annotations
 
 import base64
 import logging
-import re
 from typing import Any, Dict, List, Optional
 
-from . import llm
+from . import document, llm
 from .schema import FIELDS, describe_fields
 
 log = logging.getLogger(__name__)
@@ -77,12 +76,8 @@ def _schema() -> Dict[str, Any]:
     return {"type": "object", "properties": props}
 
 
-def _squash(s: str) -> str:
-    return re.sub(r"[\s　]+", "", s)
-
-
 def _keep_verbatim(data: Dict[str, Any], source: str) -> Dict[str, Any]:
-    haystack = _squash(source)
+    haystack = document.squash(source)
     kept: Dict[str, Any] = {}
     dropped: List[str] = []
 
@@ -93,7 +88,7 @@ def _keep_verbatim(data: Dict[str, Any], source: str) -> Dict[str, Any]:
                 if not isinstance(row, dict):
                     continue
                 clean = {k: v.strip() for k, v in row.items()
-                         if isinstance(v, str) and v.strip() and _squash(v) in haystack}
+                         if isinstance(v, str) and v.strip() and document.squash(v) in haystack}
                 dropped += [f"{key}[].{k}" for k, v in row.items()
                             if isinstance(v, str) and v.strip() and k not in clean]
                 if clean:
@@ -101,7 +96,7 @@ def _keep_verbatim(data: Dict[str, Any], source: str) -> Dict[str, Any]:
             if rows:
                 kept[key] = rows
         elif isinstance(value, str) and value.strip():
-            if _squash(value) in haystack:
+            if document.squash(value) in haystack:
                 kept[key] = value.strip()
             else:
                 dropped.append(key)

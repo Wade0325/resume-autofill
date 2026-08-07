@@ -11,7 +11,7 @@ type Props = {
   isHighlighted?: (specKey: string, index: number) => boolean
 }
 
-/** 學歷／經歷這種可以有很多筆的區塊。列的順序就是填進表格的順序。 */
+/** 列的順序就是填進表格的順序。 */
 export default function RepeatList({ title, specs, items, onChange, isHighlighted }: Props) {
   function update(index: number, key: string, value: string) {
     const next = items.map((it, i) => (i === index ? { ...it, [key]: value } : it))

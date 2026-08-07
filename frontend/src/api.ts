@@ -33,7 +33,6 @@ export type Plan = {
   items: PlanItem[]
 }
 
-/** 上傳後的分析在背景跑，用這個輪詢進度 */
 export type JobState =
   | { status: 'processing'; stage: string; filename: string }
   | { status: 'failed'; error: string; filename: string }
@@ -62,7 +61,6 @@ export type ImportPreview = {
   rows: ImportRow[]
 }
 
-/** 匯入的讀取在背景跑，用這個輪詢進度 */
 export type ImportState =
   | { status: 'processing'; stage: string; filename: string }
   | { status: 'failed'; error: string; filename: string }

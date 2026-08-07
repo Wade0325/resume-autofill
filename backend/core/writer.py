@@ -28,9 +28,6 @@ from .document import BLANK_RUN_RE, CHECKBOX_CHARS, _grid
 CHECK_MAP = {"□": "■", "☐": "☑", "▢": "■", "◻": "◼", "○": "●", "〇": "●", "◯": "●"}
 
 
-# --------------------------------------------------------------------------
-# run 層級的工具
-# --------------------------------------------------------------------------
 def coalesce_runs(paragraph) -> None:
     """合併相鄰且格式相同的 run，讓文字變成連續可搜尋（不改變外觀）。"""
     runs = paragraph.runs
@@ -182,9 +179,6 @@ def _fill_checkbox(para, option: str, highlight: bool) -> bool:
     return False
 
 
-# --------------------------------------------------------------------------
-# 內容控制項 / 舊式表單欄位
-# --------------------------------------------------------------------------
 def _fill_sdt(doc, index: int, text: str) -> bool:
     sdts = list(doc.element.body.iter(qn("w:sdt")))
     if index >= len(sdts):
@@ -237,9 +231,6 @@ def _fill_formfield(doc, index: int, text: str) -> bool:
     return False
 
 
-# --------------------------------------------------------------------------
-# 對外主函式
-# --------------------------------------------------------------------------
 def apply_ops(src_path: str, out_path: str, ops: List[Any],
               highlight: bool = False) -> Dict[str, Any]:
     doc = Document(src_path)

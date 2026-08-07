@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { api, type FieldSpec, type ImportPreview, type ImportRow } from '../api'
 import { SECTIONS } from '../sections'
 import Dropzone, { type UploadPhase } from '../components/Dropzone'
+import { Header, ErrorBox } from '../components/common'
 
 // pdf.js 佔了主 bundle 一半以上，等真的要顯示履歷對照時再載
 const ResumeDocView = lazy(() => import('../components/ResumeDocView'))
@@ -362,19 +363,3 @@ function SelectAllBox({
   )
 }
 
-function Header({ title, desc }: { title: string; desc: string }) {
-  return (
-    <div>
-      <h1 className="text-xl font-semibold text-slate-900">{title}</h1>
-      <p className="text-sm text-slate-500 mt-1">{desc}</p>
-    </div>
-  )
-}
-
-function ErrorBox({ message }: { message: string }) {
-  return (
-    <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-md px-4 py-3 text-sm">
-      {message}
-    </div>
-  )
-}

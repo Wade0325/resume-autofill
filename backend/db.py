@@ -88,7 +88,6 @@ def init() -> None:
     log.info("資料庫就緒 path=%s", config.DB_PATH)
 
 
-# ---------------- kv：profile / settings ----------------
 def get_kv(key: str, default: Any = None) -> Any:
     with connect() as conn:
         row = conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
@@ -109,7 +108,6 @@ def get_settings() -> Dict[str, Any]:
     return {**config.DEFAULT_SETTINGS, **stored}
 
 
-# ---------------- template：範本學習成果 ----------------
 def get_template(fingerprint: str) -> Dict[str, str]:
     with connect() as conn:
         row = conn.execute("SELECT mapping FROM template WHERE fingerprint = ?",
@@ -127,18 +125,12 @@ def put_template(fingerprint: str, mapping: Dict[str, str], source_name: str = "
             (fingerprint, source_name, json.dumps(mapping, ensure_ascii=False), _now()))
 
 
-# ---------------- job：一次上傳的處理過程 ----------------
-def create_job(job_id: str, filename: str, fingerprint: str = "",
-               anchors: Optional[List[Dict[str, Any]]] = None,
-               decided: Optional[Dict[str, Any]] = None,
-               status: str = "analyzed") -> None:
+def create_job(job_id: str, filename: str, status: str) -> None:
     with connect() as conn:
         conn.execute(
             "INSERT INTO job (id, filename, fingerprint, status, anchors, decided, "
             "created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (job_id, filename, fingerprint, status,
-             json.dumps(anchors or [], ensure_ascii=False),
-             json.dumps(decided or {}, ensure_ascii=False), _now()))
+            (job_id, filename, "", status, "[]", "{}", _now()))
 
 
 def get_job(job_id: str) -> Optional[Dict[str, Any]]:
@@ -195,7 +187,6 @@ def fail_stale_jobs() -> int:
     return n
 
 
-# ---------------- import_job：一次匯入讀到的資料 ----------------
 def create_import(import_id: str, filename: str) -> None:
     with connect() as conn:
         conn.execute(

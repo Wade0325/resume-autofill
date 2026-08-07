@@ -45,11 +45,8 @@ Decision = Tuple[str, int, float, str, str]   # field_key, ordinal, confidence, 
 
 # 舊版由模型照抄標籤，常把 {{tbl1.r2.c6}} 位置標記一起抄回來；
 # 快取裡可能還留著這種髒 label，讀出來時清掉
-_MARKER_RE = re.compile(r"\{\{[^{}]*\}\}")
-
-
 def _clean_label(raw: Any) -> str:
-    return _MARKER_RE.sub("", str(raw or "")).strip()[:40]
+    return document.MARKER_RE.sub("", str(raw or "")).strip()[:40]
 
 
 # 標籤 → 欄位的確定性對照（squash 後精確比對），decide 與 align_labels 共用
@@ -71,9 +68,6 @@ def _mech_label(slot: Slot, headers: Dict[str, Dict[str, str]]) -> str:
     return (row or col)[:40]
 
 
-# --------------------------------------------------------------------------
-# 決定對映
-# --------------------------------------------------------------------------
 def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
                      cached: Optional[Dict[str, Any]] = None,
                      headers: Optional[Dict[str, Dict[str, str]]] = None,
@@ -113,7 +107,6 @@ def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
     # 格尾附加型位置（「郵遞區號□□□」）自己印著提示字：既是可填位置也是標籤
     tail_locs = {loc for loc, s in by_loc.items() if s.loc.get("tail_para")}
 
-    # ---- 蒐集錨點：標籤文字 → 它能餵到的可填位置 ----
     # (標籤, 位置們, 錨定方式, 同列列首) 列首是解析語意的上下文：
     # 「姓名」印在緊急連絡人那一列時是連絡人的姓名，不是本人的
     anchors: List[Tuple[str, List[Slot], str, str]] = []
@@ -154,7 +147,6 @@ def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
                     # 提示字後面沒有別的空格可填 → 值就接在自己格尾
                     anchors.append((text, [by_loc[(t, r, c)]], "self", ctx))
 
-    # ---- 標籤 → 欄位代碼：對照表 → 學過的 → 一次小呼叫問模型 ----
     # 對照表與學過的比對不看上下文（能精確對上的標籤本身就無歧義，
     # 泛用短標籤在學習端就被擋掉了）；模型解析要看：
     # 同字不同列首（姓名｜緊急連絡人）是不同的欄位
@@ -181,7 +173,7 @@ def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
             unknown[comp] = shown
     model_keys = _resolve_labels(unknown, host, model) if unknown else {}
 
-    # ---- 指派：同格自帶 > 右鄰 > 下方；先到先得 ----
+    # self/right/below＝同格自帶 > 右鄰 > 下方，先到先得
     for want in ("self", "right", "below"):
         for label, targets, mode, ctx in anchors:
             if mode != want:
@@ -201,7 +193,7 @@ def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
                     decisions[s.id] = (key, 0, conf, source,
                                        label.replace("\n", " ")[:40])
 
-    # ---- 錨不住的一律留白待人工；標籤用機械抽取的給使用者認格子 ----
+    # 錨不住的一律留白待人工，標籤用機械抽取的給使用者認格子
     for s in pending:
         if s.id not in decisions:
             decisions[s.id] = ("__UNKNOWN__", 0, 0.0, "rule", _mech_label(s, headers))
@@ -487,11 +479,8 @@ def _renumber(slots: List[Slot], decisions: Dict[str, Decision]) -> None:
             decisions[sid] = (key, ordinal, conf, source, label)
 
 
-# --------------------------------------------------------------------------
-# 產生計畫
-# --------------------------------------------------------------------------
 def build_plan(slots: List[Slot], profile: Dict[str, Any],
-               decisions: Dict[str, Decision], min_confidence: float = 0.60
+               decisions: Dict[str, Decision], min_confidence: float
                ) -> Tuple[List[FillOp], List[FillOp]]:
     by_id = {s.id: s for s in slots}
     ops: List[FillOp] = []
@@ -564,9 +553,6 @@ def _squash(text: str) -> str:
     return re.sub(r"[\s　:：*※()（）\[\]]+", "", text or "").lower()
 
 
-# --------------------------------------------------------------------------
-# profile 存取
-# --------------------------------------------------------------------------
 def get_value(profile: Dict[str, Any], key: str, ordinal: int = 0):
     stored = _stored(profile, key, ordinal)
     if stored:

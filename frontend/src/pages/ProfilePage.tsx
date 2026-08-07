@@ -4,6 +4,7 @@ import { api, type FieldSpec, type Profile } from '../api'
 import { SECTIONS, type Section } from '../sections'
 import Field from '../components/Field'
 import RepeatList from '../components/RepeatList'
+import { ErrorBox } from '../components/common'
 
 export default function ProfilePage() {
   const [fields, setFields] = useState<FieldSpec[]>([])
@@ -277,15 +278,6 @@ function UnsavedDialog({
   )
 }
 
-function ErrorBox({ message }: { message: string }) {
-  return (
-    <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-md px-4 py-3 text-sm">
-      {message}
-    </div>
-  )
-}
-
-// ---- profile 是巢狀物件，這兩個小工具負責用 "basic.name_zh" 這種路徑存取 ----
 function readPath(obj: Profile, path: string): string {
   let cur: any = obj
   for (const part of path.split('.')) {

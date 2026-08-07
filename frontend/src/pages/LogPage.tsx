@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type LogEntry } from '../api'
+import { ErrorBox } from '../components/common'
 
 const LEVELS = [
   { id: '', label: '全部' },
@@ -46,11 +47,7 @@ export default function LogPage() {
         <p className="text-sm text-slate-500 mt-1">你在這裡做過的操作與結果。</p>
       </div>
 
-      {error && (
-        <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-md px-4 py-3 text-sm">
-          {error}
-        </div>
-      )}
+      {error && <ErrorBox message={error} />}
 
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex gap-1">

@@ -169,7 +169,6 @@ function PageCanvas({ page }: { page: PDFPageProxy }) {
 
 const SQUASH_RE = /[\s　]+/g
 
-/** 把整份文件的文字攤平（去空白）做子字串搜尋，命中的字元反查回文字片段的座標。 */
 function findBoxes(pages: PageData[], marks: Mark[]): Record<string, Box[]> {
   if (pages.length === 0) return {}
 
