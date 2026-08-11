@@ -264,23 +264,24 @@ function Row({
           className="w-4 h-4 accent-sky-600"
         />
       </td>
-      <td className="px-4 py-2.5">
+      <td className="px-4 py-2.5 align-top">
         <span className="text-slate-800">{label}</span>
         {row.ordinal > 0 && (
           <span className="ml-1 text-xs text-slate-400">第 {row.ordinal + 1} 筆</span>
         )}
       </td>
-      <td className="px-4 py-2.5">
+      {/* 值可能是整段自傳或多行工作內容:完整顯示、保留換行,不截斷 */}
+      <td className="px-4 py-2.5 align-top whitespace-pre-wrap break-words">
         {row.current.trim() ? (
           <span className={willOverwrite ? 'line-through text-slate-400' : 'text-slate-600'}>
-            {row.current.slice(0, 24)}
+            {row.current}
           </span>
         ) : (
           <span className="text-slate-300">（空白）</span>
         )}
       </td>
-      <td className="px-4 py-2.5 text-slate-900">
-        {row.incoming.slice(0, 30)}
+      <td className="px-4 py-2.5 align-top whitespace-pre-wrap break-words text-slate-900">
+        {row.incoming}
         {willOverwrite && <OverwriteBadge>將覆蓋</OverwriteBadge>}
       </td>
     </tr>
