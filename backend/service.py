@@ -440,5 +440,9 @@ def _import_rows(extracted: Dict[str, Any]) -> List[ImportRow]:
         else:
             add(key, 0, value)
 
-    rows.sort(key=lambda r: (r.field_key, r.ordinal))
+    # 照欄位定義表的順序排,不是字母序——字母序會讓 end(離職)跑到
+    # start(到職)前面。BY_KEY 的插入順序就是 FIELDS 的人工排序,
+    # 和「我的資料」表單的欄位順序一致
+    order = {key: i for i, key in enumerate(BY_KEY)}
+    rows.sort(key=lambda r: (order.get(r.field_key, len(order)), r.ordinal))
     return rows
