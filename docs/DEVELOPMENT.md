@@ -107,7 +107,7 @@ llama-server 的啟動、切換、模型下載都由後端的模型選單管理�
      只替換文字節點；勾選題把 □ 換成 ■；短提示格用附加不覆蓋
      │
      ▼
-   完成的 .docx ＋ 稽核清單（填了什麼、略過什麼、來源與信心值）
+   完成的 .docx ＋ 稽核清單（填了什麼、略過什麼、決策來源）
 ```
 
 同一份格式只需要判斷一次：決策連同格式指紋存入範本快取，
@@ -192,10 +192,9 @@ MR Breeze 3（語音模型，非文字分類）。
       "schema": {
         "type": "object",
         "properties": {
-          "field_key": { "enum": ["basic.name_zh", "contact.mobile", "..."] },
-          "confidence": { "type": "number" }
+          "field_key": { "enum": ["basic.name_zh", "contact.mobile", "..."] }
         },
-        "required": ["field_key", "confidence"]
+        "required": ["field_key"]
       }
     }
   }
@@ -247,8 +246,6 @@ cd frontend; npm install; npm run dev
 tools/make_sample.py         產生標準測試表格
 tools/make_tricky_sample.py  標籤刻意寫怪，測模型層
 tools/snapshot.py            docx 整份截成頁面 PNG
-tools/vision_lines.py        視覺逐行辨識實驗
-tools/label_value.py         標籤值抽取實驗（逐行整理／截圖直出）
 tests/prompt_test.py         最小 prompt 實驗場：一張截圖＋prompt 丟模型
 ```
 

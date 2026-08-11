@@ -18,7 +18,7 @@ router = APIRouter(tags=["meta"])
 def health() -> HealthOut:
     available = llm.available(config.LLM_HOST)
     try:
-        db.get_kv("settings")
+        db.get_kv("profile")   # 只是確認資料庫打得開，讀哪個 key 都行
         db_ok = True
     except Exception:
         log.exception("資料庫檢查失敗")

@@ -35,7 +35,6 @@ API_HOST = os.environ.get("RESUME_AUTOFILL_API_HOST", "127.0.0.1")
 # 8000/8080 常被開發工具佔走（VS Code 就會），選冷門一點的預設值
 API_PORT = int(os.environ.get("RESUME_AUTOFILL_API_PORT", "8090"))
 
-# 推論引擎位置屬於部署設定，與使用者可調的門檻分開（後者存在 DB 的 settings）
 LLM_HOST = os.environ.get("RESUME_AUTOFILL_LLM_HOST", "http://localhost:8085")
 LLM_MODEL = os.environ.get("RESUME_AUTOFILL_LLM_MODEL", "Qwen3.5-9B-Q4_K_M")
 LLM_CTX_SIZE = int(os.environ.get("RESUME_AUTOFILL_LLM_CTX", "16384"))
@@ -46,10 +45,6 @@ LLAMA_SERVER = Path(os.environ.get("RESUME_AUTOFILL_LLAMA_SERVER", _ROOT / "bin"
 LOG_LEVEL = os.environ.get("RESUME_AUTOFILL_LOG_LEVEL", "INFO")
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 JOB_RETENTION_HOURS = 24
-
-DEFAULT_SETTINGS = {
-    "min_confidence": 0.60,
-}
 
 
 def ensure_dirs() -> None:
