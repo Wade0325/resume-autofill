@@ -273,9 +273,24 @@ function PageCanvas({ page }: { page: PDFPageProxy }) {
 
 const SQUASH_RE = /[\s　]+/g
 
-// NFKC 要跟後端 convert.pdf_to_text 一致：PDF 字型常把中文對映到康熙部首區
+// NFKC 不涵蓋部首補充區（U+2E80–2EFF），「民」「長」會存成 ⺠ ⻑——
+// 跟後端 convert.pdf_to_text 的 _RADICALS 是同一張表，兩邊要一起改
+const RADICALS: Record<string, string> = {
+  '⺇': '几', '⺊': '卜', '⺒': '巳', '⺓': '幺',
+  '⺝': '月', '⺞': '歹', '⺟': '母', '⺠': '民',
+  '⺩': '王', '⺪': '疋', '⺬': '示', '⻁': '虎',
+  '⻄': '西', '⻆': '角', '⻑': '長', '⻘': '青',
+  '⻝': '食', '⻣': '骨', '⻤': '鬼', '⻱': '龜',
+}
+const RADICAL_RE = /[⺀-⻿]/g
+
+// NFKC 要跟後端 convert.pdf_to_text 一致：PDF 字型常把中文對映到部首區
 // （「工」存成 U+2F2F），肉眼一樣但碼位不同，不正規化就框不出抽到的值
-const squash = (s: string) => s.normalize('NFKC').replace(SQUASH_RE, '')
+const squash = (s: string) =>
+  s
+    .normalize('NFKC')
+    .replace(RADICAL_RE, (c) => RADICALS[c] ?? c)
+    .replace(SQUASH_RE, '')
 
 function findBoxes(pages: PageData[], marks: Mark[]): Record<string, Box[]> {
   if (pages.length === 0) return {}
