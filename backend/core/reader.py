@@ -37,6 +37,36 @@ VISION_RULE = """
    但輸出的值一律以「履歷全文」的文字為準逐字照抄，不要抄截圖上看起來的字。"""
 
 
+# ── 文件的區塊常識 ─────────────────────────────────────────────
+# 履歷由區塊組成(學歷、工作經驗、自傳…)。_section_texts() 據此把全文
+# 切成 {區塊: 內容}——自傳整段照收,標題下的內容就是值,不需要語意判讀。
+_SECTIONS = {
+    "autobiography": ("自傳", "自我介紹", "自我推薦"),
+}
+# 不取內容、只當區塊結尾的標題
+_BOUNDARY_HEADS = {"專案成就", "作品集", "作品", "語言能力", "求職條件",
+                   "專長", "技能", "推薦人", "家庭狀況", "緊急聯絡人", "附件",
+                   "工作經驗", "工作經歷", "學歷", "教育背景", "資格認證", "證照"}
+
+
+def _section_texts(text: str) -> Dict[str, str]:
+    """把原文切成 {區塊: 內容}。標題要獨立成行(squash 後精確比對)才算,
+    內文撞名不會誤切;切不出來的區塊就不在結果裡。"""
+    heads = {h: root for root, hs in _SECTIONS.items() for h in hs}
+    out: Dict[str, List[str]] = {}
+    current: Optional[str] = None
+    for line in text.splitlines():
+        head = document.squash(line)
+        if head in heads:
+            current = heads[head]
+            out.setdefault(current, [])
+        elif head in _BOUNDARY_HEADS:
+            current = None
+        elif current is not None:
+            out[current].append(line)
+    return {root: "\n".join(lines).strip() for root, lines in out.items()}
+
+
 # 這些欄位群是「求職者以外的人」:文件裡沒有對應區塊時,模型會拿求職者
 # 自己的姓名電話充當(實測連明文禁令都擋不住)。解法下沉到文法——原文
 # 掃不到關鍵字,欄位就不進 schema,受限解碼下模型連生成的機會都沒有。
@@ -66,6 +96,7 @@ def read(text: str, host: str, model: str,
     if closed:
         log.info("上傳的履歷沒有對應區塊，schema 關閉欄位群：%s", ",".join(sorted(closed)))
     schema = _schema(closed)
+    sections = _section_texts(text)
     user = f"可抽取的欄位：\n{describe_fields(include_special=False, skip_derived=True)}\n\n履歷全文：\n{text}"
     if images:
         content: List[Dict[str, Any]] = [{"type": "text", "text": user}]
@@ -77,7 +108,15 @@ def read(text: str, host: str, model: str,
                        model=model, label=f"讀取履歷(視覺{len(images)}頁)")
     else:
         data = llm.ask(host, SYSTEM_PROMPT, user, schema, model=model, label="讀取履歷")
-    return _keep_verbatim(data, text)
+    kept = _keep_verbatim(data, text)
+
+    # 自傳「標題下面整段照收」:模型要逐字抄上千字幾乎不可能(抄錯一字
+    # 就被驗證整段丟棄),所以它一律跳過。程式直接取,逐字正確是天生的
+    autobio = sections.get("autobiography", "")
+    if not kept.get("autobiography") and len(autobio) >= 30:
+        kept["autobiography"] = autobio
+        log.info("自傳由程式擷取 %d 字", len(autobio))
+    return kept
 
 
 def _schema(closed: set = frozenset()) -> Dict[str, Any]:
