@@ -37,6 +37,23 @@ VISION_RULE = """
    但輸出的值一律以「履歷全文」的文字為準逐字照抄，不要抄截圖上看起來的字。"""
 
 
+# 這些欄位群是「求職者以外的人」:文件裡沒有對應區塊時,模型會拿求職者
+# 自己的姓名電話充當(實測連明文禁令都擋不住)。解法下沉到文法——原文
+# 掃不到關鍵字,欄位就不進 schema,受限解碼下模型連生成的機會都沒有。
+# 關鍵字保守列舉:漏抽讓人手填,比張冠李戴還預設打勾好。
+_SECTION_GATES = {
+    "reference": ("推薦人", "諮詢人", "介紹人", "reference"),
+    "family": ("家庭狀況", "家庭成員", "家屬", "家人", "父親", "母親"),
+    "emergency": ("緊急聯絡", "緊急連絡", "emergency"),
+}
+
+
+def _closed_sections(text: str) -> set:
+    low = text.lower()
+    return {root for root, keywords in _SECTION_GATES.items()
+            if not any(k in low for k in keywords)}
+
+
 def read(text: str, host: str, model: str,
          images: Optional[List[bytes]] = None) -> Dict[str, Any]:
     """回傳 {欄位代碼: 值}；列表欄位回傳 {root: [{sub: 值}]}。
@@ -45,6 +62,10 @@ def read(text: str, host: str, model: str,
     合併儲存格、標籤與值的歸屬比攤平文字好判斷。逐字驗證照舊，
     看圖看錯的值會因為不在原文中而被丟掉。
     """
+    closed = _closed_sections(text)
+    if closed:
+        log.info("上傳的履歷沒有對應區塊，schema 關閉欄位群：%s", ",".join(sorted(closed)))
+    schema = _schema(closed)
     user = f"可抽取的欄位：\n{describe_fields(include_special=False, skip_derived=True)}\n\n履歷全文：\n{text}"
     if images:
         content: List[Dict[str, Any]] = [{"type": "text", "text": user}]
@@ -52,20 +73,22 @@ def read(text: str, host: str, model: str,
             b64 = base64.b64encode(img).decode("ascii")
             content.append({"type": "image_url",
                             "image_url": {"url": f"data:image/png;base64,{b64}"}})
-        data = llm.ask(host, SYSTEM_PROMPT + VISION_RULE, content, _schema(),
+        data = llm.ask(host, SYSTEM_PROMPT + VISION_RULE, content, schema,
                        model=model, label=f"讀取履歷(視覺{len(images)}頁)")
     else:
-        data = llm.ask(host, SYSTEM_PROMPT, user, _schema(), model=model, label="讀取履歷")
+        data = llm.ask(host, SYSTEM_PROMPT, user, schema, model=model, label="讀取履歷")
     return _keep_verbatim(data, text)
 
 
-def _schema() -> Dict[str, Any]:
+def _schema(closed: set = frozenset()) -> Dict[str, Any]:
     props: Dict[str, Any] = {}
     rows: Dict[str, Dict[str, Any]] = {}
 
     for f in FIELDS:
         # 合成欄位（就學期間＝入學＋畢業）由起訖兩欄算出來，抽了也進不了表單
         if f.derived:
+            continue
+        if f.key.split("[].")[0].split(".")[0] in closed:
             continue
         if "[]." in f.key:
             root, sub = f.key.split("[].", 1)
