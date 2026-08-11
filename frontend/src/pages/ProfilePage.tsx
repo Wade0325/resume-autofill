@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'react-router-dom'
-import { api, type FieldSpec, type Profile } from '../api'
+import { api, errorText, type FieldSpec, type Profile } from '../api'
 import { SECTIONS, type Section } from '../sections'
 import Field from '../components/Field'
 import RepeatList from '../components/RepeatList'
@@ -37,7 +37,7 @@ export default function ProfilePage() {
         setFields(f.filter((x) => !x.derived))
         setProfile(p)
       })
-      .catch((e) => setError(e.message))
+      .catch((e) => setError(errorText(e)))
   }, [location.key])
 
   // 一次只顯示一個主題，被高亮的欄位若不在當前主題就看不見了，
@@ -68,7 +68,7 @@ export default function ProfilePage() {
       setDirty(false)
       return true
     } catch (e: any) {
-      setError(e.message)
+      setError(errorText(e))
       return false
     } finally {
       setSaving(false)

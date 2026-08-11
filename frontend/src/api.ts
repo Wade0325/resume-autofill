@@ -12,12 +12,9 @@ export type PlanItem = {
   slot_id: string
   label: string
   kind: string
-  options: string[]
   field_key: string
-  ordinal: number
   value: string
   existing: string
-  confidence: number
   source: string
   status: 'fill' | 'skip'
   note: string
@@ -26,7 +23,6 @@ export type PlanItem = {
 export type Plan = {
   job_id: string
   filename: string
-  fingerprint: string
   template_cached: boolean
   llm_available: boolean
   stats: { slots: number; fill: number; skip: number; by_source: Record<string, number> }
@@ -90,7 +86,7 @@ export type ModelsOut = {
 export type Profile = Record<string, any>
 
 /** 後端錯誤一律帶 X-Request-Id，附在訊息裡才對得到 log。 */
-export class ApiError extends Error {
+class ApiError extends Error {
   requestId: string
   constructor(message: string, requestId: string) {
     super(message)
@@ -98,20 +94,35 @@ export class ApiError extends Error {
   }
 }
 
+async function ensureOk(res: Response): Promise<void> {
+  if (res.ok) return
+  const requestId = res.headers.get('X-Request-Id') ?? ''
+  let detail = `HTTP ${res.status}`
+  try {
+    const body = await res.json()
+    if (body.detail) detail = body.detail
+  } catch {
+    // 回應不是 JSON（例如 proxy 掛了），沿用狀態碼當訊息
+  }
+  throw new ApiError(detail, requestId)
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, init)
-  const requestId = res.headers.get('X-Request-Id') ?? ''
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`
-    try {
-      const body = await res.json()
-      if (body.detail) detail = body.detail
-    } catch {
-      // 回應不是 JSON（例如 proxy 掛了），沿用狀態碼當訊息
-    }
-    throw new ApiError(detail, requestId)
-  }
+  await ensureOk(res)
   return res.json() as Promise<T>
+}
+
+/** 二進位資源（docx / pdf 預覽）。錯誤處理與 request 相同。 */
+export async function fetchBlob(path: string): Promise<Blob> {
+  const res = await fetch(`/api${path}`)
+  await ensureOk(res)
+  return res.blob()
+}
+
+/** 顯示給使用者的錯誤文字：後端錯誤附追蹤碼，回報問題時對得到 log。 */
+export function errorText(e: any): string {
+  return e?.requestId ? `${e.message}（追蹤碼 ${e.requestId}）` : e?.message ?? String(e)
 }
 
 /**
@@ -180,10 +191,7 @@ export const api = {
       body: JSON.stringify({ fixes }),
     }),
   makeOutput: (jobId: string) =>
-    postJson<{ written: number; failed: number; download_url: string }>(
-      `/jobs/${jobId}/output`,
-      {},
-    ),
+    postJson<{ written: number; failed: number }>(`/jobs/${jobId}/output`, {}),
   downloadUrl: (jobId: string) => `/api/jobs/${jobId}/output`,
 
   analyzeImport: (file: File, onProgress?: (pct: number) => void) =>

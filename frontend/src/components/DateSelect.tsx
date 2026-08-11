@@ -96,7 +96,7 @@ export default function DateSelect({ value, onChange }: Props) {
 }
 
 /** 認得 1996年04月15日、1996-04-15、1996/04、民國85年3月；認不得回傳 null。 */
-export function parseDate(raw: string): Parts | null {
+function parseDate(raw: string): Parts | null {
   const s = raw.trim()
   if (!s) return { y: '', m: '', d: '' }
   // 夾雜其他字（「84年3月起」「預計2025年」）一律當作認不得，

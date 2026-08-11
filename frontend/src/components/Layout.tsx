@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
-import { api, type ModelInfo, type ModelsOut } from '../api'
+import { api, errorText, type ModelInfo, type ModelsOut } from '../api'
 
 const TABS = [
   { to: '/profile', label: '我的資料', hint: '只需填一次' },
@@ -86,13 +86,13 @@ function ModelMenu() {
     )
       return
     setErr('')
-    api.selectModel(m.name).then(refresh).catch((e) => setErr(e.message))
+    api.selectModel(m.name).then(refresh).catch((e) => setErr(errorText(e)))
   }
 
   const download = (m: ModelInfo) => {
     if (!window.confirm(`要下載「${shortName(m.name)}」嗎？檔案約 ${m.size_gb} GB。`)) return
     setErr('')
-    api.downloadModel(m.name).then(refresh).catch((e) => setErr(e.message))
+    api.downloadModel(m.name).then(refresh).catch((e) => setErr(errorText(e)))
   }
 
   const downloadVision = (m: ModelInfo) => {
@@ -104,7 +104,7 @@ function ModelMenu() {
     )
       return
     setErr('')
-    api.downloadModel(m.name).then(refresh).catch((e) => setErr(e.message))
+    api.downloadModel(m.name).then(refresh).catch((e) => setErr(errorText(e)))
   }
 
   const downloadCustom = () => {
@@ -115,7 +115,7 @@ function ModelMenu() {
         setCustomUrl('')
         refresh()
       })
-      .catch((e) => setErr(e.message))
+      .catch((e) => setErr(errorText(e)))
   }
 
   const pill = pillState(info, offline)

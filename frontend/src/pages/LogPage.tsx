@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, type LogEntry } from '../api'
+import { api, errorText, type LogEntry } from '../api'
 import { ErrorBox } from '../components/common'
 
 const LEVELS = [
@@ -21,7 +21,7 @@ export default function LogPage() {
         setEntries(rows)
         setError('')
       })
-      .catch((e) => setError(e.message))
+      .catch((e) => setError(errorText(e)))
   }, [level])
 
   useEffect(() => {
@@ -37,7 +37,7 @@ export default function LogPage() {
     api
       .clearLogs()
       .then(load)
-      .catch((e) => setError(e.message))
+      .catch((e) => setError(errorText(e)))
   }
 
   return (
