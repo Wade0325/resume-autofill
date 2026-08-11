@@ -104,6 +104,10 @@ def read(text: str, host: str, model: str,
         log.info("上傳的履歷沒有對應區塊，schema 關閉欄位群：%s", ",".join(sorted(closed)))
     schema = _schema(closed)
     sections = _section_texts(text)   # 全文只切一次,驗證與自傳擷取共用
+    # DEBUG 會寫入履歷內容,預設 INFO 不出現——log 可能被附在問題回報裡
+    log.debug("read: text_len=%d images=%d closed=%s sections=%s",
+              len(text), len(images or []), sorted(closed),
+              {r: len(t) for r, t in sections.items()})
     user = f"可抽取的欄位：\n{describe_fields(include_special=False, skip_derived=True)}\n\n履歷全文：\n{text}"
     if images:
         content: List[Dict[str, Any]] = [{"type": "text", "text": user}]
@@ -115,6 +119,7 @@ def read(text: str, host: str, model: str,
                        model=model, label=f"讀取履歷(視覺{len(images)}頁)")
     else:
         data = llm.ask(host, SYSTEM_PROMPT, user, schema, model=model, label="讀取履歷")
+    log.debug("llm raw output: %r", data)
     kept = _keep_verbatim(data, text, sections)
 
     # 自傳「標題下面整段照收」:模型要逐字抄上千字幾乎不可能(抄錯一字
@@ -181,8 +186,9 @@ def _keep_verbatim(data: Dict[str, Any], source: str,
     for key, value in data.items():
         if isinstance(value, list):
             hay = scoped.get(key, haystack)
+            scope = key if key in scoped else "whole"
             rows = []
-            for row in value:
+            for i, row in enumerate(value):
                 if not isinstance(row, dict):
                     continue
                 clean: Dict[str, str] = {}
@@ -191,6 +197,8 @@ def _keep_verbatim(data: Dict[str, Any], source: str,
                         continue
                     fkey = f"{key}[].{k}"
                     reason = _drop_reason(fkey, v, hay, haystack)
+                    log.debug("verify %s#%d value=%r scope=%s(len=%d) -> %s",
+                              fkey, i, v[:40], scope, len(hay), reason or "keep")
                     if reason:
                         dropped.append(fkey)
                     else:
@@ -201,6 +209,8 @@ def _keep_verbatim(data: Dict[str, Any], source: str,
                 kept[key] = rows
         elif isinstance(value, str) and value.strip():
             reason = _drop_reason(key, value, haystack, haystack)
+            log.debug("verify %s value=%r scope=whole(len=%d) -> %s",
+                      key, value[:40], len(haystack), reason or "keep")
             if reason:
                 dropped.append(key)
             else:

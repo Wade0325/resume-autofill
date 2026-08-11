@@ -8,10 +8,13 @@ PDF 本身就是排版結果，每個字的座標都寫在檔案裡，直接畫�
 from __future__ import annotations
 
 import io
+import logging
 import re
 import unicodedata
 
 import pypdfium2 as pdfium
+
+log = logging.getLogger(__name__)
 
 
 def pdf_to_page_pngs(content: bytes, scale: float = 300 / 72) -> list[bytes]:
@@ -103,4 +106,10 @@ def pdf_to_text(content: bytes) -> str:
         pages = [_page_text(pdf[i].get_textpage()) for i in range(len(pdf))]
     finally:
         pdf.close()
-    return unicodedata.normalize("NFKC", "\n".join(pages)).translate(_RADICALS).strip()
+    normalized = unicodedata.normalize("NFKC", "\n".join(pages))
+    translated = normalized.translate(_RADICALS)
+    radicals = sum(1 for a, b in zip(normalized, translated) if a != b)
+    fixed = translated.strip()
+    log.debug("pdf_to_text: pages=%d chars=%d radical_fixes=%d",
+              len(pages), len(fixed), radicals)
+    return fixed

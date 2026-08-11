@@ -65,3 +65,8 @@ def setup_logging(log_dir: Path, level: str = "INFO") -> None:
         lg.handlers.clear()
         lg.propagate = True
     logging.getLogger("uvicorn.access").disabled = True
+
+    # 開 DEBUG 是為了看自己程式的變數狀態，第三方套件的 DEBUG（watchfiles
+    # 每次檔案掃描、urllib3 每個連線）只會把它淹掉，一律壓在 INFO
+    for name in ("watchfiles", "urllib3", "requests", "PIL", "httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.INFO)
