@@ -37,16 +37,23 @@ VISION_RULE = """
    但輸出的值一律以「履歷全文」的文字為準逐字照抄，不要抄截圖上看起來的字。"""
 
 
-# ── 文件的區塊常識 ─────────────────────────────────────────────
-# 履歷由區塊組成(學歷、工作經驗、自傳…)。_section_texts() 據此把全文
-# 切成 {區塊: 內容}——自傳整段照收,標題下的內容就是值,不需要語意判讀。
+# ── 文件的區塊常識:一張表,三個應用 ─────────────────────────────
+# 履歷由區塊組成(學歷、工作經驗、自傳…)。_SECTIONS 是唯一事實來源,
+# _section_texts() 據此把全文切成 {區塊: 內容},供兩件事用:
+#   1. 自傳整段照收(標題下的內容就是值,不需要語意判讀)
+#   2. 清單欄位的區塊內驗證(工作經歷的值必須出現在工作經驗區塊裡)
+# 第三個應用是 _SECTION_GATES 的 schema 閘門——它刻意用「子字串」比對
+# 而非「整行標題」:表格型文件的「推薦人」是儲存格標籤,不會獨立成行,
+# 用整行比對會誤關。兩種比對語意不同,所以是兩張表。
 _SECTIONS = {
     "autobiography": ("自傳", "自我介紹", "自我推薦"),
+    "experience": ("工作經驗", "工作經歷"),
+    "education": ("學歷", "教育背景"),
+    "certificate": ("資格認證", "證照"),
 }
 # 不取內容、只當區塊結尾的標題
 _BOUNDARY_HEADS = {"專案成就", "作品集", "作品", "語言能力", "求職條件",
-                   "專長", "技能", "推薦人", "家庭狀況", "緊急聯絡人", "附件",
-                   "工作經驗", "工作經歷", "學歷", "教育背景", "資格認證", "證照"}
+                   "專長", "技能", "推薦人", "家庭狀況", "緊急聯絡人", "附件"}
 
 
 def _section_texts(text: str) -> Dict[str, str]:
@@ -96,7 +103,7 @@ def read(text: str, host: str, model: str,
     if closed:
         log.info("上傳的履歷沒有對應區塊，schema 關閉欄位群：%s", ",".join(sorted(closed)))
     schema = _schema(closed)
-    sections = _section_texts(text)
+    sections = _section_texts(text)   # 全文只切一次,驗證與自傳擷取共用
     user = f"可抽取的欄位：\n{describe_fields(include_special=False, skip_derived=True)}\n\n履歷全文：\n{text}"
     if images:
         content: List[Dict[str, Any]] = [{"type": "text", "text": user}]
@@ -108,7 +115,7 @@ def read(text: str, host: str, model: str,
                        model=model, label=f"讀取履歷(視覺{len(images)}頁)")
     else:
         data = llm.ask(host, SYSTEM_PROMPT, user, schema, model=model, label="讀取履歷")
-    kept = _keep_verbatim(data, text)
+    kept = _keep_verbatim(data, text, sections)
 
     # 自傳「標題下面整段照收」:模型要逐字抄上千字幾乎不可能(抄錯一字
     # 就被驗證整段丟棄),所以它一律跳過。程式直接取,逐字正確是天生的
@@ -146,43 +153,58 @@ def _schema(closed: set = frozenset()) -> Dict[str, Any]:
 DATE_ONLY_RE = re.compile(r"^[\d\s年月日民國/.-]+$")
 
 
-def _plausible(key: str, value: str, haystack: str) -> bool:
-    """值必須逐字出現在原文，日期欄位還要真的長得像日期。
+def _drop_reason(key: str, value: str, hay: str, whole: str) -> Optional[str]:
+    """值該不該丟?回傳丟棄原因代碼,None＝通過。
 
-    模型很愛把年齡當生日（104 履歷只印「28歲」），那個值確實出現在原文，
+    值必須逐字出現在驗證範圍內；日期欄位還要真的長得像日期——模型很愛
+    把年齡當生日（104 履歷只印「28歲」），那個值確實出現在原文，
     光靠逐字驗證擋不住，會直接蓋掉使用者原本填好的生日。
     """
-    if document.squash(value) not in haystack:
-        return False
+    sq = document.squash(value)
+    if sq not in hay:
+        return "not_in_section" if (hay is not whole and sq in whole) else "not_in_source"
     spec = BY_KEY.get(key)
-    return not (spec and spec.kind == "date" and not DATE_ONLY_RE.match(value.strip()))
+    if spec and spec.kind == "date" and not DATE_ONLY_RE.match(value.strip()):
+        return "not_a_date"
+    return None
 
 
-def _keep_verbatim(data: Dict[str, Any], source: str) -> Dict[str, Any]:
+def _keep_verbatim(data: Dict[str, Any], source: str,
+                   sections: Dict[str, str]) -> Dict[str, Any]:
     haystack = document.squash(source)
+    # 清單欄位群切得出區塊時,驗證範圍縮小到自己的區塊——「待業中」(就業
+    # 狀態)才不會被充當成離職原因。切不出就退回全文,不會比較嚴
+    scoped = {root: document.squash(t) for root, t in sections.items() if t}
     kept: Dict[str, Any] = {}
     dropped: List[str] = []
 
     for key, value in data.items():
         if isinstance(value, list):
+            hay = scoped.get(key, haystack)
             rows = []
             for row in value:
                 if not isinstance(row, dict):
                     continue
-                clean = {k: v.strip() for k, v in row.items()
-                         if isinstance(v, str) and v.strip()
-                         and _plausible(f"{key}[].{k}", v, haystack)}
-                dropped += [f"{key}[].{k}" for k, v in row.items()
-                            if isinstance(v, str) and v.strip() and k not in clean]
+                clean: Dict[str, str] = {}
+                for k, v in row.items():
+                    if not (isinstance(v, str) and v.strip()):
+                        continue
+                    fkey = f"{key}[].{k}"
+                    reason = _drop_reason(fkey, v, hay, haystack)
+                    if reason:
+                        dropped.append(fkey)
+                    else:
+                        clean[k] = v.strip()
                 if clean:
                     rows.append(clean)
             if rows:
                 kept[key] = rows
         elif isinstance(value, str) and value.strip():
-            if _plausible(key, value, haystack):
-                kept[key] = value.strip()
-            else:
+            reason = _drop_reason(key, value, haystack, haystack)
+            if reason:
                 dropped.append(key)
+            else:
+                kept[key] = value.strip()
 
     if dropped:
         # 只記欄位代碼——被丟掉的多半是模型改寫過的個資
