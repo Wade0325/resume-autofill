@@ -35,7 +35,5 @@ foreach ($n in $(if ($all) { "backend", "frontend" } else { $Service })) {
     else      { Start-Process powershell -WorkingDirectory $s.Dir -ArgumentList "-Command", $s.Cmd -NoNewWindow -Wait }
 }
 if ($all) {
-    "`n開發請開 http://localhost:5177"
-    "8090 只拿來看 API（/docs）。用 8090 開介面會是上次 npm run build 的舊畫面，改了程式也不會變"
-    "停止： .\dev.ps1 stop"
+    "已開啟 server http://localhost:5177"
 }
