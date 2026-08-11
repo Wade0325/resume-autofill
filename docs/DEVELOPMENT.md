@@ -245,7 +245,6 @@ cd frontend; npm install; npm run dev
 ```
 tools/make_sample.py         產生標準測試表格
 tools/make_tricky_sample.py  標籤刻意寫怪，測模型層
-tools/snapshot.py            docx 整份截成頁面 PNG
 tests/prompt_test.py         最小 prompt 實驗場：一張截圖＋prompt 丟模型
 ```
 

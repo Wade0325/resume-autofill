@@ -37,7 +37,7 @@ def main() -> None:
         # 「最新」會落在最後一頁，時間戳還常平手
         pngs = sorted((ROOT / "input" / "imagesz").glob("*.png"))
         if not pngs:
-            sys.exit("input/imagesz 裡沒有截圖，先跑 python tools/snapshot.py")
+            sys.exit("input/imagesz 裡沒有截圖，先放幾張履歷頁面的 PNG 進去")
         image = pngs[0]
 
     b64 = base64.b64encode(image.read_bytes()).decode("ascii")
