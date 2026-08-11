@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class FieldSpecOut(BaseModel):
@@ -27,21 +27,14 @@ class HealthOut(BaseModel):
     llm: LlmStatus
 
 
-class SettingsIn(BaseModel):
-    min_confidence: float = Field(0.60, ge=0.0, le=1.0)
-
-
 class PlanItem(BaseModel):
     slot_id: str
-    label: str = ""                   # 表格上印在這格旁邊的字，由模型抄回來
+    label: str = ""                   # 表格上印在這格旁邊的字，機械抽取自列首／欄首
     kind: str
-    options: List[str] = []
     field_key: str
-    ordinal: int = 0                  # 第幾筆學歷／經歷
     value: str
     existing: str = ""                # 文件原本就有的內容，非空代表這一格會被覆蓋
-    confidence: float
-    source: str                       # cache | model | manual
+    source: str                       # rule | learned | model | cache | manual
     status: Literal["fill", "skip"]
     note: str = ""
 
@@ -56,7 +49,6 @@ class PlanStats(BaseModel):
 class PlanOut(BaseModel):
     job_id: str
     filename: str
-    fingerprint: str
     template_cached: bool
     llm_available: bool
     stats: PlanStats
@@ -76,8 +68,6 @@ class OutputOut(BaseModel):
     job_id: str
     written: int
     failed: int
-    learned: int
-    download_url: str
 
 
 class ImportRow(BaseModel):
