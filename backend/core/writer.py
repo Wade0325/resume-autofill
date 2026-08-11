@@ -34,7 +34,7 @@ UNCHECK_MAP = {"■": "□", "☑": "☐", "◼": "◻"}
 
 def coalesce_runs(paragraph) -> None:
     """合併相鄰且格式相同的 run，讓文字變成連續可搜尋（不改變外觀）。"""
-    runs = paragraph.runs
+    runs = list(paragraph.runs)
     i = 0
     while i < len(runs) - 1:
         a, b = runs[i], runs[i + 1]
@@ -48,7 +48,7 @@ def coalesce_runs(paragraph) -> None:
         if same and not has_special:
             a.text = a.text + b.text
             b._element.getparent().remove(b._element)
-            runs = paragraph.runs
+            del runs[i + 1]
         else:
             i += 1
 
@@ -83,10 +83,9 @@ def _donor_run(table: Table, row_idx: int):
     return None
 
 
-def _write_into_cell(table: Table, row: int, col: int, text: str,
-                     highlight: bool) -> bool:
-    grid = _grid(table)
-    if row >= len(grid) or col >= len(grid[row]) or grid[row][col] is None:
+def _write_into_cell(table: Table, grid: List[List[Any]], row: int, col: int,
+                     text: str, highlight: bool) -> bool:
+    if row >= len(grid) or col >= len(grid[row]):
         return False
     cell = grid[row][col]
     para = cell.paragraphs[0] if cell.paragraphs else cell.add_paragraph()
@@ -104,11 +103,10 @@ def _write_into_cell(table: Table, row: int, col: int, text: str,
     return True
 
 
-def _append_into_cell(table: Table, row: int, col: int, text: str,
+def _append_into_cell(grid: List[List[Any]], row: int, col: int, text: str,
                       highlight: bool) -> bool:
     """寫進儲存格尾端的空白段落，保留格子裡印好的提示字（郵遞區號□□□）。"""
-    grid = _grid(table)
-    if row >= len(grid) or col >= len(grid[row]) or grid[row][col] is None:
+    if row >= len(grid) or col >= len(grid[row]):
         return False
     cell = grid[row][col]
     para = next((p for p in reversed(cell.paragraphs) if not p.text.strip()), None)
@@ -213,8 +211,7 @@ def _fill_checkbox(para, option: str, highlight: bool,
     return _replace_span(para, pos, pos + 1, CHECK_MAP.get(para.text[pos], "■"), highlight)
 
 
-def _fill_sdt(doc, index: int, text: str) -> bool:
-    sdts = list(doc.element.body.iter(qn("w:sdt")))
+def _fill_sdt(sdts: List[Any], index: int, text: str) -> bool:
     if index >= len(sdts):
         return False
     sdt = sdts[index]
@@ -234,8 +231,7 @@ def _fill_sdt(doc, index: int, text: str) -> bool:
     return False
 
 
-def _fill_formfield(doc, index: int, text: str) -> bool:
-    ffs = list(doc.element.body.iter(qn("w:ffData")))
+def _fill_formfield(ffs: List[Any], index: int, text: str) -> bool:
     if index >= len(ffs):
         return False
     run = ffs[index].getparent().getparent()          # ffData -> fldChar -> r
@@ -270,6 +266,21 @@ def apply_ops(src_path: str, out_path: str, ops: List[Any],
     doc = Document(src_path)
     ok, fail = [], []
 
+    # 每個 op 都重攤網格／重掃全文的話，成本是 O(op 數×表格大小)。
+    # 這裡的寫入只動 run 與文字節點、不動表格結構，快取是安全的。
+    grids: Dict[int, List[List[Any]]] = {}
+    scans: Dict[str, List[Any]] = {}
+
+    def grid_of(ti: int) -> List[List[Any]]:
+        if ti not in grids:
+            grids[ti] = _grid(doc.tables[ti])
+        return grids[ti]
+
+    def scan_of(tag: str) -> List[Any]:
+        if tag not in scans:
+            scans[tag] = list(doc.element.body.iter(qn(tag)))
+        return scans[tag]
+
     # 同一段落有多個填空時，必須由後往前寫，
     # 否則填完第 1 個空格後，後面空格的字元位置就跑掉了。
     ops = sorted(ops, key=lambda o: -o.slot.loc.get("blank_index", 0))
@@ -281,20 +292,19 @@ def apply_ops(src_path: str, out_path: str, ops: List[Any],
         done = False
         try:
             if kind == "sdt":
-                done = _fill_sdt(doc, loc["sdt_index"], op.value)
+                done = _fill_sdt(scan_of("w:sdt"), loc["sdt_index"], op.value)
             elif kind == "formfield":
-                done = _fill_formfield(doc, loc["ff_index"], op.value)
+                done = _fill_formfield(scan_of("w:ffData"), loc["ff_index"], op.value)
             elif kind == "cell":
-                table = doc.tables[loc["table"]]
                 if loc.get("tail_para"):
-                    done = _append_into_cell(table, loc["row"], loc["col"],
-                                             op.value, highlight)
+                    done = _append_into_cell(grid_of(loc["table"]), loc["row"],
+                                             loc["col"], op.value, highlight)
                 else:
-                    done = _write_into_cell(table, loc["row"], loc["col"],
-                                            op.value, highlight)
+                    done = _write_into_cell(doc.tables[loc["table"]], grid_of(loc["table"]),
+                                            loc["row"], loc["col"], op.value, highlight)
             elif kind == "inline":
                 if "table" in loc:
-                    cell = _grid(doc.tables[loc["table"]])[loc["row"]][loc["col"]]
+                    cell = grid_of(loc["table"])[loc["row"]][loc["col"]]
                     para = cell.paragraphs[loc["para_in_cell"]]
                 else:
                     para = doc.paragraphs[loc["para"]]
@@ -304,8 +314,7 @@ def apply_ops(src_path: str, out_path: str, ops: List[Any],
                     done = _fill_checkbox(doc.paragraphs[loc["para"]], op.value,
                                           highlight, op.clear)
                 else:
-                    grid = _grid(doc.tables[loc["table"]])
-                    cell = grid[loc["row"]][loc["col"]]
+                    cell = grid_of(loc["table"])[loc["row"]][loc["col"]]
                     idx = loc.get("para_in_cell")
                     paras = [cell.paragraphs[idx]] if idx is not None else cell.paragraphs
                     for p in paras:

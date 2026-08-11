@@ -37,13 +37,12 @@ class Slot:
         return asdict(self)
 
 
-def iter_block_items(parent) -> Iterator[Any]:
-    body = parent.element.body if isinstance(parent, _Doc) else parent._tc
-    for child in body.iterchildren():
+def iter_block_items(doc: _Doc) -> Iterator[Any]:
+    for child in doc.element.body.iterchildren():
         if child.tag == qn("w:p"):
-            yield Paragraph(child, parent)
+            yield Paragraph(child, doc)
         elif child.tag == qn("w:tbl"):
-            yield Table(child, parent)
+            yield Table(child, doc)
 
 
 def cell_text(cell: _Cell) -> str:
@@ -71,37 +70,106 @@ def checkbox_options(text: str) -> List[str]:
     return out
 
 
-def load(path: str, overwritable: Optional[Set[str]] = None) -> Tuple[str, List[Slot]]:
-    """回傳（帶位置標記的全文, 位置清單）。
+class ParsedDoc:
+    """一份 docx 只解析一次。
 
-    空白的位置一律可填。已經有字的格子只有在 overwritable 裡才算可填——
-    表格印好的欄位名稱與使用者填的值長得一樣（都是非空儲存格），
-    差別只在後者是這個人的資料。那份清單由 reader 讀出來，所以判斷依據
-    仍然是模型，不是規則。
+    分析流程要用到全文、可填位置、表格網格、列首欄首——各自重新
+    Document(path)＋重算網格的話，範本快取命中（理應最快的路徑）時
+    重複解析就是全部的延遲。python-docx 樹與攤平網格在這裡建一次，
+    其餘都從同一份導出。只讀不寫；要改文件的 writer 自己另開一份。
     """
-    doc = Document(path)
-    overwritable = {squash(v) for v in (overwritable or set())}
-    slots: List[Slot] = []
-    lines: List[str] = []
 
-    slots += _content_controls(doc)
-    slots += _form_fields(doc)
+    def __init__(self, path: str):
+        self.doc = Document(path)
+        self._blocks = list(iter_block_items(self.doc))
+        self.tables = [b for b in self._blocks if isinstance(b, Table)]
+        self.paragraphs = [b for b in self._blocks if isinstance(b, Paragraph)]
+        self.grids = [_grid(t) for t in self.tables]
+        self._table_texts: Optional[List[List[List[str]]]] = None
 
-    # 段落序號必須是 doc.paragraphs 的索引，writer 靠它定位
-    table_index = 0
-    para_index = 0
-    for block in iter_block_items(doc):
-        if isinstance(block, Paragraph):
-            line = _paragraph_line(block, para_index, slots)
-            if line:
-                lines.append(line)
-            para_index += 1
-        elif isinstance(block, Table):
-            lines.append(f"[表格{table_index}]")
-            lines += _table_lines(block, table_index, slots, overwritable)
-            table_index += 1
+    def table_texts(self) -> List[List[List[str]]]:
+        """每張表格攤平後的文字網格 [表][列][欄]，合併儲存格在涵蓋的每格重複。
 
-    return "\n".join(lines), slots
+        給標籤錨定用：印著字的格子是標籤、可填位置在它右邊或下面。
+        """
+        if self._table_texts is None:
+            self._table_texts = [[[cell_text(c) for c in row] for row in g]
+                                 for g in self.grids]
+        return self._table_texts
+
+    def flatten(self, overwritable: Optional[Set[str]] = None) -> Tuple[str, List[Slot]]:
+        """回傳（帶位置標記的全文, 位置清單）。
+
+        空白的位置一律可填。已經有字的格子只有在 overwritable 裡才算可填——
+        表格印好的欄位名稱與使用者填的值長得一樣（都是非空儲存格），
+        差別只在後者是這個人的資料。那份清單由 reader 讀出來，所以判斷依據
+        仍然是模型，不是規則。
+        """
+        overwritable = {squash(v) for v in (overwritable or set())}
+        slots: List[Slot] = []
+        lines: List[str] = []
+
+        slots += _content_controls(self.doc)
+        slots += _form_fields(self.doc)
+
+        # 段落序號必須是 doc.paragraphs 的索引，writer 靠它定位
+        table_index = 0
+        para_index = 0
+        for block in self._blocks:
+            if isinstance(block, Paragraph):
+                line = _paragraph_line(block, para_index, slots)
+                if line:
+                    lines.append(line)
+                para_index += 1
+            elif isinstance(block, Table):
+                lines.append(f"[表格{table_index}]")
+                lines += _table_lines(self.grids[table_index], table_index,
+                                      slots, overwritable)
+                table_index += 1
+
+        return "\n".join(lines), slots
+
+    def slot_headers(self, slots: List[Slot]) -> Dict[str, Dict[str, str]]:
+        """每個位置的「列首」與「欄首」——同列往左、同欄往上第一格有字的內容。
+        段落型位置（p6.b0 之類）沒有列欄概念，列首放空格前面印的那段字。
+
+        這是機械抽取，不經過模型，所以可靠。用途：對映結果的標籤顯示、
+        確定性標籤對齊、列指派——「列首＝高中/專科」比整份攤平全文精準得多。
+        """
+        by_table: Dict[int, List[Slot]] = {}
+        for s in slots:
+            if "table" in s.loc:
+                by_table.setdefault(s.loc["table"], []).append(s)
+
+        out: Dict[str, Dict[str, str]] = {}
+        for ti, tslots in by_table.items():
+            if ti >= len(self.tables):
+                continue
+            grid = self.grids[ti]
+            texts = self.table_texts()[ti]
+            for s in tslots:
+                r, c = s.loc["row"], s.loc["col"]
+                if r >= len(texts):
+                    continue
+                row_hdr = next(
+                    (t for t in reversed(texts[r][:c]) if t.strip() and not is_blank(t)), "")
+                col_hdr = ""
+                for rr in range(r - 1, -1, -1):
+                    if c < len(texts[rr]) and texts[rr][c].strip() and not is_blank(texts[rr][c]):
+                        col_hdr = texts[rr][c]
+                        break
+                # 儲存格段落裡的底線：底線前面印的字（「…，原因」）比列首精準
+                pic = s.loc.get("para_in_cell")
+                if "blank_index" in s.loc and pic is not None:
+                    row_hdr = _para_label(grid[r][c].paragraphs[pic].text, s)
+                out[s.id] = {"row": row_hdr.replace("\n", " ")[:20],
+                             "col": col_hdr.replace("\n", " ")[:20]}
+
+        for s in slots:
+            if "para" not in s.loc or s.loc["para"] >= len(self.paragraphs):
+                continue
+            out[s.id] = {"row": _para_label(self.paragraphs[s.loc["para"]].text, s), "col": ""}
+        return out
 
 
 # load() 加在可填位置上的 {{id}} 標記
@@ -135,68 +203,7 @@ def text_only(path: str) -> str:
     標記若留著，模型抽值時會把 {{p6.tail}} 這種記號照抄成值，
     而逐字驗證比對的又是同一份帶標記的文字，攔不下來。
     """
-    return MARKER_RE.sub("", load(path)[0])
-
-
-def table_texts(path: str) -> List[List[List[str]]]:
-    """每張表格攤平後的文字網格 [表][列][欄]，合併儲存格在涵蓋的每格重複。
-
-    給標籤錨定用：印著字的格子是標籤、可填位置在它右邊或下面。
-    """
-    doc = Document(path)
-    out: List[List[List[str]]] = []
-    for block in iter_block_items(doc):
-        if isinstance(block, Table):
-            out.append([[cell_text(c) if c is not None else "" for c in row]
-                        for row in _grid(block)])
-    return out
-
-
-def slot_headers(path: str, slots: List[Slot]) -> Dict[str, Dict[str, str]]:
-    """每個位置的「列首」與「欄首」——同列往左、同欄往上第一格有字的內容。
-    段落型位置（p6.b0 之類）沒有列欄概念，列首放空格前面印的那段字。
-
-    這是機械抽取，不經過模型，所以可靠。用途：對映結果的標籤顯示、
-    確定性標籤對齊、列指派——「列首＝高中/專科」比整份攤平全文精準得多。
-    """
-    doc = Document(path)
-    tables = [b for b in iter_block_items(doc) if isinstance(b, Table)]
-    paragraphs = [b for b in iter_block_items(doc) if isinstance(b, Paragraph)]
-
-    by_table: Dict[int, List[Slot]] = {}
-    for s in slots:
-        if "table" in s.loc:
-            by_table.setdefault(s.loc["table"], []).append(s)
-
-    out: Dict[str, Dict[str, str]] = {}
-    for ti, tslots in by_table.items():
-        if ti >= len(tables):
-            continue
-        grid = _grid(tables[ti])
-        texts = [[cell_text(c) if c is not None else "" for c in row] for row in grid]
-        for s in tslots:
-            r, c = s.loc["row"], s.loc["col"]
-            if r >= len(texts):
-                continue
-            row_hdr = next(
-                (t for t in reversed(texts[r][:c]) if t.strip() and not is_blank(t)), "")
-            col_hdr = ""
-            for rr in range(r - 1, -1, -1):
-                if c < len(texts[rr]) and texts[rr][c].strip() and not is_blank(texts[rr][c]):
-                    col_hdr = texts[rr][c]
-                    break
-            # 儲存格段落裡的底線：底線前面印的字（「…，原因」）比列首精準
-            pic = s.loc.get("para_in_cell")
-            if "blank_index" in s.loc and pic is not None and grid[r][c] is not None:
-                row_hdr = _para_label(grid[r][c].paragraphs[pic].text, s)
-            out[s.id] = {"row": row_hdr.replace("\n", " ")[:20],
-                         "col": col_hdr.replace("\n", " ")[:20]}
-
-    for s in slots:
-        if "para" not in s.loc or s.loc["para"] >= len(paragraphs):
-            continue
-        out[s.id] = {"row": _para_label(paragraphs[s.loc["para"]].text, s), "col": ""}
-    return out
+    return MARKER_RE.sub("", ParsedDoc(path).flatten()[0])
 
 
 def _para_label(text: str, slot: Slot) -> str:
@@ -236,16 +243,13 @@ def _content_controls(doc) -> List[Slot]:
 def _form_fields(doc) -> List[Slot]:
     out = []
     for i, ff in enumerate(doc.element.body.iter(qn("w:ffData"))):
-        name_el = ff.find(qn("w:name"))
         text_el = ff.find(qn("w:textInput"))
         default = ""
         if text_el is not None:
             default_el = text_el.find(qn("w:default"))
             if default_el is not None:
                 default = default_el.get(qn("w:val"), "")
-        out.append(Slot(id=f"ff{i}", kind="formfield",
-                        loc={"ff_index": i,
-                             "name": name_el.get(qn("w:val"), "") if name_el is not None else ""},
+        out.append(Slot(id=f"ff{i}", kind="formfield", loc={"ff_index": i},
                         existing=default))
     return out
 
@@ -260,7 +264,7 @@ def _paragraph_line(para: Paragraph, index: int, slots: List[Slot]) -> str:
 
     if TRAILING_COLON_RE.search(text):
         sid = f"p{index}.tail"
-        slots.append(Slot(id=sid, kind="inline", loc={"para": index, "tail": True}))
+        slots.append(Slot(id=sid, kind="inline", loc={"para": index}))
         return f"{text}{{{{{sid}}}}}"
 
     return text
@@ -289,18 +293,18 @@ def _para_render(text: str, sid: str, loc: Dict[str, Any], slots: List[Slot]) ->
     return "".join(out) + text[cursor:]
 
 
-def _table_lines(table: Table, table_index: int, slots: List[Slot],
+def _table_lines(grid: List[List[_Cell]], table_index: int, slots: List[Slot],
                  overwritable: Set[str]) -> List[str]:
     out = []
     seen: Set[int] = set()   # 合併儲存格（含垂直合併）只處理一次，跨列去重
-    for r, row in enumerate(_grid(table)):
+    for r, row in enumerate(grid):
         rendered = []
         for c, cell in enumerate(row):
-            if cell is None or id(cell._tc) in seen:
+            if id(cell._tc) in seen:
                 continue
             seen.add(id(cell._tc))
             rendered.append(_cell_render(cell, table_index, r, c, slots, overwritable))
-        if any(x.strip() and x.strip() != "␣" for x in rendered):
+        if any(x.strip() for x in rendered):
             out.append(" | ".join(rendered))
     return out
 
