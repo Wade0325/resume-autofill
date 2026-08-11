@@ -1,77 +1,35 @@
 import { Suspense, lazy, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, type FieldSpec, type Plan, type PlanItem } from '../api'
-import Dropzone, { type UploadPhase } from '../components/Dropzone'
-import { Header, ErrorBox } from '../components/common'
+import { api, errorText, type FieldSpec, type Plan, type PlanItem } from '../api'
+import { useBackgroundUpload } from '../useBackgroundUpload'
+import Dropzone from '../components/Dropzone'
+import { PageShell, FooterBar, OverwriteBadge } from '../components/common'
 
 // pdf.js 佔了主 bundle 一半以上，等真的要顯示預覽時再載
 const DocxCompare = lazy(() => import('../components/DocxCompare'))
-
-// 切到別頁再切回來時要能接續，不必重傳檔案重跑一次模型
-const KEY_JOB = 'fill.jobId'
 
 export default function FillPage() {
   const [fields, setFields] = useState<FieldSpec[]>([])
   const [plan, setPlan] = useState<Plan | null>(null)
   const [previewVersion, setPreviewVersion] = useState(0)
-  const [phase, setPhase] = useState<UploadPhase>({ kind: 'idle' })
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
+
+  // 分析在後端背景執行，hook 負責上傳、輪詢進度與 sessionStorage 接續
+  const { phase, error, setError, upload, reset } = useBackgroundUpload({
+    storageKey: 'fill.jobId',
+    start: async (file, onProgress) => (await api.analyze(file, onProgress)).job_id,
+    getState: api.getJob,
+    hasResult: !!plan,
+    onReady: (st) => {
+      setPlan(st.plan)
+      setPreviewVersion(0) // 新的一份檔案，預覽版本從頭來——用 effect 歸零會讓右欄多抓一次
+    },
+  })
 
   useEffect(() => {
-    api.fields().then(setFields).catch((e) => setError(e.message))
+    api.fields().then(setFields).catch((e) => setError(errorText(e)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  // 分析在後端背景執行，這裡輪詢進度；切頁再回來會憑 sessionStorage 接上
-  const [trackingId, setTrackingId] = useState<string | null>(() =>
-    sessionStorage.getItem(KEY_JOB),
-  )
-  useEffect(() => {
-    if (!trackingId || plan) return
-    let stopped = false
-    let fails = 0
-    const started = Date.now()
-    const giveUp = () => {
-      sessionStorage.removeItem(KEY_JOB)
-      setTrackingId(null)
-      setPhase({ kind: 'idle' })
-    }
-    const poll = () => {
-      api
-        .getJob(trackingId)
-        .then((st) => {
-          if (stopped) return
-          fails = 0
-          if (st.status === 'ready') {
-            setPlan(st.plan)
-            setPhase({ kind: 'idle' })
-          } else if (st.status === 'failed') {
-            setError(st.error)
-            giveUp()
-          } else {
-            setPhase({
-              kind: 'analyzing',
-              startedAt: started,
-              stage: st.stage,
-            })
-          }
-        })
-        .catch(() => {
-          // 後端 --reload 重啟時會斷幾秒，別因為一次失敗就放棄
-          if (!stopped && ++fails >= 5) giveUp()
-        })
-    }
-    poll()
-    const timer = setInterval(poll, 2000)
-    return () => {
-      stopped = true
-      clearInterval(timer)
-    }
-  }, [trackingId, plan])
-
-  // 預覽抓不到就退回只有清單，不擋主流程
-  const jobId = plan?.job_id
-  useEffect(() => setPreviewVersion(0), [jobId])
 
   async function run<T>(work: () => Promise<T>): Promise<T | undefined> {
     setBusy(true)
@@ -79,25 +37,9 @@ export default function FillPage() {
     try {
       return await work()
     } catch (e: any) {
-      setError(e.requestId ? `${e.message}（追蹤碼 ${e.requestId}）` : e.message)
+      setError(errorText(e))
     } finally {
       setBusy(false)
-    }
-  }
-
-  async function upload(file: File) {
-    setError('')
-    setPhase({ kind: 'uploading', percent: 0 })
-    try {
-      const accepted = await api.analyze(file, (percent) =>
-        setPhase({ kind: 'uploading', percent }),
-      )
-      sessionStorage.setItem(KEY_JOB, accepted.job_id)
-      setPhase({ kind: 'analyzing', startedAt: Date.now(), stage: '準備中' })
-      setTrackingId(accepted.job_id)
-    } catch (e: any) {
-      setError(e.requestId ? `${e.message}（追蹤碼 ${e.requestId}）` : e.message)
-      setPhase({ kind: 'idle' })
     }
   }
 
@@ -120,19 +62,18 @@ export default function FillPage() {
 
   if (!plan) {
     return (
-      <div className="space-y-6">
-        <Header
-          title="填寫履歷"
-          desc="上傳公司給的空白履歷表，系統會自動判斷每一格該填什麼。"
-        />
-        {error && <ErrorBox message={error} />}
+      <PageShell
+        title="填寫履歷"
+        desc="上傳公司給的空白履歷表，系統會自動判斷每一格該填什麼。"
+        error={error}
+      >
         <Dropzone
           title="把空白履歷表拖到這裡"
           hint="或點擊選擇檔案"
           phase={phase}
           onFile={upload}
         />
-      </div>
+      </PageShell>
     )
   }
 
@@ -141,10 +82,7 @@ export default function FillPage() {
   )
 
   return (
-    <div className="space-y-6">
-      <Header title="填寫履歷" desc={plan.filename} />
-      {error && <ErrorBox message={error} />}
-
+    <PageShell title="填寫履歷" desc={plan.filename} error={error}>
       <div className="flex flex-wrap items-center gap-3">
         <Stat label="偵測到" value={plan.stats.slots} unit="個位置" />
         <Stat label="將填入" value={plan.stats.fill} unit="格" tone="sky" />
@@ -182,28 +120,16 @@ export default function FillPage() {
         </div>
       </details>
 
-      <div className="flex items-center justify-between pb-8">
-        <button
-          onClick={() => {
-            sessionStorage.removeItem(KEY_JOB)
-            setPlan(null)
-            setTrackingId(null)
-            setPhase({ kind: 'idle' })
-          }}
-          className="text-sm text-slate-500 hover:text-slate-800"
-        >
-          ← 換一份檔案
-        </button>
-        <button
-          onClick={applyAndDownload}
-          disabled={busy || plan.stats.fill === 0}
-          className="px-6 py-2.5 rounded-md bg-sky-600 text-white font-medium
-                     hover:bg-sky-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
-        >
-          {busy ? '處理中…' : `套用並下載（${plan.stats.fill} 格）`}
-        </button>
-      </div>
-    </div>
+      <FooterBar
+        onRestart={() => {
+          reset()
+          setPlan(null)
+        }}
+        onSubmit={applyAndDownload}
+        disabled={busy || plan.stats.fill === 0}
+        label={busy ? '處理中…' : `套用並下載（${plan.stats.fill} 格）`}
+      />
+    </PageShell>
   )
 }
 
@@ -260,8 +186,8 @@ function Row({
   onRemap: (slotId: string, fieldKey: string) => void
 }) {
   const skipped = item.status === 'skip'
-  // 模型判斷的、或信心不高的，值得使用者優先看一眼
-  const needsReview = !skipped && (item.source === 'model' || item.confidence < 0.8)
+  // 模型判斷的值得使用者優先看一眼；規則、快取、學過的都是確定性來源
+  const needsReview = !skipped && item.source === 'model'
 
   return (
     <tr className={skipped ? 'bg-slate-50/60' : needsReview ? 'bg-amber-50/40' : ''}>
@@ -294,11 +220,7 @@ function Row({
         {item.kind !== 'checkbox' && item.existing.trim() ? (
           <span>
             <span className="line-through text-slate-400">{item.existing.slice(0, 24)}</span>
-            {!skipped && (
-              <span className="ml-2 text-xs bg-amber-100 text-amber-800 rounded px-1.5 py-0.5">
-                將被覆蓋
-              </span>
-            )}
+            {!skipped && <OverwriteBadge>將被覆蓋</OverwriteBadge>}
           </span>
         ) : (
           <span className="text-slate-300">—</span>
@@ -314,7 +236,7 @@ function Row({
       </td>
 
       <td className="px-4 py-2.5 text-xs text-slate-500">
-        {skipped ? '—' : `${sourceLabel(item.source)} ${item.confidence.toFixed(2)}`}
+        {skipped ? '—' : sourceLabel(item.source)}
       </td>
     </tr>
   )

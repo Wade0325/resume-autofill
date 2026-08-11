@@ -1,16 +1,16 @@
-import { Suspense, lazy, useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, type FieldSpec, type ImportPreview, type ImportRow } from '../api'
+import { api, errorText, type FieldSpec, type ImportPreview, type ImportRow } from '../api'
+import { useBackgroundUpload } from '../useBackgroundUpload'
 import { SECTIONS } from '../sections'
-import Dropzone, { type UploadPhase } from '../components/Dropzone'
-import { Header, ErrorBox } from '../components/common'
+import Dropzone from '../components/Dropzone'
+import { PageShell, FooterBar, OverwriteBadge } from '../components/common'
 
 // pdf.js 佔了主 bundle 一半以上，等真的要顯示履歷對照時再載
 const ResumeDocView = lazy(() => import('../components/ResumeDocView'))
 
-// 切到別頁再切回來時要能接續。只存 id 與勾選狀態，列表本身回頭跟後端重拿，
-// 免得 sessionStorage 裡放一份會過期的副本。
-const KEY_ID = 'import.id'
+// 勾選狀態另存一份：切到別頁再回來能接續。只存 id 與勾選，列表本身回頭
+// 跟後端重拿，免得 sessionStorage 裡放一份會過期的副本。
 const KEY_PICKED = 'import.picked'
 
 export default function ImportPage() {
@@ -18,103 +18,50 @@ export default function ImportPage() {
   const [preview, setPreview] = useState<ImportPreview | null>(null)
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [active, setActive] = useState<string>(SECTIONS[0].id)
-  const [phase, setPhase] = useState<UploadPhase>({ kind: 'idle' })
   const [hovered, setHovered] = useState<string | null>(null) // 滑到的列，讓履歷上的框連動
   const [applying, setApplying] = useState(false)
-  const [error, setError] = useState('')
   const navigate = useNavigate()
 
+  // 讀取在後端背景執行，hook 負責上傳、輪詢進度與 sessionStorage 接續
+  const { phase, error, setError, upload, reset } = useBackgroundUpload({
+    storageKey: 'import.id',
+    start: async (file, onProgress) => (await api.analyzeImport(file, onProgress)).import_id,
+    getState: api.getImport,
+    hasResult: !!preview,
+    onReady: (st) => {
+      setPreview(st.preview)
+      // 切頁回來沿用之前的勾選；剛完成的新匯入用預設勾選
+      const saved = sessionStorage.getItem(KEY_PICKED)
+      if (saved) {
+        setPicked(new Set(JSON.parse(saved)))
+      } else {
+        remember(
+          new Set(st.preview.rows.filter((r) => r.default_checked).map((r) => r.row_id)),
+        )
+      }
+      const first = SECTIONS.find((s) =>
+        st.preview.rows.some((r) => r.field_key.startsWith(s.prefix)),
+      )
+      if (first) setActive(first.id)
+    },
+    onDiscard: () => sessionStorage.removeItem(KEY_PICKED),
+  })
+
   useEffect(() => {
-    api.fields().then(setFields).catch((e) => setError(e.message))
+    api.fields().then(setFields).catch((e) => setError(errorText(e)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 讀取在後端背景執行，這裡輪詢進度；切頁再回來會憑 sessionStorage 接上
-  const [trackingId, setTrackingId] = useState<string | null>(() =>
-    sessionStorage.getItem(KEY_ID),
+  // 固定住陣列身分：marks 只跟 preview 有關。每次 render 建新陣列的話，
+  // 滑過任一列（hovered 變動）都會讓預覽以為 marks 換了而整份重渲染
+  const marks = useMemo(
+    () => (preview ? preview.rows.map((r) => ({ id: r.row_id, text: r.incoming })) : []),
+    [preview],
   )
-  useEffect(() => {
-    if (!trackingId || preview) return
-    let stopped = false
-    let fails = 0
-    const started = Date.now()
-    const giveUp = () => {
-      clearSaved()
-      setTrackingId(null)
-      setPhase({ kind: 'idle' })
-    }
-    const poll = () => {
-      api
-        .getImport(trackingId)
-        .then((st) => {
-          if (stopped) return
-          fails = 0
-          if (st.status === 'ready') {
-            setPreview(st.preview)
-            setPhase({ kind: 'idle' })
-            // 切頁回來沿用之前的勾選；剛完成的新匯入用預設勾選
-            const saved = sessionStorage.getItem(KEY_PICKED)
-            if (saved) {
-              setPicked(new Set(JSON.parse(saved)))
-            } else {
-              remember(
-                new Set(
-                  st.preview.rows.filter((r) => r.default_checked).map((r) => r.row_id),
-                ),
-              )
-            }
-            const first = SECTIONS.find((s) =>
-              st.preview.rows.some((r) => r.field_key.startsWith(s.prefix)),
-            )
-            if (first) setActive(first.id)
-          } else if (st.status === 'failed') {
-            setError(st.error)
-            giveUp()
-          } else {
-            setPhase({
-              kind: 'analyzing',
-              startedAt: started,
-              stage: st.stage,
-            })
-          }
-        })
-        .catch(() => {
-          // 後端 --reload 重啟時會斷幾秒，別因為一次失敗就放棄
-          if (!stopped && ++fails >= 5) giveUp()
-        })
-    }
-    poll()
-    const timer = setInterval(poll, 2000)
-    return () => {
-      stopped = true
-      clearInterval(timer)
-    }
-  }, [trackingId, preview])
-
-  function clearSaved() {
-    sessionStorage.removeItem(KEY_ID)
-    sessionStorage.removeItem(KEY_PICKED)
-  }
 
   function remember(next: Set<string>) {
     setPicked(next)
     sessionStorage.setItem(KEY_PICKED, JSON.stringify([...next]))
-  }
-
-  async function upload(file: File) {
-    setError('')
-    setPhase({ kind: 'uploading', percent: 0 })
-    try {
-      const accepted = await api.analyzeImport(file, (percent) =>
-        setPhase({ kind: 'uploading', percent }),
-      )
-      sessionStorage.setItem(KEY_ID, accepted.import_id)
-      sessionStorage.removeItem(KEY_PICKED) // 新的一次匯入，舊勾選不適用
-      setPhase({ kind: 'analyzing', startedAt: Date.now(), stage: '準備中' })
-      setTrackingId(accepted.import_id)
-    } catch (e: any) {
-      setError(e.requestId ? `${e.message}（追蹤碼 ${e.requestId}）` : e.message)
-      setPhase({ kind: 'idle' })
-    }
   }
 
   async function apply() {
@@ -126,10 +73,10 @@ export default function ImportPage() {
       const changed = preview.rows
         .filter((r) => picked.has(r.row_id))
         .map((r) => `${r.field_key}#${r.ordinal}`)
-      clearSaved()
+      reset()
       navigate('/profile', { state: { changed } })
     } catch (e: any) {
-      setError(e.message)
+      setError(errorText(e))
       setApplying(false)
     }
   }
@@ -150,9 +97,11 @@ export default function ImportPage() {
 
   if (!preview) {
     return (
-      <div className="space-y-6">
-        <Header title="匯入履歷" desc="上傳一份已經填好的履歷，系統會把裡面的資料抽出來存進「我的資料」。" />
-        {error && <ErrorBox message={error} />}
+      <PageShell
+        title="匯入履歷"
+        desc="上傳一份已經填好的履歷，系統會把裡面的資料抽出來存進「我的資料」。"
+        error={error}
+      >
         <Dropzone
           title="把已填寫的履歷拖到這裡"
           hint="或點擊選擇檔案"
@@ -161,7 +110,7 @@ export default function ImportPage() {
           accept=".pdf,.docx"
           note="接受 104 履歷的 .pdf 與 Word 的 .docx"
         />
-      </div>
+      </PageShell>
     )
   }
 
@@ -170,10 +119,7 @@ export default function ImportPage() {
   const shown = rowsOf(SECTIONS.find((s) => s.id === active)!.prefix)
 
   return (
-    <div className="space-y-6">
-      <Header title="匯入履歷" desc={preview.filename} />
-      {error && <ErrorBox message={error} />}
-
+    <PageShell title="匯入履歷" desc={preview.filename} error={error}>
       <div className="flex flex-wrap items-center gap-4 text-sm text-slate-600">
         <span>
           抽到 <strong className="text-slate-900 text-base">{preview.rows.length}</strong> 個欄位，
@@ -213,7 +159,7 @@ export default function ImportPage() {
             <ResumeDocView
               importId={preview.import_id}
               filename={preview.filename}
-              marks={preview.rows.map((r) => ({ id: r.row_id, text: r.incoming }))}
+              marks={marks}
               hoveredId={hovered}
             />
           </Suspense>
@@ -255,28 +201,17 @@ export default function ImportPage() {
         </div>
       </div>
 
-      <div className="flex items-center justify-between pb-8">
-        <button
-          onClick={() => {
-            clearSaved()
-            setPreview(null)
-            setPicked(new Set())
-            setTrackingId(null)
-          }}
-          className="text-sm text-slate-500 hover:text-slate-800"
-        >
-          ← 換一份檔案
-        </button>
-        <button
-          onClick={apply}
-          disabled={applying || picked.size === 0}
-          className="px-6 py-2.5 rounded-md bg-sky-600 text-white font-medium
-                     hover:bg-sky-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
-        >
-          {applying ? '匯入中…' : `匯入勾選的 ${picked.size} 項`}
-        </button>
-      </div>
-    </div>
+      <FooterBar
+        onRestart={() => {
+          reset()
+          setPreview(null)
+          setPicked(new Set())
+        }}
+        onSubmit={apply}
+        disabled={applying || picked.size === 0}
+        label={applying ? '匯入中…' : `匯入勾選的 ${picked.size} 項`}
+      />
+    </PageShell>
   )
 }
 
@@ -325,11 +260,7 @@ function Row({
       </td>
       <td className="px-4 py-2.5 text-slate-900">
         {row.incoming.slice(0, 30)}
-        {willOverwrite && (
-          <span className="ml-2 text-xs bg-amber-100 text-amber-800 rounded px-1.5 py-0.5">
-            將覆蓋
-          </span>
-        )}
+        {willOverwrite && <OverwriteBadge>將覆蓋</OverwriteBadge>}
       </td>
     </tr>
   )
