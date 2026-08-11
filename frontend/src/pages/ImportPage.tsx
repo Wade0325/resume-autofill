@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { api, errorText, type FieldSpec, type ImportPreview, type ImportRow } from '../api'
 import { useBackgroundUpload } from '../useBackgroundUpload'
 import { SECTIONS } from '../sections'
@@ -20,7 +20,8 @@ export default function ImportPage() {
   const [active, setActive] = useState<string>(SECTIONS[0].id)
   const [hovered, setHovered] = useState<string | null>(null) // 滑到的列，讓履歷上的框連動
   const [applying, setApplying] = useState(false)
-  const navigate = useNavigate()
+  // 剛匯入的筆數與欄位,顯示成功列並讓「查看我的資料」帶出變更標示
+  const [applied, setApplied] = useState<{ count: number; changed: string[] } | null>(null)
 
   // 讀取在後端背景執行，hook 負責上傳、輪詢進度與 sessionStorage 接續
   const { phase, error, setError, upload, reset } = useBackgroundUpload({
@@ -44,7 +45,10 @@ export default function ImportPage() {
       )
       if (first) setActive(first.id)
     },
-    onDiscard: () => sessionStorage.removeItem(KEY_PICKED),
+    onDiscard: () => {
+      sessionStorage.removeItem(KEY_PICKED)
+      setApplied(null)
+    },
   })
 
   useEffect(() => {
@@ -69,14 +73,19 @@ export default function ImportPage() {
     setApplying(true)
     setError('')
     try {
-      await api.applyImport(preview.import_id, [...picked])
       const changed = preview.rows
         .filter((r) => picked.has(r.row_id))
         .map((r) => `${r.field_key}#${r.ordinal}`)
-      reset()
-      navigate('/profile', { state: { changed } })
+      const result = await api.applyImport(preview.import_id, [...picked])
+      // 留在原頁繼續:重拉一次預覽,「現有值」欄立刻反映剛寫入的資料;
+      // 勾選歸零,漏掉的項目可以再勾再匯,不必重傳重跑一次分析
+      const st = await api.getImport(preview.import_id)
+      if (st.status === 'ready') setPreview(st.preview)
+      remember(new Set())
+      setApplied({ count: result.applied, changed })
     } catch (e: any) {
       setError(errorText(e))
+    } finally {
       setApplying(false)
     }
   }
@@ -120,6 +129,18 @@ export default function ImportPage() {
 
   return (
     <PageShell title="匯入履歷" desc={preview.filename} error={error}>
+      {applied && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-md px-4 py-3 text-sm">
+          已匯入 {applied.count} 項。清單還在，漏掉的項目可以繼續勾選再匯入，或
+          <Link
+            to="/profile"
+            state={{ changed: applied.changed }}
+            className="underline hover:text-emerald-900 ml-1"
+          >
+            查看我的資料
+          </Link>
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-4 text-sm text-slate-600">
         <span>
           抽到 <strong className="text-slate-900 text-base">{preview.rows.length}</strong> 個欄位，
