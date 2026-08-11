@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { renderAsync } from 'docx-preview'
+import { errorText, fetchBlob } from '../api'
+import { renderDocxInto } from './docx'
 
 /**
  * 左右對照：左邊上傳的原稿，右邊套用「我的資料」後的樣子。
@@ -13,16 +14,24 @@ export default function DocxCompare({ jobId, version }: { jobId: string; version
   const leftRef = useRef<HTMLDivElement>(null)
   const rightRef = useRef<HTMLDivElement>(null)
 
+  // 左欄原稿只跟 jobId 有關；改對映（version++）只該重抓右欄，
+  // 不必連原稿也重新下載重渲染
   useEffect(() => {
     // StrictMode 會把 effect 跑兩次；沒有這個 token，兩輪渲染會各塞一份進容器
     const token = { cancelled: false }
+    render(`/jobs/${jobId}/preview.docx?which=original`, leftRef.current!, token)
+      .catch((e: Error) => !token.cancelled && setError(errorText(e)))
+    return () => {
+      token.cancelled = true
+    }
+  }, [jobId])
+
+  useEffect(() => {
+    const token = { cancelled: false }
     setLoading(true)
     setError('')
-    Promise.all([
-      render(`/api/jobs/${jobId}/preview.docx?which=original`, leftRef.current!, token),
-      render(`/api/jobs/${jobId}/preview.docx?which=filled&v=${version}`, rightRef.current!, token),
-    ])
-      .catch((e: Error) => !token.cancelled && setError(e.message))
+    render(`/jobs/${jobId}/preview.docx?which=filled&v=${version}`, rightRef.current!, token)
+      .catch((e: Error) => !token.cancelled && setError(errorText(e)))
       .finally(() => !token.cancelled && setLoading(false))
     return () => {
       token.cancelled = true
@@ -57,28 +66,7 @@ export default function DocxCompare({ jobId, version }: { jobId: string; version
 }
 
 async function render(url: string, host: HTMLDivElement, token: { cancelled: boolean }) {
-  const res = await fetch(url)
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`
-    try {
-      detail = (await res.json()).detail ?? detail
-    } catch {
-      // 回應不是 JSON，沿用狀態碼
-    }
-    throw new Error(detail)
-  }
-  const blob = await res.blob()
+  const blob = await fetchBlob(url)
   if (token.cancelled) return
-  host.replaceChildren()
-  host.style.zoom = '1'
-  const width = host.clientWidth
-  await renderAsync(blob, host, undefined, { className: 'docx', inWrapper: false })
-  if (token.cancelled) {
-    host.replaceChildren()
-    return
-  }
-  // 文件用實際紙張寬度渲染，縮到欄寬才塞得下。用 zoom 而非 transform：
-  // transform 不會重排，容器高度會停在縮放前的尺寸，底下留一大片空白
-  const page = host.querySelector('section')
-  if (page) host.style.zoom = String(width / page.offsetWidth)
+  await renderDocxInto(blob, host, token)
 }

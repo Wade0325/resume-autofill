@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { renderAsync } from 'docx-preview'
 import * as pdfjs from 'pdfjs-dist'
 import type { PDFPageProxy } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import { errorText, fetchBlob } from '../api'
+import { renderDocxInto } from './docx'
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
 
@@ -49,17 +50,8 @@ export default function ResumeDocView({
       return
     }
     ;(async () => {
-      const res = await fetch(`/api/imports/${importId}/source`)
-      if (!res.ok) {
-        let detail = `HTTP ${res.status}`
-        try {
-          detail = (await res.json()).detail ?? detail
-        } catch {
-          // 回應不是 JSON，沿用狀態碼
-        }
-        throw new Error(detail)
-      }
-      const data = await res.arrayBuffer()
+      const blob = await fetchBlob(`/imports/${importId}/source`)
+      const data = await blob.arrayBuffer()
       const doc = await pdfjs.getDocument({ data }).promise
       const out: PageData[] = []
       for (let i = 1; i <= doc.numPages; i++) {
@@ -80,7 +72,7 @@ export default function ResumeDocView({
       setLoading(false)
     })().catch((e: any) => {
       if (token.cancelled) return
-      setUnavailable(e.message)
+      setUnavailable(errorText(e))
       setLoading(false)
     })
     return () => {
@@ -178,30 +170,29 @@ function DocxView({
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const [boxes, setBoxes] = useState<Record<string, Box[]>>({})
+  const [rendered, setRendered] = useState(0) // 每完成一次渲染 +1，通知畫框 effect
 
+  // 抓檔＋渲染只跟 importId 有關。marks 變動只需要重新畫框，
+  // 不能連整份文件都重新下載重渲染
   useEffect(() => {
     const token = { cancelled: false }
     onDone(true)
     ;(async () => {
-      const res = await fetch(`/api/imports/${importId}/source`)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const blob = await res.blob()
+      const blob = await fetchBlob(`/imports/${importId}/source`)
       const host = hostRef.current!
-      host.replaceChildren()
-      host.style.zoom = '1'
-      const width = host.clientWidth
-      await renderAsync(blob, host, undefined, { className: 'docx', inWrapper: false })
-      if (token.cancelled) return
-      // 文件用實際紙張寬度渲染，縮到欄寬才塞得下（zoom 會重排，transform 不會）
-      const page = host.querySelector('section')
-      if (page) host.style.zoom = String(width / page.offsetWidth)
-      setBoxes(locate(host, marks))
+      if (!(await renderDocxInto(blob, host, token))) return
+      setRendered((n) => n + 1)
       onDone(false)
     })().catch(() => !token.cancelled && onDone(false))
     return () => {
       token.cancelled = true
     }
-  }, [importId, marks, onDone])
+  }, [importId, onDone])
+
+  useEffect(() => {
+    if (!rendered) return
+    setBoxes(locate(hostRef.current!, marks))
+  }, [rendered, marks])
 
   return (
     <div className="relative">
