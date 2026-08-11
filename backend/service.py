@@ -440,9 +440,17 @@ def _import_rows(extracted: Dict[str, Any]) -> List[ImportRow]:
         else:
             add(key, 0, value)
 
-    # 照欄位定義表的順序排,不是字母序——字母序會讓 end(離職)跑到
-    # start(到職)前面。BY_KEY 的插入順序就是 FIELDS 的人工排序,
-    # 和「我的資料」表單的欄位順序一致
+    # 多筆資料「同一筆聚在一起」:第 1 筆的公司/職稱/到職…看完,再換第 2 筆。
+    # 同一筆內的欄位照定義表的順序(與「我的資料」表單一致),不是字母序——
+    # 字母序會讓 end(離職)跑到 start(到職)前面
+    def root(key: str) -> str:
+        return key.split("[].")[0].split(".", 1)[0]
+
     order = {key: i for i, key in enumerate(BY_KEY)}
-    rows.sort(key=lambda r: (order.get(r.field_key, len(order)), r.ordinal))
+    group: Dict[str, int] = {}
+    for i, key in enumerate(BY_KEY):
+        group.setdefault(root(key), i)
+    rows.sort(key=lambda r: (group.get(root(r.field_key), len(order)),
+                             r.ordinal,
+                             order.get(r.field_key, len(order))))
     return rows
