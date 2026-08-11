@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS kv (
 );
 CREATE TABLE IF NOT EXISTS template (
     fingerprint TEXT PRIMARY KEY,
-    source_name TEXT NOT NULL DEFAULT '',
+    source_name TEXT NOT NULL DEFAULT '',   -- 純診斷用：這份範本從哪個檔名學來，程式不讀
     mapping     TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 );
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS job (
     id          TEXT PRIMARY KEY,
     filename    TEXT NOT NULL,
     fingerprint TEXT NOT NULL,
-    status      TEXT NOT NULL,   -- processing | analyzed | written | failed
+    status      TEXT NOT NULL,   -- processing | analyzed | failed
     anchors     TEXT NOT NULL,
     decided     TEXT NOT NULL,
     stage       TEXT NOT NULL DEFAULT '',   -- processing 時目前進行到哪一步
@@ -103,11 +103,6 @@ def put_kv(key: str, value: Any) -> None:
             (key, json.dumps(value, ensure_ascii=False), _now()))
 
 
-def get_settings() -> Dict[str, Any]:
-    stored = get_kv("settings") or {}
-    return {**config.DEFAULT_SETTINGS, **stored}
-
-
 def get_template(fingerprint: str) -> Dict[str, str]:
     with connect() as conn:
         row = conn.execute("SELECT mapping FROM template WHERE fingerprint = ?",
@@ -125,6 +120,38 @@ def put_template(fingerprint: str, mapping: Dict[str, str], source_name: str = "
             (fingerprint, source_name, json.dumps(mapping, ensure_ascii=False), _now()))
 
 
+# job 與 import_job 的存取共用同一套「SELECT * → dict → 解 JSON 欄位」與
+# 動態 SET 樣板，只差表名與哪些欄位是 JSON
+_JSON_COLS = {"job": ("anchors", "decided"), "import_job": ("extracted",)}
+
+
+def _get_row(table: str, row_id: str) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (row_id,)).fetchone()
+    if not row:
+        return None
+    out = dict(row)
+    for col in _JSON_COLS[table]:
+        out[col] = json.loads(out[col])
+    return out
+
+
+def _update_row(table: str, row_id: str, fields: Dict[str, Any]) -> None:
+    """None 的欄位代表這次不更新。"""
+    sets, params = [], []
+    for col, value in fields.items():
+        if value is None:
+            continue
+        sets.append(f"{col} = ?")
+        params.append(json.dumps(value, ensure_ascii=False)
+                      if col in _JSON_COLS[table] else value)
+    if not sets:
+        return
+    params.append(row_id)
+    with connect() as conn:
+        conn.execute(f"UPDATE {table} SET {', '.join(sets)} WHERE id = ?", params)
+
+
 def create_job(job_id: str, filename: str, status: str) -> None:
     with connect() as conn:
         conn.execute(
@@ -134,14 +161,7 @@ def create_job(job_id: str, filename: str, status: str) -> None:
 
 
 def get_job(job_id: str) -> Optional[Dict[str, Any]]:
-    with connect() as conn:
-        row = conn.execute("SELECT * FROM job WHERE id = ?", (job_id,)).fetchone()
-    if not row:
-        return None
-    job = dict(row)
-    job["anchors"] = json.loads(job["anchors"])
-    job["decided"] = json.loads(job["decided"])
-    return job
+    return _get_row("job", job_id)
 
 
 def update_job(job_id: str, *, decided: Optional[Dict[str, Any]] = None,
@@ -150,30 +170,9 @@ def update_job(job_id: str, *, decided: Optional[Dict[str, Any]] = None,
                fingerprint: Optional[str] = None,
                stage: Optional[str] = None,
                error: Optional[str] = None) -> None:
-    sets, params = [], []
-    if decided is not None:
-        sets.append("decided = ?")
-        params.append(json.dumps(decided, ensure_ascii=False))
-    if anchors is not None:
-        sets.append("anchors = ?")
-        params.append(json.dumps(anchors, ensure_ascii=False))
-    if fingerprint is not None:
-        sets.append("fingerprint = ?")
-        params.append(fingerprint)
-    if status is not None:
-        sets.append("status = ?")
-        params.append(status)
-    if stage is not None:
-        sets.append("stage = ?")
-        params.append(stage)
-    if error is not None:
-        sets.append("error = ?")
-        params.append(error)
-    if not sets:
-        return
-    params.append(job_id)
-    with connect() as conn:
-        conn.execute(f"UPDATE job SET {', '.join(sets)} WHERE id = ?", params)
+    _update_row("job", job_id, {"decided": decided, "anchors": anchors,
+                                "fingerprint": fingerprint, "status": status,
+                                "stage": stage, "error": error})
 
 
 def fail_stale_jobs() -> int:
@@ -198,34 +197,12 @@ def create_import(import_id: str, filename: str) -> None:
 def update_import(import_id: str, *, extracted: Optional[Dict[str, Any]] = None,
                   status: Optional[str] = None, stage: Optional[str] = None,
                   error: Optional[str] = None) -> None:
-    sets, params = [], []
-    if extracted is not None:
-        sets.append("extracted = ?")
-        params.append(json.dumps(extracted, ensure_ascii=False))
-    if status is not None:
-        sets.append("status = ?")
-        params.append(status)
-    if stage is not None:
-        sets.append("stage = ?")
-        params.append(stage)
-    if error is not None:
-        sets.append("error = ?")
-        params.append(error)
-    if not sets:
-        return
-    params.append(import_id)
-    with connect() as conn:
-        conn.execute(f"UPDATE import_job SET {', '.join(sets)} WHERE id = ?", params)
+    _update_row("import_job", import_id, {"extracted": extracted, "status": status,
+                                          "stage": stage, "error": error})
 
 
 def get_import(import_id: str) -> Optional[Dict[str, Any]]:
-    with connect() as conn:
-        row = conn.execute("SELECT * FROM import_job WHERE id = ?", (import_id,)).fetchone()
-    if not row:
-        return None
-    out = dict(row)
-    out["extracted"] = json.loads(out["extracted"])
-    return out
+    return _get_row("import_job", import_id)
 
 
 def purge_old_jobs(hours: int = config.JOB_RETENTION_HOURS) -> int:
