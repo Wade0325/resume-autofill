@@ -14,14 +14,16 @@ import unicodedata
 import pypdfium2 as pdfium
 
 
-def pdf_to_page_pngs(content: bytes, max_pages: int = 3, scale: float = 2.0) -> list[bytes]:
-    """scale 2.0 約為 144 DPI，表格細字仍可辨識；頁數上限是為了守住
-    模型的上下文長度（每頁截圖約吃 1~2k tokens）。
+def pdf_to_page_pngs(content: bytes, scale: float = 300 / 72) -> list[bytes]:
+    """PDF 基準 72 DPI，scale 300/72 = 300 DPI。整份轉出，不限頁數。
+
+    每頁截圖約吃 2.7k tokens：頁數多的文件會超出模型上下文，
+    那次視覺呼叫會失敗，匯入流程接手退回純文字模式，不會卡死。
     """
     pdf = pdfium.PdfDocument(content)
     out: list[bytes] = []
     try:
-        for i in range(min(len(pdf), max_pages)):
+        for i in range(len(pdf)):
             page = pdf[i]
             bitmap = page.render(scale=scale)
             try:
