@@ -55,6 +55,27 @@ def _save_upload(job_id: str, content: bytes, suffix: str = ".docx") -> Path:
     return path
 
 
+def _fail(update, work_id: str, filename: str, verb: str, doing: str,
+          e: Exception) -> None:
+    """兩個背景 worker 共用的失敗收尾：記 log、寫失敗原因、發使用者訊息。
+    verb 用在開發者 log（分析／匯入），doing 用在給使用者的原因。"""
+    if isinstance(e, llm.LlmUnavailable):
+        log.warning("%s失敗 %s：%s", verb, filename, e)
+        update(work_id, status="failed", stage="",
+               error=f"模型還沒啟動，無法{doing}。請從右上角啟動模型後重新上傳")
+        actions.problem("上傳履歷「%s」失敗：模型還沒啟動", filename)
+    elif isinstance(e, llm.LlmCallFailed):
+        # 模型活著但這次呼叫失敗（如文件超出上下文），叫使用者重啟模型只會鬼打牆
+        log.warning("%s失敗 %s：%s", verb, filename, e)
+        update(work_id, status="failed", stage="", error=f"無法{doing}：{e}")
+        actions.problem("上傳履歷「%s」失敗：模型讀取失敗", filename)
+    else:
+        log.exception("%s失敗 %s", verb, filename)
+        update(work_id, status="failed", stage="",
+               error=f"無法解析這份文件：{e}")
+        actions.problem("上傳履歷「%s」失敗：檔案無法解析", filename)
+
+
 def analyze(filename: str, content: bytes) -> str:
     """收下檔案就回 job_id，分析在背景執行緒跑。
 
@@ -79,17 +100,21 @@ def _analyze_worker(job_id: str, filename: str) -> None:
         # 空白範本（多數場景）沒有已填值，這一步 15~44 秒是白等——
         # 先用規則掃有沒有「值長相」的內容，沒有就整步跳過
         db.update_job(job_id, stage="讀取文件內容")
-        probe = document.text_only(str(src))
+        parsed = document.ParsedDoc(str(src))
+        text, slots = parsed.flatten()
+        probe = document.MARKER_RE.sub("", text)
         existing: Dict[str, Any] = {}
         if not document.has_user_values(probe):
             log.info("看起來是空白範本，跳過既有值判讀")
         else:
             try:
                 existing = reader.read(probe, config.LLM_HOST, config.LLM_MODEL)
-            except llm.LlmUnavailable:
+            except llm.LlmError:
                 # 錨定引擎不靠模型也能填空白範本；只是分不出已填值可否覆蓋
                 log.warning("模型不可用，跳過既有值判讀，僅填空白位置")
-        text, slots = document.load(str(src), _values_of(existing))
+        if existing:
+            # 有已填值才需要重掃一次——這次把那些值標成可覆蓋的位置
+            text, slots = parsed.flatten(_values_of(existing))
         fp = document.fingerprint(slots)
         cached = db.get_template(fp)
         log.info("解析完成 位置=%d 可覆蓋=%d 全文=%d字 fingerprint=%s 範本快取=%s",
@@ -97,15 +122,15 @@ def _analyze_worker(job_id: str, filename: str) -> None:
                  "命中" if cached else "未命中")
 
         db.update_job(job_id, stage="辨識欄位對映" if not cached else "套用已學過的格式")
-        headers = document.slot_headers(str(src), slots)
+        headers = parsed.slot_headers(slots)
         decisions = planner.decide_by_anchor(
-            str(src), slots, config.LLM_HOST, config.LLM_MODEL, cached,
+            parsed.table_texts(), slots, config.LLM_HOST, config.LLM_MODEL, cached,
             headers=headers, learned=db.get_kv("learned_labels") or {})
 
         # 第二輪修正：只在有新錨定的格子時跑（純快取代表使用者確認過）。
         # 先做零成本的確定性對齊（白名單外格子、期間欄拆併），
         # 再由模型指認學經歷每一列對應清單第幾筆（分級列會錯位的根源）。
-        if any(d[3] != "cache" for d in decisions.values()):
+        if any(d.source != "cache" for d in decisions.values()):
             db.update_job(job_id, stage="覆核對映結果")
             profile = db.get_kv("profile") or {}
             decisions = planner.align_labels(slots, decisions, headers)
@@ -117,21 +142,20 @@ def _analyze_worker(job_id: str, filename: str) -> None:
                       decided={k: list(v) for k, v in decisions.items()},
                       status="analyzed", stage="")
 
-        plan = _render(job_id, filename, fp, bool(cached), slots, decisions)
+        plan = _render(job_id, filename, bool(cached), slots, decisions)
         log.info("比對完成 fill=%d skip=%d by_source=%s 耗時=%dms",
                  plan.stats.fill, plan.stats.skip, plan.stats.by_source,
                  int((time.perf_counter() - t0) * 1000))
         actions.record("上傳履歷「%s」成功", filename)
-    except llm.LlmUnavailable as e:
-        log.warning("分析失敗 %s：%s", filename, e)
-        db.update_job(job_id, status="failed", stage="",
-                      error="模型還沒啟動，無法辨識欄位。請從右上角啟動模型後重新上傳")
-        actions.problem("上傳履歷「%s」失敗：模型還沒啟動", filename)
     except Exception as e:
-        log.exception("分析失敗 %s", filename)
-        db.update_job(job_id, status="failed", stage="",
-                      error=f"無法解析這份文件：{e}")
-        actions.problem("上傳履歷「%s」失敗：檔案無法解析", filename)
+        _fail(db.update_job, job_id, filename, "分析", "辨識欄位", e)
+
+
+def _restore(job: Dict[str, Any]) -> Tuple[List[Slot], Dict[str, planner.Decision]]:
+    """DB 裡的 JSON 還原成 Slot 與決策。"""
+    slots = [Slot(**s) for s in job["anchors"]]
+    decisions = {k: planner.Decision(*v) for k, v in job["decided"].items()}
+    return slots, decisions
 
 
 def get_job_state(job_id: str) -> Optional[Dict[str, Any]]:
@@ -152,9 +176,8 @@ def get_plan(job_id: str) -> Optional[PlanOut]:
     job = db.get_job(job_id)
     if not job:
         return None
-    slots = [Slot(**s) for s in job["anchors"]]
-    decisions = {k: tuple(v) for k, v in job["decided"].items()}
-    return _render(job_id, job["filename"], job["fingerprint"],
+    slots, decisions = _restore(job)
+    return _render(job_id, job["filename"],
                    bool(db.get_template(job["fingerprint"])), slots, decisions)
 
 
@@ -171,11 +194,8 @@ def preview_docx(job_id: str, which: str) -> Optional[bytes]:
     if which == "original":
         return src.read_bytes()
 
-    slots = [Slot(**s) for s in job["anchors"]]
-    decisions = {k: tuple(v) for k, v in job["decided"].items()}
-    ops, _ = planner.build_plan(
-        slots, db.get_kv("profile") or {}, decisions,
-        min_confidence=db.get_settings()["min_confidence"])
+    slots, decisions = _restore(job)
+    ops, _ = planner.build_plan(slots, db.get_kv("profile") or {}, decisions)
     with tempfile.TemporaryDirectory(prefix="preview_") as tmp:
         filled = Path(tmp) / "filled.docx"
         writer.apply_ops(str(src), str(filled), ops, highlight=True)
@@ -187,22 +207,25 @@ def apply_fixes(job_id: str, fixes: List[Tuple[str, str]]) -> Optional[PlanOut]:
     job = db.get_job(job_id)
     if not job:
         return None
-    slots = [Slot(**s) for s in job["anchors"]]
-    decisions = {k: tuple(v) for k, v in job["decided"].items()}
+    slots, decisions = _restore(job)
     valid = {s.id for s in slots}
 
-    lessons = db.get_kv("learned_labels") or {}
-    lessons_dirty = False
+    # 先整批驗證再套用：中途才發現非法值的話，前面幾筆已經播報了
+    # 「修改成功」、學習字典也動了，但整批決策不會落庫
     for slot_id, field_key in fixes:
         if slot_id not in valid:
             raise ValueError(f"位置不存在：{slot_id}")
         if field_key not in BY_KEY and field_key not in ("__SKIP__", "__UNKNOWN__"):
             raise ValueError(f"未知欄位代碼：{field_key}")
+
+    lessons = db.get_kv("learned_labels") or {}
+    lessons_dirty = False
+    for slot_id, field_key in fixes:
         previous = decisions.get(slot_id)
-        old = previous[0] if previous else ""
-        label = previous[4] if previous else ""
-        decisions[slot_id] = (field_key, previous[1] if previous else 0, 1.0,
-                              "manual", label)
+        old = previous.field_key if previous else ""
+        label = previous.label if previous else ""
+        decisions[slot_id] = planner.Decision(
+            field_key, previous.ordinal if previous else 0, "manual", label)
         # 這是日後改進提示詞的唯一依據
         log.info("使用者修正 %s：%s → %s", slot_id, old or "(未決定)", field_key)
         actions.record("修改欄位「%s」", label or slot_id)
@@ -211,7 +234,7 @@ def apply_fixes(job_id: str, fixes: List[Tuple[str, str]]) -> Optional[PlanOut]:
         db.put_kv("learned_labels", lessons)
 
     db.update_job(job_id, decided={k: list(v) for k, v in decisions.items()})
-    return _render(job_id, job["filename"], job["fingerprint"],
+    return _render(job_id, job["filename"],
                    bool(db.get_template(job["fingerprint"])), slots, decisions)
 
 
@@ -243,13 +266,8 @@ def write_output(job_id: str) -> Optional[Dict[str, Any]]:
     job = db.get_job(job_id)
     if not job:
         return None
-    slots = [Slot(**s) for s in job["anchors"]]
-    decisions = {k: tuple(v) for k, v in job["decided"].items()}
-    settings = db.get_settings()
-
-    ops, _ = planner.build_plan(
-        slots, db.get_kv("profile") or {}, decisions,
-        min_confidence=settings["min_confidence"])
+    slots, decisions = _restore(job)
+    ops, _ = planner.build_plan(slots, db.get_kv("profile") or {}, decisions)
 
     t0 = time.perf_counter()
     # 下載的成品不標黃底：要核對填在哪一格，看網頁上的左右對照就好，
@@ -268,22 +286,16 @@ def write_output(job_id: str) -> Optional[Dict[str, Any]]:
     # 連略過的位置也要記，否則下次還會為了那些格子再呼叫一次。
     mapping = dict(db.get_template(job["fingerprint"]))
     mapping.update({sid: {"field_key": key, "ordinal": ordinal, "label": label}
-                    for sid, (key, ordinal, _conf, _src, label) in decisions.items()})
+                    for sid, (key, ordinal, _src, label) in decisions.items()})
     db.put_template(job["fingerprint"], mapping, source_name=job["filename"])
-    db.update_job(job_id, status="written")
     log.info("範本已學習 fingerprint=%s 位置=%d", job["fingerprint"], len(mapping))
 
-    return {"job_id": job_id, "written": result["written"],
-            "failed": result["failed"], "learned": len(mapping),
-            "download_url": f"/api/jobs/{job_id}/output"}
+    return {"job_id": job_id, "written": result["written"], "failed": result["failed"]}
 
 
-def _render(job_id: str, filename: str, fingerprint: str, cached: bool,
+def _render(job_id: str, filename: str, cached: bool,
             slots: List[Slot], decisions: Dict[str, Any]) -> PlanOut:
-    settings = db.get_settings()
-    ops, skipped = planner.build_plan(
-        slots, db.get_kv("profile") or {}, decisions,
-        min_confidence=settings["min_confidence"])
+    ops, skipped = planner.build_plan(slots, db.get_kv("profile") or {}, decisions)
 
     items = [_item(o, "fill") for o in ops] + [_item(s, "skip") for s in skipped]
     items.sort(key=lambda i: i.slot_id)
@@ -293,7 +305,7 @@ def _render(job_id: str, filename: str, fingerprint: str, cached: bool,
         by_source[o.source] = by_source.get(o.source, 0) + 1
 
     return PlanOut(
-        job_id=job_id, filename=filename, fingerprint=fingerprint,
+        job_id=job_id, filename=filename,
         template_cached=cached, llm_available=llm.available(config.LLM_HOST),
         stats=PlanStats(slots=len(slots), fill=len(ops), skip=len(skipped),
                         by_source=by_source),
@@ -303,9 +315,8 @@ def _render(job_id: str, filename: str, fingerprint: str, cached: bool,
 def _item(op, status: str) -> PlanItem:
     return PlanItem(
         slot_id=op.slot.id, label=op.label, kind=op.slot.kind,
-        options=op.slot.options,
-        field_key=op.field_key, ordinal=op.ordinal, value=str(op.value),
-        existing=op.slot.existing, confidence=op.confidence, source=op.source,
+        field_key=op.field_key, value=str(op.value),
+        existing=op.slot.existing, source=op.source,
         status=status, note=op.note)
 
 
@@ -327,7 +338,8 @@ def _import_worker(import_id: str, filename: str) -> None:
     try:
         is_pdf = src.suffix == ".pdf"
         db.update_import(import_id, stage="讀取文件內容")
-        text = convert.pdf_to_text(src.read_bytes()) if is_pdf else document.text_only(str(src))
+        pdf_bytes = src.read_bytes() if is_pdf else b""
+        text = convert.pdf_to_text(pdf_bytes) if is_pdf else document.text_only(str(src))
 
         # .docx 攤平後本來就帶著表格結構，附截圖反而讓模型改去讀圖——實測純文字
         # 比較準（欄位標題被當成值、姓名被當成職稱那類錯誤明顯變多）
@@ -335,7 +347,7 @@ def _import_worker(import_id: str, filename: str) -> None:
         if is_pdf and llm.supports_vision(config.LLM_HOST):
             try:
                 db.update_import(import_id, stage="擷取頁面截圖")
-                images = convert.pdf_to_page_pngs(src.read_bytes())
+                images = convert.pdf_to_page_pngs(pdf_bytes)
                 log.info("視覺模式：附 %d 頁截圖", len(images))
             except Exception as e:
                 log.warning("截圖產生失敗，改用純文字讀取：%s", e)
@@ -344,7 +356,7 @@ def _import_worker(import_id: str, filename: str) -> None:
         db.update_import(import_id, stage="模型讀取資料中")
         try:
             extracted = reader.read(text, config.LLM_HOST, config.LLM_MODEL, images=images)
-        except llm.LlmUnavailable:
+        except llm.LlmError:
             if not images:
                 raise
             # 視覺呼叫失敗不該讓整次匯入陪葬，退回純文字再試一次
@@ -357,16 +369,8 @@ def _import_worker(import_id: str, filename: str) -> None:
                  len(text), len(rows), sum(1 for r in rows if not r.default_checked),
                  int((time.perf_counter() - t0) * 1000))
         actions.record("上傳履歷「%s」成功，等待確認匯入", filename)
-    except llm.LlmUnavailable as e:
-        log.warning("匯入失敗 %s：%s", filename, e)
-        db.update_import(import_id, status="failed", stage="",
-                         error="模型還沒啟動，無法讀取資料。請從右上角啟動模型後重新上傳")
-        actions.problem("上傳履歷「%s」失敗：模型還沒啟動", filename)
     except Exception as e:
-        log.exception("匯入失敗 %s", filename)
-        db.update_import(import_id, status="failed", stage="",
-                         error=f"無法解析這份文件：{e}")
-        actions.problem("上傳履歷「%s」失敗：檔案無法解析", filename)
+        _fail(db.update_import, import_id, filename, "匯入", "讀取資料", e)
 
 
 def import_source(import_id: str) -> Optional[bytes]:

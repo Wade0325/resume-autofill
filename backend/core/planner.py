@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from . import document, llm
 from .document import Slot
@@ -34,7 +34,6 @@ class FillOp:
     slot: Slot
     field_key: str
     value: str
-    confidence: float
     source: str               # cache | model | manual
     label: str = ""           # 表格上印在這格旁邊的字，機械抽取自列首／欄首
     note: str = ""
@@ -42,7 +41,12 @@ class FillOp:
     clear: Tuple[str, ...] = ()   # 勾這個之前要先還原的同組選項
 
 
-Decision = Tuple[str, int, float, str, str]   # field_key, ordinal, confidence, source, label
+class Decision(NamedTuple):
+    """一個位置的對映決策。存進 DB 時仍以四元 list 序列化，格式不變。"""
+    field_key: str
+    ordinal: int
+    source: str       # rule | learned | model | cache | manual
+    label: str
 
 # 舊版由模型照抄標籤，常把 {{tbl1.r2.c6}} 位置標記一起抄回來；
 # 快取裡可能還留著這種髒 label，讀出來時清掉
@@ -50,9 +54,12 @@ def _clean_label(raw: Any) -> str:
     return document.MARKER_RE.sub("", str(raw or "")).strip()[:40]
 
 
+def _squash(text: str) -> str:
+    return re.sub(r"[\s　:：*※()（）\[\]]+", "", text or "").lower()
+
+
 # 標籤 → 欄位的確定性對照（squash 後精確比對），decide 與 align_labels 共用
-LABEL_MAP = {re.sub(r"[\s　:：*※()（）\[\]]+", "", lbl).lower(): key
-             for lbl, key in {**BY_LABEL, **LABEL_ALIASES}.items()}
+LABEL_MAP = {_squash(lbl): key for lbl, key in {**BY_LABEL, **LABEL_ALIASES}.items()}
 
 
 def _mech_label(slot: Slot, headers: Dict[str, Dict[str, str]]) -> str:
@@ -69,12 +76,14 @@ def _mech_label(slot: Slot, headers: Dict[str, Dict[str, str]]) -> str:
     return (row or col)[:40]
 
 
-def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
+def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
+                     host: str, model: str,
                      cached: Optional[Dict[str, Any]] = None,
                      headers: Optional[Dict[str, Dict[str, str]]] = None,
                      learned: Optional[Dict[str, Any]] = None
                      ) -> Dict[str, Decision]:
     """標籤驅動的對映：程式找標籤、定位置，模型只處理對照表外的標籤。
+    texts 是 ParsedDoc.table_texts() 的表格文字網格。
 
     反轉舊作法（枚舉所有空格、逐格問模型）：表格上印的標籤才是可靠的錨點，
     「值填在標籤右邊或下面」是確定性的幾何規則。錨不住的位置留白待人工，
@@ -93,8 +102,8 @@ def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
         hit = cached.get(slot.id)
         if hit:
             # 舊快取可能存到未清理的 label，讀出來時一併清
-            decisions[slot.id] = (hit["field_key"], hit.get("ordinal", 0), 1.0,
-                                  "cache", _clean_label(hit.get("label", "")))
+            decisions[slot.id] = Decision(hit["field_key"], hit.get("ordinal", 0),
+                                          "cache", _clean_label(hit.get("label", "")))
         else:
             pending.append(slot)
 
@@ -102,7 +111,6 @@ def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
     if not pending:
         return decisions
 
-    texts = document.table_texts(path)
     # 底線位置不進來搶：同一格的勾選群才是旁邊標籤要錨定的對象，
     # 底線自己會用「前面印的字」當標籤
     by_loc = {(s.loc["table"], s.loc["row"], s.loc["col"]): s
@@ -187,24 +195,26 @@ def decide_by_anchor(path: str, slots: List[Slot], host: str, model: str,
             sq = _squash(label)
             key = (resolved.get(sq) or known.get(sq)
                    or model_keys.get(f"{sq}|{_squash(ctx)}", ""))
-            if key not in BY_KEY:
+            # __SKIP__／__UNKNOWN__ 也是有效結論：使用者教過「這不用填」或
+            # 模型明確判過的，要保留下來，不能掉進兜底變成「找不到對應」
+            if key not in BY_KEY and key not in ("__SKIP__", "__UNKNOWN__"):
                 continue
             source = ("rule" if resolved.get(sq)
                       else "learned" if known.get(sq) else "model")
             if "[]" not in key and mode == "below":
                 targets = targets[:1]      # 單值欄位只吃緊鄰的一格，不吃整欄
-            conf = {"rule": 1.0, "learned": 0.95}.get(source, 0.85)
             for s in targets:
                 if s.id not in decisions:
-                    decisions[s.id] = (key, 0, conf, source,
-                                       label.replace("\n", " ")[:40])
+                    decisions[s.id] = Decision(key, 0, source,
+                                               label.replace("\n", " ")[:40])
 
     # 錨不住的一律留白待人工，標籤用機械抽取的給使用者認格子
     for s in pending:
         if s.id not in decisions:
-            decisions[s.id] = ("__UNKNOWN__", 0, 0.0, "rule", _mech_label(s, headers))
+            decisions[s.id] = Decision("__UNKNOWN__", 0, "rule",
+                                       _mech_label(s, headers))
 
-    anchored = sum(1 for s in pending if decisions[s.id][0] in BY_KEY)
+    anchored = sum(1 for s in pending if decisions[s.id].field_key in BY_KEY)
     log.info("錨定完成 可填=%d 留白=%d 學過的標籤=%d 對照表外=%d",
              anchored, len(pending) - anchored, len(known), len(unknown))
     _renumber(slots, decisions)
@@ -268,7 +278,7 @@ def _resolve_labels(unknown: Dict[str, str], host: str, model: str) -> Dict[str,
     try:
         result = llm.ask(host, LABEL_PROMPT, user, schema, model=model,
                          label=f"標籤對映:{len(shown)}個")
-    except llm.LlmUnavailable:
+    except llm.LlmError:
         log.warning("模型不可用，對照表外的 %d 個標籤先留白", len(shown))
         return {}
     return {by_shown[m["label"]]: m.get("field_key", "")
@@ -310,7 +320,7 @@ def align_labels(slots: List[Slot], decisions: Dict[str, Decision],
     # 模型把同一列的兩格抄了同一個標籤時（月薪與任職期間都寫「任職期間」），
     # 用機械抽取的欄首仲裁：欄首對得上欄位定義的，以欄首為準
     dup: Dict[Tuple[int, int, str], List[str]] = {}
-    for sid, (_k, _o, _c, src, label) in decisions.items():
+    for sid, (_k, _o, src, label) in decisions.items():
         slot = by_id.get(sid)
         if src == "model" and label and slot is not None and "row" in slot.loc:
             dup.setdefault((slot.loc["table"], slot.loc["row"], _squash(label)),
@@ -324,7 +334,7 @@ def align_labels(slots: List[Slot], decisions: Dict[str, Decision],
             if col_hdr and col_hdr in LABEL_MAP:
                 effective[sid] = col_hdr
 
-    for sid, (key, ordinal, conf, src, label) in list(decisions.items()):
+    for sid, (key, ordinal, src, label) in list(decisions.items()):
         if src != "model" or key == "__SKIP__":
             continue
         # 只看這一格自己的標籤。欄首／列首在密集表格常是隔壁欄位的字
@@ -334,13 +344,13 @@ def align_labels(slots: List[Slot], decisions: Dict[str, Decision],
             continue
 
         if key in BY_KEY and any(b in text for b in blocked):
-            decisions[sid] = ("__SKIP__", 0, 1.0, src, label)
+            decisions[sid] = Decision("__SKIP__", 0, src, label)
             log.info("標籤對齊 %s：%s → __SKIP__（白名單外欄位）", sid, key)
             continue
 
         target = LABEL_MAP.get(text)
         if target and target != key:
-            decisions[sid] = (target, ordinal, 1.0, src, label)
+            decisions[sid] = Decision(target, ordinal, src, label)
             log.info("標籤對齊 %s：%s → %s", sid, key, target)
 
     # 期間欄配對：同列同類的期間位置，兩格拆起訖、單格用合成
@@ -357,10 +367,10 @@ def align_labels(slots: List[Slot], decisions: Dict[str, Decision],
                   [f"{section}[].start"] +
                   ["__SKIP__"] * (len(sids) - 2) + [f"{section}[].end"])
         for sid, new_key in zip(sids, wanted):
-            key, ordinal, conf, src, label = decisions[sid]
+            key, ordinal, src, label = decisions[sid]
             # 錨定引擎的合併標題會讓同列兩格拿到同一個 period，這裡拆回起訖
             if src in ("model", "rule") and key != new_key:
-                decisions[sid] = (new_key, ordinal, conf, src, label)
+                decisions[sid] = Decision(new_key, ordinal, src, label)
                 log.info("期間對齊 %s：%s → %s", sid, key, new_key)
     return decisions
 
@@ -410,11 +420,11 @@ def assign_rows(slots: List[Slot], decisions: Dict[str, Decision],
             if entry is None:
                 continue
             for sid in sids:
-                key, _old, conf, src, label = decisions[sid]
+                key, _old, src, label = decisions[sid]
                 if entry < 0 or entry >= len(entries):
-                    decisions[sid] = ("__SKIP__", 0, 1.0, src, label)
+                    decisions[sid] = Decision("__SKIP__", 0, src, label)
                 else:
-                    decisions[sid] = (key, entry, conf, src, label)
+                    decisions[sid] = Decision(key, entry, src, label)
         log.info("列指派 %s tbl%d：%s", section, table,
                  {r: assignment.get(r) for r in sorted(rows)})
     return decisions
@@ -455,7 +465,7 @@ def _ask_rows(section: str, entries: List[Dict[str, Any]],
     try:
         result = llm.ask(host, ASSIGN_PROMPT, "\n".join(lines), schema,
                          model=model, label=f"列指派:{section}")
-    except llm.LlmUnavailable:
+    except llm.LlmError:
         return {}
     valid_rows = {r for r, _ in rows}
     return {int(a["row"]): int(a["entry"])
@@ -481,30 +491,28 @@ def _renumber(slots: List[Slot], decisions: Dict[str, Decision]) -> None:
 
     for items in groups.values():
         for ordinal, (_row, sid) in enumerate(sorted(items)):
-            key, _old, conf, source, label = decisions[sid]
-            decisions[sid] = (key, ordinal, conf, source, label)
+            decisions[sid] = decisions[sid]._replace(ordinal=ordinal)
 
 
 def build_plan(slots: List[Slot], profile: Dict[str, Any],
-               decisions: Dict[str, Decision], min_confidence: float
-               ) -> Tuple[List[FillOp], List[FillOp]]:
+               decisions: Dict[str, Decision]) -> Tuple[List[FillOp], List[FillOp]]:
     by_id = {s.id: s for s in slots}
     ops: List[FillOp] = []
     skipped: List[FillOp] = []
 
-    for sid, (key, ordinal, conf, source, label) in decisions.items():
+    for sid, (key, ordinal, source, label) in decisions.items():
         slot = by_id.get(sid)
         if slot is None:
             continue
 
-        reason = _reject(key, conf, min_confidence)
+        reason = _reject(key)
         if reason:
-            skipped.append(FillOp(slot, key, "", conf, source, label, reason, ordinal))
+            skipped.append(FillOp(slot, key, "", source, label, reason, ordinal))
             continue
 
         value = get_value(profile, key, ordinal)
         if value in (None, ""):
-            skipped.append(FillOp(slot, key, "", conf, source, label,
+            skipped.append(FillOp(slot, key, "", source, label,
                                   "個人資料中此欄位為空", ordinal))
             continue
 
@@ -512,7 +520,7 @@ def build_plan(slots: List[Slot], profile: Dict[str, Any],
         if slot.kind == "checkbox":
             picked = _pick_option(slot.options, str(value))
             if not picked:
-                skipped.append(FillOp(slot, key, str(value), conf, source, label,
+                skipped.append(FillOp(slot, key, str(value), source, label,
                                       "勾選選項對不上", ordinal))
                 continue
             # 同一格可能印了兩組選項（「婚姻：□單身 □已婚  兵役：□役畢 □免役」），
@@ -521,7 +529,7 @@ def build_plan(slots: List[Slot], profile: Dict[str, Any],
             clear = tuple(o for o in others if o and o != picked)
             value = picked
 
-        ops.append(FillOp(slot, key, str(value), conf, source, label,
+        ops.append(FillOp(slot, key, str(value), source, label,
                           ordinal=ordinal, clear=clear))
 
     ops.sort(key=lambda o: o.slot.id)
@@ -534,13 +542,11 @@ def build_plan(slots: List[Slot], profile: Dict[str, Any],
     return ops, skipped
 
 
-def _reject(key: str, conf: float, min_confidence: float) -> str:
+def _reject(key: str) -> str:
     if key in ("__SKIP__", "__UNKNOWN__"):
         return "模型判定非可填欄位或找不到對應"
     if key not in BY_KEY:
         return "此欄位已不存在，請重新指定"
-    if conf < min_confidence:
-        return f"信心值 {conf:.2f} 低於門檻"
     return ""
 
 
@@ -569,10 +575,6 @@ def _alternatives(squashed: str) -> List[str]:
     return [squashed]
 
 
-def _squash(text: str) -> str:
-    return re.sub(r"[\s　:：*※()（）\[\]]+", "", text or "").lower()
-
-
 def get_value(profile: Dict[str, Any], key: str, ordinal: int = 0):
     stored = _stored(profile, key, ordinal)
     if stored:
@@ -585,7 +587,7 @@ def get_value(profile: Dict[str, Any], key: str, ordinal: int = 0):
         if start and end:
             return f"{start}－{end}"
         return start or end
-    return stored
+    return ""
 
 
 def _stored(profile: Dict[str, Any], key: str, ordinal: int):

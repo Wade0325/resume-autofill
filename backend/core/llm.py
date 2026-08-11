@@ -47,8 +47,18 @@ def _tracer():
     return _LANGFUSE
 
 
-class LlmUnavailable(RuntimeError):
-    pass
+class LlmError(RuntimeError):
+    """模型層的錯誤基底。降級路徑（錨定留白、跳過既有值判讀）抓這個——
+    模型出什麼問題都不該讓規則引擎停擺。"""
+
+
+class LlmUnavailable(LlmError):
+    """連不上 llama-server：模型沒啟動或掛了。"""
+
+
+class LlmCallFailed(LlmError):
+    """模型活著但這次呼叫失敗（上下文不夠被截斷、空回應）。
+    訊息要能直接給使用者看——這不是「去啟動模型」能解決的。"""
 
 
 def available(host: str) -> bool:
@@ -139,10 +149,10 @@ def ask(host: str, system: str, user: UserContent, schema: Dict[str, Any],
              int((time.perf_counter() - t0) * 1000))
 
     if choice.get("finish_reason") == "length":
-        raise LlmUnavailable(
+        raise LlmCallFailed(
             "這份文件超出模型的上下文長度，輸出被截斷。"
             "請用更大的 --ctx-size 重啟 llama-server（目前的提示詞約 "
             f"{prompt_chars // 2} tokens）")
     if not content:
-        raise LlmUnavailable("模型沒有回傳任何內容")
+        raise LlmCallFailed("模型沒有回傳任何內容")
     return json.loads(content)
