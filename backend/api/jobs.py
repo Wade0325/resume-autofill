@@ -1,33 +1,20 @@
 """主要流程：上傳 → 檢視計畫 → 修正 → 產生成果。"""
 from __future__ import annotations
 
-import logging
-
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 
-from .. import actions, config, db, service
+from .. import actions, db, service
 from ..schemas import MappingsIn, OutputOut, PlanOut
+from .uploads import DOCX_MEDIA_TYPE, read_upload
 
-log = logging.getLogger(__name__)
 router = APIRouter(prefix="/jobs", tags=["jobs"])
-
-DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
 @router.post("")
 async def create_job(file: UploadFile = File(...)) -> dict:
     """收檔即回，分析在背景跑；用 GET /jobs/{id} 輪詢進度。"""
-    name = file.filename or ""
-    if not name.lower().endswith(".docx"):
-        raise HTTPException(400, "只接受 .docx 檔案。舊版 .doc 請先用 Word 另存成 .docx")
-
-    content = await file.read()
-    if len(content) > config.MAX_UPLOAD_BYTES:
-        raise HTTPException(413, f"檔案超過 {config.MAX_UPLOAD_BYTES // 1024 // 1024} MB 上限")
-    if not content:
-        raise HTTPException(400, "檔案是空的")
-
+    name, content = await read_upload(file, (".docx",))
     job_id = service.analyze(name, content)
     return {"job_id": job_id, "status": "processing", "filename": name}
 

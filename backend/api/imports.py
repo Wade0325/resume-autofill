@@ -1,32 +1,19 @@
 """匯入：從已填寫的履歷抽取資料寫回「我的資料」。"""
 from __future__ import annotations
 
-import logging
-
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile
 
-from .. import config, service
+from .. import service
 from ..schemas import ImportApplyIn, ImportApplyOut
+from .uploads import DOCX_MEDIA_TYPE, read_upload
 
-log = logging.getLogger(__name__)
 router = APIRouter(prefix="/imports", tags=["imports"])
-
-DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
 @router.post("")
 async def create_import(file: UploadFile = File(...)) -> dict:
     """收檔即回，讀取在背景跑；用 GET /imports/{id} 輪詢進度。"""
-    name = file.filename or ""
-    if not name.lower().endswith((".pdf", ".docx")):
-        raise HTTPException(400, "只接受 .pdf 或 .docx 檔案。舊版 .doc 請先用 Word 另存成 .docx")
-
-    content = await file.read()
-    if len(content) > config.MAX_UPLOAD_BYTES:
-        raise HTTPException(413, f"檔案超過 {config.MAX_UPLOAD_BYTES // 1024 // 1024} MB 上限")
-    if not content:
-        raise HTTPException(400, "檔案是空的")
-
+    name, content = await read_upload(file, (".pdf", ".docx"))
     return service.analyze_import(name, content)
 
 
