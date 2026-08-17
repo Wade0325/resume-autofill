@@ -26,6 +26,7 @@ export type Plan = {
   template_cached: boolean
   llm_available: boolean
   stats: { slots: number; fill: number; skip: number; by_source: Record<string, number> }
+  form_fields: string[] // 模型看過版面後認出這份表格要填的欄位
   items: PlanItem[]
 }
 

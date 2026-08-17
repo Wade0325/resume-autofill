@@ -8,6 +8,9 @@ import { PageShell, FooterBar, OverwriteBadge } from '../components/common'
 // pdf.js 佔了主 bundle 一半以上，等真的要顯示預覽時再載
 const DocxCompare = lazy(() => import('../components/DocxCompare'))
 
+// 值是插進原本的字裡的，不會蓋掉表格印好的內容
+const INSERTS = new Set(['checkbox', 'print'])
+
 export default function FillPage() {
   const [fields, setFields] = useState<FieldSpec[]>([])
   const [plan, setPlan] = useState<Plan | null>(null)
@@ -78,7 +81,7 @@ export default function FillPage() {
   }
 
   const overwrites = plan.items.filter(
-    (i) => i.status === 'fill' && i.kind !== 'checkbox' && i.existing.trim(),
+    (i) => i.status === 'fill' && !INSERTS.has(i.kind) && i.existing.trim(),
   )
 
   return (
@@ -98,6 +101,21 @@ export default function FillPage() {
           </span>
         )}
       </div>
+
+      {plan.form_fields.length > 0 && (
+        <details className="bg-slate-50 border border-slate-200 rounded-md px-4 py-3 text-sm">
+          <summary className="cursor-pointer text-slate-700">
+            模型讀出這份表格要填 <b>{plan.form_fields.length}</b> 個欄位
+          </summary>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {plan.form_fields.map((f) => (
+              <span key={f} className="text-xs bg-white border border-slate-200 rounded px-2 py-0.5 text-slate-600">
+                {f}
+              </span>
+            ))}
+          </div>
+        </details>
+      )}
 
       {overwrites.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-md px-4 py-3 text-sm text-amber-800">
@@ -215,9 +233,9 @@ function Row({
       </td>
 
       <td className="px-4 py-2.5">
-        {/* 勾選題的 existing 是選項清單（「□男 □女」）而不是既有答案，
-            打勾也不會抹掉它，所以不該顯示成「將被覆蓋」 */}
-        {item.kind !== 'checkbox' && item.existing.trim() ? (
+        {/* 勾選題的 existing 是選項清單（「□男 □女」）、印字位置的是表格印好的
+            提示（「自　年　月」），值是插進去的，兩種都不會抹掉原本的字 */}
+        {!INSERTS.has(item.kind) && item.existing.trim() ? (
           <span>
             <span className="line-through text-slate-400">{item.existing.slice(0, 24)}</span>
             {!skipped && <OverwriteBadge>將被覆蓋</OverwriteBadge>}

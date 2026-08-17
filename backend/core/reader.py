@@ -131,6 +131,49 @@ def read(text: str, host: str, model: str,
     return kept
 
 
+FORM_PROMPT = """你是履歷表格判讀器。使用者給你一份「空白」的履歷表格全文，
+請列出這份表格要求求職者填寫的欄位。
+
+規則：
+1. 只能從給定的欄位代碼裡挑。表格上有印的才列，沒印的不要列。
+2. 表格上印的是欄位名稱（「姓　名」「就讀學校」「服 務 時 間」），
+   旁邊或下面的空格、方框、底線就是要填的地方。
+3. 公司內部欄位不要列：面談日期、初試複試、任用與否、建議薪資、主管簽章。
+4. 學歷、工作經歷這種有好幾列的，欄位只列一次。
+5. 拿不準的就列進去。這份清單是後面唯一的選項來源，漏掉的欄位就再也填不進去了；
+   多列一個只是多一個沒用到的選項，代價小得多。"""
+
+
+def list_fields(text: str, host: str, model: str) -> List[str]:
+    """空白表格要求填寫哪些欄位。
+
+    逐格判讀是拿一小段字問語意，看不見整體；「這份表格根本沒問月薪」
+    要通篇讀過才知道。這份清單接著當逐格判讀的提示（標★，見
+    planner.decide_by_anchor 的 allowed），實測一份面試基本資料表
+    從 27 格提升到 34 格。
+
+    刻意只讀文字，不附頁面截圖：截圖版會漏掉表格上真的有的欄位
+    （婚姻狀況、血型、電子郵件、通訊地址），同時列出表格上沒有的
+    （身分別、家人年齡）。跟 b8abaa8 當初移除 LibreOffice 的實測結論一致——
+    .docx 攤平後本來就帶著表格結構，附截圖只會讓模型改去讀圖。
+    """
+    keys = [f.key for f in FIELDS if not f.derived]
+    schema = {
+        "type": "object",
+        "properties": {
+            "fields": {"type": "array", "items": {"type": "string", "enum": keys}},
+        },
+        "required": ["fields"],
+    }
+    user = ("可用的欄位代碼：\n"
+            + describe_fields(include_special=False, skip_derived=True)
+            + "\n\n空白表格全文：\n" + text)
+    data = llm.ask(host, FORM_PROMPT, user, schema, model=model, label="表格欄位清單")
+    out = [k for k in dict.fromkeys(data.get("fields", [])) if k in BY_KEY]
+    log.info("表格要填的欄位 %d 個：%s", len(out), ",".join(out))
+    return out
+
+
 def _schema(closed: set = frozenset()) -> Dict[str, Any]:
     props: Dict[str, Any] = {}
     rows: Dict[str, Dict[str, Any]] = {}

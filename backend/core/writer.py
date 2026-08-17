@@ -17,13 +17,14 @@ from __future__ import annotations
 
 import copy
 import re
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from docx import Document
 from docx.oxml.ns import qn
 from docx.table import Table
 
-from .document import BLANK_RUN_RE, CHECKBOX_CHARS, CHECKED_CHARS, _grid
+from .document import (BLANK_RUN_RE, CHECKBOX_CHARS, CHECKED_CHARS, GAP_RE,
+                       TRAILING_COLON_RE, _grid)
 
 # 只列 CHECKBOX_CHARS 裡的字元——document.py 刻意把 ○〇◯ 排除在方框之外
 CHECK_MAP = {"□": "■", "☐": "☑", "▢": "■", "◻": "◼"}
@@ -103,27 +104,6 @@ def _write_into_cell(table: Table, grid: List[List[Any]], row: int, col: int,
     return True
 
 
-def _append_into_cell(grid: List[List[Any]], row: int, col: int, text: str,
-                      highlight: bool) -> bool:
-    """寫進儲存格尾端的空白段落，保留格子裡印好的提示字（郵遞區號□□□）。"""
-    if row >= len(grid) or col >= len(grid[row]):
-        return False
-    cell = grid[row][col]
-    para = next((p for p in reversed(cell.paragraphs) if not p.text.strip()), None)
-    if para is None:
-        para = cell.add_paragraph()
-    coalesce_runs(para)
-    if para.runs:
-        _set_run_text(para.runs[0], text, highlight)
-        return True
-    run = para.add_run()
-    donor = next((r for p in cell.paragraphs for r in p.runs if r.text.strip()), None)
-    if donor is not None:
-        _clone_rpr(donor, run)
-    _set_run_text(run, text, highlight)
-    return True
-
-
 def _replace_span(para, start: int, end: int, text: str, highlight: bool) -> bool:
     """把段落文字的 [start, end) 區間換成 text，只動到牽涉到的 run。"""
     coalesce_runs(para)
@@ -169,6 +149,82 @@ def _fill_inline(para, text: str, highlight: bool, blank_index: int = 0) -> bool
     return _replace_span(para, len(full), len(full), text, highlight)
 
 
+TOKEN_RE = re.compile(r"\d+|[^\W\d_]+", re.UNICODE)
+
+
+def _fill_print(para, value: str, highlight: bool) -> bool:
+    """把值插進印好的字裡留的空白：
+    「自    年    月」＋2016/9 →「自 2016 年 9 月」、
+    「血型：     型」＋B →「血型： B 型」、「備註：」＋xxx →「備註： xxx」。
+
+    兩種放法，先試對得上的那種：
+    1. 疊合——印的字照順序整串出現在值裡（「年  月  日」對上
+       「1998年03月25日」），就把值夾在中間的字補到對應的位置去。
+       單位對單位，不會錯位。
+    2. 依序——印好的字先從值裡扣掉（版面上已經有了），剩下的切成片段，
+       一段一個空白，多出來的併進最後一段。
+    一個空白都沒有（「備註：」）就接在字尾。
+    """
+    text = para.text
+    # 「…英文名：」這種結尾冒號是最明確的下筆位置，優先用；
+    # 一段裡有好幾組「標籤：值」時，前面的空白早就填過別人的值了
+    gaps = ([] if TRAILING_COLON_RE.search(text)
+            else [(m.start(), m.end()) for m in GAP_RE.finditer(text)])
+    if not gaps:
+        return _replace_span(para, len(text), len(text), f" {value}", highlight)
+
+    spans = _overlay(text, gaps, value) or _spread(text, gaps, value)
+    done = False
+    for start, end, new in reversed(spans):
+        done |= _replace_span(para, start, end, new, highlight)
+    return done
+
+
+def _fixed_parts(text: str, gaps: List[Tuple[int, int]]) -> List[Tuple[int, int, str]]:
+    """印好的字被空白切成幾段，回傳每段的 (起, 訖, 內容)。"""
+    out, cursor = [], 0
+    for start, end in gaps + [(len(text), len(text))]:
+        chunk = text[cursor:start]
+        if chunk.strip():
+            out.append((cursor, start, chunk.strip()))
+        cursor = end
+    return out
+
+
+def _overlay(text: str, gaps: List[Tuple[int, int]], value: str
+             ) -> Optional[List[Tuple[int, int, str]]]:
+    """印的字整串照順序出現在值裡 → 兩邊疊合。對不上回 None。"""
+    spans, pos = [], 0
+    for start, end, chunk in _fixed_parts(text, gaps):
+        found = value.find(chunk, pos)
+        if found < 0:
+            return None
+        piece = value[pos:found].strip()
+        pos = found + len(chunk)
+        if not piece:
+            continue
+        gap = next((g for g in gaps if g[1] == start), None)
+        # 這段字前面沒有空白可用時，連它一起換掉（零寬度的區間寫不進去）
+        spans.append((gap[0], gap[1], f" {piece} ") if gap
+                     else (start, end, f"{piece}{chunk}"))
+    return spans
+
+
+def _spread(text: str, gaps: List[Tuple[int, int]], value: str
+            ) -> List[Tuple[int, int, str]]:
+    """值切成片段，依序放進每個空白。"""
+    rest = value
+    for _s, _e, chunk in _fixed_parts(text, gaps):
+        rest = rest.replace(chunk, " ", 1)      # 版面上已經印著的字不用再填一次
+    tokens = TOKEN_RE.findall(rest)
+    if not tokens:
+        return []
+    if len(tokens) > len(gaps):                 # 多出來的併進最後一格
+        tokens = tokens[:len(gaps) - 1] + ["".join(tokens[len(gaps) - 1:])]
+    return [(start, end, f" {tok} ")
+            for (start, end), tok in zip(gaps, tokens) if tok]
+
+
 def _option_box(text: str, option: str) -> Optional[int]:
     """緊接在這個選項前面的方框位置（已勾未勾都算）。
 
@@ -186,28 +242,26 @@ def _option_box(text: str, option: str) -> Optional[int]:
         start = idx + 1
 
 
-def _fill_checkbox(para, option: str, highlight: bool,
-                   clear: Sequence[str] = ()) -> bool:
-    """勾掉這個選項；範本上已經勾著的同組選項先還原。
+def _clear_boxes(para, options: Sequence[str]) -> None:
+    """把同組其他選項已經勾著的框還原。
 
-    範本不一定是空白的——公司先勾好、或使用者上傳自己填過的履歷都很常見。
-    不還原舊的就會變成「■無 ■有」兩個都勾；目標本來就勾對時也要算成功，
-    否則會回報成「有 N 格沒填上」的假警報。
+    範本不一定是空白的——公司先勾好、或使用者上傳自己填過的履歷都很常見，
+    不還原舊的就會變成「■無 ■有」兩個都勾。
     """
+    for other in options:
+        p = _option_box(para.text, other)
+        if p is not None and para.text[p] in CHECKED_CHARS:
+            _replace_span(para, p, p + 1, UNCHECK_MAP.get(para.text[p], "□"), False)
+
+
+def _fill_checkbox(para, option: str, highlight: bool) -> bool:
+    """勾掉這個選項。目標本來就勾對時也要算成功，
+    否則會回報成「有 N 格沒填上」的假警報。"""
     pos = _option_box(para.text, option)
     if pos is None:
         return False
     if para.text[pos] in CHECKED_CHARS:
         return True
-
-    for other in clear:
-        p = _option_box(para.text, other)
-        if p is not None and para.text[p] in CHECKED_CHARS:
-            _replace_span(para, p, p + 1, UNCHECK_MAP.get(para.text[p], "□"), False)
-
-    pos = _option_box(para.text, option)
-    if pos is None:
-        return False
     return _replace_span(para, pos, pos + 1, CHECK_MAP.get(para.text[pos], "■"), highlight)
 
 
@@ -261,6 +315,38 @@ def _fill_formfield(ffs: List[Any], index: int, text: str) -> bool:
     return False
 
 
+def _kept(before: str, after: str) -> bool:
+    """印好的字有沒有原封不動地留著（只准插入，不准改寫）。
+
+    跟匯入端「值必須逐字出現在原文」是同一套紀律，方向相反：
+    那邊防模型編造內容，這邊防我們寫壞表格。
+    """
+    it = iter(after)
+    return all(ch in it for ch in before if not ch.isspace())
+
+
+def _restore(para, text: str) -> None:
+    """把整段還原成原本的字（插壞了才會走到這裡）。"""
+    coalesce_runs(para)
+    if para.runs:
+        para.runs[0].text = text
+        for r in para.runs[1:]:
+            r.text = ""
+
+
+def _target_paras(doc, grid_of, loc: Dict[str, Any]) -> List[Any]:
+    """這個位置涵蓋的段落。分行印的勾選群（「□畢」「□肄」）橫跨好幾段，
+    要勾的那個選項不一定在組長那一段。"""
+    if "table" not in loc:
+        return [doc.paragraphs[loc["para"]]]
+    cell = grid_of(loc["table"])[loc["row"]][loc["col"]]
+    idxs = loc.get("chk_paras")
+    if idxs is None:
+        i = loc.get("para_in_cell")
+        return list(cell.paragraphs) if i is None else [cell.paragraphs[i]]
+    return [cell.paragraphs[i] for i in idxs if i < len(cell.paragraphs)]
+
+
 def apply_ops(src_path: str, out_path: str, ops: List[Any],
               highlight: bool = False) -> Dict[str, Any]:
     doc = Document(src_path)
@@ -296,12 +382,8 @@ def apply_ops(src_path: str, out_path: str, ops: List[Any],
             elif kind == "formfield":
                 done = _fill_formfield(scan_of("w:ffData"), loc["ff_index"], op.value)
             elif kind == "cell":
-                if loc.get("tail_para"):
-                    done = _append_into_cell(grid_of(loc["table"]), loc["row"],
-                                             loc["col"], op.value, highlight)
-                else:
-                    done = _write_into_cell(doc.tables[loc["table"]], grid_of(loc["table"]),
-                                            loc["row"], loc["col"], op.value, highlight)
+                done = _write_into_cell(doc.tables[loc["table"]], grid_of(loc["table"]),
+                                        loc["row"], loc["col"], op.value, highlight)
             elif kind == "inline":
                 if "table" in loc:
                     cell = grid_of(loc["table"])[loc["row"]][loc["col"]]
@@ -309,18 +391,20 @@ def apply_ops(src_path: str, out_path: str, ops: List[Any],
                 else:
                     para = doc.paragraphs[loc["para"]]
                 done = _fill_inline(para, op.value, highlight, loc.get("blank_index", 0))
+            elif kind == "print":
+                para = _target_paras(doc, grid_of, loc)[0]
+                before = para.text
+                done = _fill_print(para, op.value, highlight)
+                # 只准插入：印好的字必須一個不少地照原順序留著。對不上就整段
+                # 還原——寧可留白讓人手寫，也不能把表格印的字寫壞
+                if done and not _kept(before, para.text):
+                    _restore(para, before)
+                    done = False
             elif kind == "checkbox":
-                if "para" in loc:
-                    done = _fill_checkbox(doc.paragraphs[loc["para"]], op.value,
-                                          highlight, op.clear)
-                else:
-                    cell = grid_of(loc["table"])[loc["row"]][loc["col"]]
-                    idx = loc.get("para_in_cell")
-                    paras = [cell.paragraphs[idx]] if idx is not None else cell.paragraphs
-                    for p in paras:
-                        if _fill_checkbox(p, op.value, highlight, op.clear):
-                            done = True
-                            break
+                paras = _target_paras(doc, grid_of, loc)
+                for p in paras:      # 分行印的一組，舊的勾可能在別段，先全部還原
+                    _clear_boxes(p, op.clear)
+                done = any(_fill_checkbox(p, op.value, highlight) for p in paras)
         except Exception as e:                    # 單一格失敗不影響其他欄位
             fail.append({"slot": slot.id, "error": str(e)})
             continue

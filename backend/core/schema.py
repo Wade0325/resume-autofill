@@ -5,7 +5,7 @@
 """
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import Collection, List, Optional
 
 
 @dataclass(frozen=True)
@@ -155,14 +155,19 @@ FIELD_KEYS = [f.key for f in FIELDS] + SPECIAL_KEYS
 BY_KEY = {f.key: f for f in FIELDS}
 
 
-def describe_fields(include_special: bool = True, skip_derived: bool = False) -> str:
+def describe_fields(include_special: bool = True, skip_derived: bool = False,
+                    mark: Optional[Collection[str]] = None) -> str:
+    """mark 給定時，在那些欄位後面加★——通篇讀過覺得這份表格有問的欄位。
+    只是提示不是過濾：清單漏掉的欄位仍然選得到（實測拿它當硬性約束會擋掉
+    真的要填的欄位）。"""
     lines = []
     for f in FIELDS:
         if skip_derived and f.derived:
             continue
         extra = f" 選項={f.choices}" if f.choices else ""
         hint = f" — {f.hint}" if f.hint else ""
-        lines.append(f"- {f.key}: {f.label}{extra}{hint}")
+        star = " ★" if mark and f.key in mark else ""
+        lines.append(f"- {f.key}: {f.label}{extra}{hint}{star}")
     if include_special:
         lines.append("- __SKIP__: 這個位置不是求職者要填的（表頭、說明文字、公司自用欄）")
         lines.append("- __UNKNOWN__: 是欄位，但清單裡沒有對應項目")
@@ -203,6 +208,7 @@ LABEL_ALIASES = {
     "服務單位": "experience[].company",
     "服務時間": "experience[].period",
     "出生日期": "basic.birthday",
+    "服役資歷": "basic.military",
     "可上班日期": "job.available_date",
     "資訊來源": "job.recruit_channel",
     "手機": "contact.mobile",

@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS job (
     status      TEXT NOT NULL,   -- processing | analyzed | failed
     anchors     TEXT NOT NULL,
     decided     TEXT NOT NULL,
+    form_fields TEXT NOT NULL DEFAULT '[]', -- VLM 看版面認出「這份表格要填哪些欄位」
     stage       TEXT NOT NULL DEFAULT '',   -- processing 時目前進行到哪一步
     error       TEXT NOT NULL DEFAULT '',   -- failed 時給使用者看的原因
     created_at  TEXT NOT NULL
@@ -78,6 +79,7 @@ def init() -> None:
         # import_job 的 status 預設 ready：舊資料列都是同步時代分析完才寫入的
         for ddl in ("ALTER TABLE job ADD COLUMN stage TEXT NOT NULL DEFAULT ''",
                     "ALTER TABLE job ADD COLUMN error TEXT NOT NULL DEFAULT ''",
+                    "ALTER TABLE job ADD COLUMN form_fields TEXT NOT NULL DEFAULT '[]'",
                     "ALTER TABLE import_job ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'",
                     "ALTER TABLE import_job ADD COLUMN stage TEXT NOT NULL DEFAULT ''",
                     "ALTER TABLE import_job ADD COLUMN error TEXT NOT NULL DEFAULT ''"):
@@ -122,7 +124,8 @@ def put_template(fingerprint: str, mapping: Dict[str, str], source_name: str = "
 
 # job 與 import_job 的存取共用同一套「SELECT * → dict → 解 JSON 欄位」與
 # 動態 SET 樣板，只差表名與哪些欄位是 JSON
-_JSON_COLS = {"job": ("anchors", "decided"), "import_job": ("extracted",)}
+_JSON_COLS = {"job": ("anchors", "decided", "form_fields"),
+              "import_job": ("extracted",)}
 
 
 def _get_row(table: str, row_id: str) -> Optional[Dict[str, Any]]:
@@ -168,10 +171,12 @@ def update_job(job_id: str, *, decided: Optional[Dict[str, Any]] = None,
                status: Optional[str] = None,
                anchors: Optional[List[Dict[str, Any]]] = None,
                fingerprint: Optional[str] = None,
+               form_fields: Optional[List[str]] = None,
                stage: Optional[str] = None,
                error: Optional[str] = None) -> None:
     _update_row("job", job_id, {"decided": decided, "anchors": anchors,
                                 "fingerprint": fingerprint, "status": status,
+                                "form_fields": form_fields,
                                 "stage": stage, "error": error})
 
 

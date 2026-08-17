@@ -21,14 +21,22 @@ PLACEHOLDER_RE = re.compile(r"^[\s　_＿…．\.\-—–]*$")
 BLANK_RUN_RE = re.compile(r"[_＿]{2,}|[\.．]{4,}")
 CHECKBOX_CHARS = "□☐▢◻"   # 不含 ○〇◯：中文常用來遮蔽名稱（○○公司）
 CHECKED_CHARS = "■☑▣◼"
-TRAILING_COLON_RE = re.compile(r"[:：][ 　]*$")
+TRAILING_COLON_RE = re.compile(r"[:：□][ 　]*$")
+# 印好的字之間留出來的書寫空間：「自    年    月」「血型：    型」
+# 「公分/     公斤」的值都是寫在這些空白上。
+#
+# 這裡刻意只認「插不插得下字」這件機械事實，不猜那格是什麼欄位——
+# 日期、身高、血型各寫一條正規表示式是永遠追不完的，那是模型的工作。
+# 兩個半形空白以上或任一個全形空白才算：「就 學 期 間」那種單一空格
+# 是字距排版，不是留白。
+GAP_RE = re.compile(r"[ ]{2,}|　+")
 
 
 @dataclass
 class Slot:
     """一個可以填字的位置。"""
     id: str
-    kind: str                                            # sdt | formfield | cell | inline | checkbox
+    kind: str                                   # sdt | formfield | cell | inline | checkbox | print
     loc: Dict[str, Any] = field(default_factory=dict)    # writer 用來定位
     options: List[str] = field(default_factory=list)     # 勾選題的選項
     existing: str = ""                                   # 目前的內容，非空代表會被覆蓋
@@ -51,6 +59,13 @@ def cell_text(cell: _Cell) -> str:
 
 def is_blank(text: str) -> bool:
     return bool(PLACEHOLDER_RE.match(text or ""))
+
+
+def has_room(text: str) -> bool:
+    """這段印好的字裡插不插得下值。純機械判斷，寫入端的前提條件：
+    字與字之間有留白（「自　　年　　月」），或結尾是冒號、方框
+    （「備註：」「郵遞區號□□□」）——值接在後面。"""
+    return bool(GAP_RE.search(text or "") or TRAILING_COLON_RE.search(text or ""))
 
 
 def squash(text: str) -> str:
@@ -258,31 +273,33 @@ def _paragraph_line(para: Paragraph, index: int, slots: List[Slot]) -> str:
     text = para.text.strip()
     if not text:
         return ""
-    rendered = _para_render(text, f"p{index}", {"para": index}, slots)
-    if "{{" in rendered:
-        return rendered
-
-    if TRAILING_COLON_RE.search(text):
-        sid = f"p{index}.tail"
-        slots.append(Slot(id=sid, kind="inline", loc={"para": index}))
-        return f"{text}{{{{{sid}}}}}"
-
-    return text
+    return _para_render(text, f"p{index}", {"para": index}, slots)
 
 
-def _para_render(text: str, sid: str, loc: Dict[str, Any], slots: List[Slot]) -> str:
-    """一個段落的可填位置：勾選群一個，段落裡的每條底線各一個。
+def _para_render(text: str, sid: str, loc: Dict[str, Any], slots: List[Slot],
+                 chk_text: Optional[str] = None,
+                 chk_loc: Optional[Dict[str, Any]] = None) -> str:
+    """一個段落的可填位置：勾選群一個，段落裡的每條底線各一個，
+    都沒有但字裡留了空白時，那段印好的字自己就是一個位置。
 
     表格儲存格與文件段落共用——同樣是「一段字裡有方框和底線」，
     差別只在 loc 怎麼指到那個段落。
+
+    「印著字又能填」只看插不插得下（has_room），不看那些字長什麼樣子：
+    它是不是欄位、是哪個欄位、值該不該寫進去，一律由模型判。
+
+    chk_text 覆寫勾選群的文字範圍：分行印的同一組選項（「□畢」「□肄」
+    各佔一段）由呼叫端併成整組的文字，傳空字串代表這段是組員、
+    位置已經由組長建過了。
     """
     text = text.strip()
     out, cursor = [], 0
-    options = checkbox_options(text) if any(
-        ch in text for ch in CHECKBOX_CHARS + CHECKED_CHARS) else []
+    boxes = text if chk_text is None else chk_text
+    options = checkbox_options(boxes) if any(
+        ch in boxes for ch in CHECKBOX_CHARS + CHECKED_CHARS) else []
     if options:
-        slots.append(Slot(id=f"{sid}.chk", kind="checkbox", loc=loc,
-                          options=options, existing=text))
+        slots.append(Slot(id=f"{sid}.chk", kind="checkbox", loc=chk_loc or loc,
+                          options=options, existing=boxes))
         out.append(f"{{{{{sid}.chk}}}} ")
 
     for bi, m in enumerate(BLANK_RUN_RE.finditer(text)):
@@ -290,6 +307,10 @@ def _para_render(text: str, sid: str, loc: Dict[str, Any], slots: List[Slot]) ->
                           loc={**loc, "blank_index": bi}))
         out.append(text[cursor:m.start()] + f"{{{{{sid}.b{bi}}}}}")
         cursor = m.end()
+
+    if not out and has_room(text):
+        slots.append(Slot(id=f"{sid}.txt", kind="print", loc=loc, existing=text))
+        return f"{text}{{{{{sid}.txt}}}}"
     return "".join(out) + text[cursor:]
 
 
@@ -309,35 +330,67 @@ def _table_lines(grid: List[List[_Cell]], table_index: int, slots: List[Slot],
     return out
 
 
+def _checkbox_groups(paras: List[str]) -> Dict[int, List[int]]:
+    """儲存格裡的勾選段落怎麼分組：組長段落 → 這組涵蓋的段落索引。
+
+    「□畢」「□肄」各佔一段其實是同一題。拆成兩個位置的話，錨定只認得到
+    其中一個（同一格只留得下一筆），勾選也對不上——值「畢」比不到只印著
+    「肄」的那格。方框前面印了字的段落自成一組，所以一格六道是非題
+    （「您是否…？□是 □否」各佔一段）不會被併起來。
+    """
+    marks = CHECKBOX_CHARS + CHECKED_CHARS
+    groups: Dict[int, List[int]] = {}
+    leader: Optional[int] = None
+    for i, text in enumerate(paras):
+        if not any(ch in text for ch in marks):
+            leader = None                    # 中間夾了別的內容就斷開
+            continue
+        head = re.split(f"[{marks}]", text)[0].strip(" 　:：")
+        if head or leader is None:
+            leader = i
+            groups[i] = [i]
+        else:
+            groups[leader].append(i)
+    return groups
+
+
 def _cell_render(cell: _Cell, table_index: int, r: int, c: int,
                  slots: List[Slot], overwritable: Set[str]) -> str:
     text = cell_text(cell)
     sid = f"tbl{table_index}.r{r}.c{c}"
     loc = {"table": table_index, "row": r, "col": c}
 
-    if any(ch in text for ch in CHECKBOX_CHARS + CHECKED_CHARS):
-        # 勾選格逐段處理，跟一般段落同一套規則：每段的勾選群是一個位置，
-        # 段落裡的底線各自也是一個位置。一格印六道是非題（各佔一段）時
-        # 才勾得到每一題；「□免役，原因＿＿」的底線才填得進去。
-        rendered = [_para_render(p.text, f"{sid}.p{i}", {**loc, "para_in_cell": i}, slots)
-                    for i, p in enumerate(cell.paragraphs)]
-        if any("{{" in x for x in rendered):
-            return " ".join(rendered).replace("\n", " ")
-
     if is_blank(text):
         slots.append(Slot(id=sid, kind="cell", loc=loc))
         return f"{{{{{sid}}}}}"
 
+    # 使用者填過的值：整格換掉，不是插字
     if squash(text) in overwritable:
         slots.append(Slot(id=sid, kind="cell", loc=loc, existing=text))
         return f"{{{{{sid}}}}}{text}".replace("\n", " ")
 
-    # 「郵遞區號□□□」「備註：」這類格子：印著短提示，人在提示後面接著寫。
-    # 值附加在格尾（必要時補段落），不動印好的提示字。
-    # 垂直合併的大格常長這樣——提示在主格、書寫空間是合併出來的視覺留白
-    if len(squash(text)) <= 14 and re.search(r"[：:□]\s*$", text.strip()):
-        slots.append(Slot(id=sid, kind="cell", loc={**loc, "tail_para": True}))
-        return f"{text} {{{{{sid}}}}}".replace("\n", " ")
+    paras = [p.text.strip() for p in cell.paragraphs]
+    if any(paras):
+        # 印著字的格子逐段處理，跟一般段落同一套規則：每段的勾選群是一個位置，
+        # 段落裡的底線各自也是一個位置，字裡留了空白的那段自己是一個位置。
+        # 一格印六道是非題（各佔一段）時才勾得到每一題；
+        # 「□免役，原因＿＿」的底線才填得進去。
+        groups = _checkbox_groups(paras)
+        in_group = {i for idxs in groups.values() for i in idxs}
+        rendered = []
+        for i, ptext in enumerate(paras):
+            idxs = groups.get(i)
+            chk_text = chk_loc = None
+            if idxs and len(idxs) > 1:        # 分行印的同一組選項，併成一個位置
+                chk_text = "\n".join(paras[j] for j in idxs)
+                chk_loc = {**loc, "para_in_cell": i, "chk_paras": idxs}
+            elif idxs is None and i in in_group:
+                chk_text = ""                 # 組員：位置已經由組長建過了
+            rendered.append(_para_render(ptext, f"{sid}.p{i}",
+                                         {**loc, "para_in_cell": i}, slots,
+                                         chk_text, chk_loc))
+        if any("{{" in x for x in rendered):
+            return " ".join(rendered).replace("\n", " ")
 
     return text.replace("\n", " ")
 

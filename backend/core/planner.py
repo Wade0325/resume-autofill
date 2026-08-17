@@ -18,15 +18,26 @@ from .schema import (BLOCKED_LABELS, BY_KEY, BY_LABEL, DERIVED_FROM, FIELD_KEYS,
 
 log = logging.getLogger(__name__)
 
-LABEL_PROMPT = """這些是履歷表格上印的欄位標籤，請為每一個指出對應的欄位代碼。
+LABEL_PROMPT = """這些是履歷表格上印的字，請為每一則判斷兩件事：對應哪個欄位、這幾個字是什麼。
 
-規則：
+field_key：
 1. 只能使用給定的欄位代碼。
-2. 「｜」後面是這個標籤所在列的列首，用它判斷語意：
-   「姓名｜緊急連絡人」是緊急連絡人的姓名（emergency.name），不是本人姓名。
+2. 「｜」後面是這一則旁邊印的字（左邊／上面），用它判斷語意：
+   「姓名｜列首:緊急聯絡人」是聯絡人的姓名（emergency.name），不是本人姓名。
 3. 不是求職者要填的（公司內部欄位、簽章欄、說明文字）→ __SKIP__。
-4. 是求職者要填、但清單裡沒有對應項目 → __UNKNOWN__。
-5. 每個標籤都要輸出一次，label 照抄輸入的字串。"""
+4. 清單裡沒有對應項目 → __UNKNOWN__。
+
+role：這幾個字本身是什麼？只看字，不用管排版留了多少空白。
+- 名稱＝這幾個字是欄位的名字，人在旁邊的空格寫答案
+    「姓　　名」→ 名稱（「姓名」就是欄位的名字，中間的空白只是把字撐開）
+    「就 學 期 間」「服務單位」「關　係」「稱謂」→ 名稱
+- 格式＝這幾個字是值的單位或格式，數字就寫在這些字前面的空白裡
+    「自　　年　　月」→ 格式（年、月是日期的單位）
+    「　年　月　日」→ 格式
+    「公分/　　公斤」→ 格式（公分、公斤是單位）
+    「血型：　　型」→ 格式（型是單位）
+
+每一則都要輸出一次，label 照抄輸入的字串。"""
 
 
 @dataclass
@@ -80,7 +91,8 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
                      host: str, model: str,
                      cached: Optional[Dict[str, Any]] = None,
                      headers: Optional[Dict[str, Dict[str, str]]] = None,
-                     learned: Optional[Dict[str, Any]] = None
+                     learned: Optional[Dict[str, Any]] = None,
+                     allowed: Optional[List[str]] = None
                      ) -> Dict[str, Decision]:
     """標籤驅動的對映：程式找標籤、定位置，模型只處理對照表外的標籤。
     texts 是 ParsedDoc.table_texts() 的表格文字網格。
@@ -88,6 +100,11 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
     反轉舊作法（枚舉所有空格、逐格問模型）：表格上印的標籤才是可靠的錨點，
     「值填在標籤右邊或下面」是確定性的幾何規則。錨不住的位置留白待人工，
     比模型硬猜填錯格安全；標籤全在對照表裡時，整條路零模型呼叫。
+
+    allowed 是模型通篇讀過空白表格後列出的「這份表格要填哪些欄位」
+    （見 reader.list_fields）。逐格判讀時那些欄位標★，模型優先從裡面挑，
+    但沒標★的仍然選得到——實測拿它當硬性約束（把其他欄位從文法裡拿掉）
+    會擋掉真的要填的欄位：清單漏一個，那個欄位就再也填不進去。
 
     learned 是使用者修正累積出來的「標籤→欄位」全域字典（跨表格通用，
     見 service.apply_fixes 的學習端）：A 公司教過的「服務單位＝公司名稱」，
@@ -112,13 +129,29 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
         return decisions
 
     # 底線位置不進來搶：同一格的勾選群才是旁邊標籤要錨定的對象，
-    # 底線自己會用「前面印的字」當標籤
-    by_loc = {(s.loc["table"], s.loc["row"], s.loc["col"]): s
-              for s in pending if "table" in s.loc and "blank_index" not in s.loc}
-    # 格尾附加型位置（「郵遞區號□□□」）自己印著提示字：既是可填位置也是標籤
-    tail_locs = {loc for loc, s in by_loc.items() if s.loc.get("tail_para")}
-
-    # (標籤, 位置們, 錨定方式, 同列列首) 列首是解析語意的上下文：
+    # 底線自己會用「前面印的字」當標籤。
+    # 一格可能有好幾個位置（就學期間的「自　年　月」「至　年　月」各一個），
+    # 只留一個的話另一個永遠錨不住，所以一個座標存一串
+    by_loc: Dict[Tuple[int, int, int], List[Slot]] = {}
+    for s in pending:
+        if "table" in s.loc and "blank_index" not in s.loc:
+            by_loc.setdefault((s.loc["table"], s.loc["row"], s.loc["col"]), []).append(s)
+    # 合併儲存格在涵蓋的每個座標都印著同一段字，位置卻只掛在最左上那格。
+    # 不把整片都算成同一格的話，右緣會被當成另一個標籤問一次，
+    # 同一格就會拿到兩個互相矛盾的答案
+    covered: Dict[Tuple[int, int, int], List[Slot]] = dict(by_loc)
+    for (t, r, c), ss in by_loc.items():
+        text = texts[t][r][c]
+        if not text.strip():
+            continue
+        for rr in range(r, len(texts[t])):
+            if c >= len(texts[t][rr]) or texts[t][rr][c] != text:
+                break
+            for cc in range(c, len(texts[t][rr])):
+                if texts[t][rr][cc] != text:
+                    break
+                covered[(t, rr, cc)] = ss
+    # (標籤, 位置們, 錨定方式, 旁邊印的字) 上下文是解析語意的依據：
     # 「姓名」印在緊急連絡人那一列時是連絡人的姓名，不是本人的
     anchors: List[Tuple[str, List[Slot], str, str]] = []
 
@@ -129,34 +162,50 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
                              s.existing)[0].strip(" 　:：")
             if label:
                 anchors.append((label, [s], "self", ""))
+        elif s.kind == "print" and "table" not in s.loc:
+            anchors.append((s.existing, [s], "self", ""))
         elif "para" in s.loc or "blank_index" in s.loc:
             label = headers.get(s.id, {}).get("row", "")
             if label:
                 anchors.append((label, [s], "self", ""))
 
-    # 表格：印字又不是可填位置的格子當標籤，右邊找一格、下面找一排。
+    # 表格：印著字的格子當標籤，右邊找一格、下面找一排。
     # 合併儲存格在每個涵蓋座標重複出現：右掃從最右端做、下掃從最左端做，
     # 各一次就好——寬標題橫跨八欄時，每欄都往下錨定會把生日塞滿整排分位格
+    has_next: set = set()          # 這段字的右邊或下面真的有空格可填
+    can_self: set = set()          # 這段字自己插得下值（有 print 位置）
     for t, grid in enumerate(texts):
         for r, row in enumerate(grid):
             for c, text in enumerate(row):
-                is_tail = (t, r, c) in tail_locs
-                if not text.strip() or ((t, r, c) in by_loc and not is_tail):
+                # 使用者填過的值不是標籤（那格是待覆蓋的位置，kind=cell）
+                if not text.strip() or any(s.kind == "cell"
+                                           for s in covered.get((t, r, c), ())):
                     continue
-                ctx = next((x for x in reversed(row[:c])
-                            if x.strip() and x != text), "")
-                right: List[Slot] = []
+                ctx = _ctx(grid, r, c)
+                # 印著字又插得下值的格子：那段字既可能是「欄位名稱」（值填旁邊
+                # 那格），也可能是「印好的提示」（人就寫在字中間的空白）。
+                # 兩種都當候選，由模型的 where 決定——規則分不出來的是語意。
+                # 兩邊共用同一個問題（同樣的字＋同樣的上下文），才不會出現
+                # 「當標籤時算 A 欄位、當提示時算 B 欄位」這種自相矛盾的答案
+                mine = [s for s in covered.get((t, r, c), ()) if s.kind == "print"]
+                for s in mine:
+                    anchors.append((s.existing, [s], "self", ctx))
+                    can_self.add(_squash(s.existing))
+                label = mine[0].existing if mine else text
                 if not (c + 1 < len(row) and row[c + 1] == text):
                     right = _scan_right(grid, by_loc, t, r, c)
                     if right:
-                        anchors.append((text, right, "right", ctx))
+                        anchors.append((label, right, "right", ctx))
+                        has_next.add(_squash(label))
                 if not (c > 0 and row[c - 1] == text):
                     below = _scan_below(grid, by_loc, t, r, c)
                     if below:
-                        anchors.append((text, below, "below", ctx))
-                if is_tail and not right:
-                    # 提示字後面沒有別的空格可填 → 值就接在自己格尾
-                    anchors.append((text, [by_loc[(t, r, c)]], "self", ctx))
+                        anchors.append((label, below, "below", ctx))
+                        # 下方只認空白格子：欄名底下是一整欄空格才算「值填在下面」，
+                        # 底下是別區的勾選題（「希望待遇：」下面就是負債狀況）不算，
+                        # 那種要讓值寫回標籤自己留的空白
+                        if any(s.kind == "cell" for s in below):
+                            has_next.add(_squash(label))
 
     # 對照表與學過的比對不看上下文（能精確對上的標籤本身就無歧義，
     # 泛用短標籤在學習端就被擋掉了）；模型解析要看：
@@ -164,12 +213,15 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
     resolved: Dict[str, str] = {}
     known: Dict[str, str] = {}        # 學過的命中（值可能是 __SKIP__＝學過「這不用填」）
     unknown: Dict[str, str] = {}      # composite key → 給模型看的顯示字串
+    settled: Dict[str, str] = {}      # 這份表格裡已經確認的欄位名稱，當模型的範例
     blocked = [_squash(b) for b in BLOCKED_LABELS]
     for label, _targets, mode, ctx in anchors:
         sq = _squash(label)
         if not sq or sq in LABEL_MAP:
             if sq and sq not in resolved:
                 resolved[sq] = LABEL_MAP.get(sq, "")
+                if resolved[sq]:
+                    settled[label.replace("\n", " ").strip()] = resolved[sq]
             continue
         if sq in learned_keys:
             known[sq] = learned_keys[sq]
@@ -183,9 +235,9 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
         if len(sq) <= cap and not sq.isdigit() and not any(b in sq for b in blocked):
             shown = label.replace("\n", " ").strip()[:cap]
             if ctx:
-                shown += f"｜{ctx.replace(chr(10), ' ').strip()[:12]}"
+                shown += f"｜{ctx}"
             unknown[comp] = shown
-    model_keys = _resolve_labels(unknown, host, model) if unknown else {}
+    answers = _resolve_labels(unknown, settled, allowed, host, model) if unknown else {}
 
     # self/right/below＝同格自帶 > 右鄰 > 下方，先到先得
     for want in ("self", "right", "below"):
@@ -193,16 +245,39 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
             if mode != want:
                 continue
             sq = _squash(label)
-            key = (resolved.get(sq) or known.get(sq)
-                   or model_keys.get(f"{sq}|{_squash(ctx)}", ""))
+            hit = answers.get(f"{sq}|{_squash(ctx)}")
+            key = resolved.get(sq) or known.get(sq) or (hit[0] if hit else "")
             # __SKIP__／__UNKNOWN__ 也是有效結論：使用者教過「這不用填」或
             # 模型明確判過的，要保留下來，不能掉進兜底變成「找不到對應」
             if key not in BY_KEY and key not in ("__SKIP__", "__UNKNOWN__"):
                 continue
             source = ("rule" if resolved.get(sq)
                       else "learned" if known.get(sq) else "model")
+            # 值寫在哪：模型說了算；對照表與學過的標籤是欄位名稱，值填旁邊，
+            # 但旁邊要真的有空格——「希望待遇：」右邊下面都沒空位時，
+            # 值就寫在它自己留的空白上
+            # 值寫在哪：以模型判的「名稱／格式」為主，但兩個結構事實蓋過它——
+            # 文件段落沒有「旁邊那格」（「中文姓名：___ 英文名：」是一整段），
+            # 值只能寫在自己身上；反過來，這段字自己插不下值
+            # （「服役資歷」四個字沒留空白）就只能是名稱，值填旁邊
+            where = hit[1] if hit else ("next" if sq in has_next else "self")
+            if sq not in has_next and "table" not in targets[0].loc:
+                where = "self"
+            if where == "self" and sq not in can_self:
+                where = "next"
+            if mode == "self" and targets[0].kind == "print" and where != "self":
+                continue
+            if mode in ("right", "below") and where == "self":
+                continue
+            # 「這格不用填」是對這一格說的，不是對旁邊那格：「學　歷」判成
+            # __SKIP__ 時不該連右邊的就讀學校一起封掉
+            if key not in BY_KEY and mode != "self":
+                continue
             if "[]" not in key and mode == "below":
-                targets = targets[:1]      # 單值欄位只吃緊鄰的一格，不吃整欄
+                # 單值欄位只吃緊鄰的一格，不吃整欄（那格自己可能有好幾個位置）
+                head = (targets[0].loc["row"], targets[0].loc["col"])
+                targets = [s for s in targets
+                           if (s.loc["row"], s.loc["col"]) == head]
             for s in targets:
                 if s.id not in decisions:
                     decisions[s.id] = Decision(key, 0, source,
@@ -221,15 +296,30 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
     return decisions
 
 
+def _ctx(grid: List[List[str]], r: int, c: int) -> str:
+    """這一格旁邊印的字：同列往左、同欄往上第一格有字的。
+    模型判語意全靠它——「姓名｜稱謂」是家人的姓名，
+    「自　年　月｜就學期間」是入學年月。"""
+    # 合併儲存格在左邊／上面重複出現的是自己，不是旁邊那格
+    text = grid[r][c]
+    row_hdr = next((x for x in reversed(grid[r][:c]) if x.strip() and x != text), "")
+    col_hdr = next((grid[rr][c] for rr in range(r - 1, -1, -1)
+                    if c < len(grid[rr]) and grid[rr][c].strip()
+                    and grid[rr][c] != text), "")
+    parts = [f"{name}:{x.replace(chr(10), ' ').strip()[:12]}"
+             for name, x in (("列首", row_hdr), ("欄首", col_hdr)) if x.strip()]
+    return "｜".join(parts)
+
+
 def _scan_right(grid: List[List[str]], by_loc: Dict, t: int, r: int, c: int,
                 limit: int = 8) -> List[Slot]:
-    """標籤右邊第一個可填位置。撞到別的印字格就停——右邊沒有它的位置。"""
+    """標籤右邊第一格的可填位置。撞到別的印字格就停——右邊沒有它的位置。"""
     row = grid[r]
     label = row[c]
     for cc in range(c + 1, min(len(row), c + 1 + limit)):
-        s = by_loc.get((t, r, cc))
-        if s is not None:
-            return [s]
+        found = _empty_at(by_loc, t, r, cc)
+        if found:
+            return found
         if row[cc].strip() and row[cc] != label:
             return []
     return []
@@ -242,19 +332,47 @@ def _scan_below(grid: List[List[str]], by_loc: Dict, t: int, r: int, c: int,
     for rr in range(r + 1, min(len(grid), r + 1 + limit)):
         if c >= len(grid[rr]):
             break
-        s = by_loc.get((t, rr, c))
-        if s is not None:
-            out.append(s)
+        found = _empty_at(by_loc, t, rr, c)
+        if found:
+            out.extend(found)
         elif grid[rr][c].strip():
             break
     return out
 
 
-def _resolve_labels(unknown: Dict[str, str], host: str, model: str) -> Dict[str, str]:
-    """對照表沒有的標籤（含列首上下文），一次問模型。
-    模型沒起來就全留白，不擋流程。回傳 {composite key: 欄位代碼}。"""
-    shown = list(unknown.values())
+def _empty_at(by_loc: Dict, t: int, r: int, c: int) -> List[Slot]:
+    """這一格有沒有「空著等人寫」的位置。
+
+    印著字的位置（kind=print）不算：那格要不要填、填什麼，由它自己那則判讀
+    決定。算進來的話，直排的標籤欄（姓名／婚姻／出生地各一列）會一路往下
+    錨定——「姓名」把值寫進「婚姻」那格，整欄跟著錯開一格。
+    """
+    return [s for s in by_loc.get((t, r, c), ()) if s.kind != "print"]
+
+
+def _resolve_labels(unknown: Dict[str, str], settled: Dict[str, str],
+                    allowed: Optional[List[str]],
+                    host: str, model: str) -> Dict[str, Tuple[str, str]]:
+    """對照表沒有的字（含旁邊印的字當上下文），一次問模型：
+    這是哪個欄位、值寫在旁邊（next）還是就寫在這幾個字中間（self）。
+    回傳 {composite key: (欄位代碼, where)}。
+
+    模型出問題就往上拋——這一步是填寫的主幹，靜靜留白只會讓使用者拿到
+    一份半空的履歷卻不知道為什麼。
+    """
     by_shown = {v: k for k, v in unknown.items()}
+    out: Dict[str, Tuple[str, str]] = {}
+    todo = list(unknown.values())
+    # 分批問。一次丟幾十則進去，模型會整批放棄（實測 81 則只認得出 3 個欄位，
+    # 分成每批 16 則是 38 個）。總題數一樣，所以不會比較慢
+    for i in range(0, len(todo), BATCH):
+        out.update(_ask_cells(todo[i:i + BATCH], by_shown, settled, allowed, host, model))
+    return out
+
+
+def _ask_cells(shown: List[str], by_shown: Dict[str, str], settled: Dict[str, str],
+               allowed: Optional[List[str]], host: str,
+               model: str) -> Dict[str, Tuple[str, str]]:
     schema = {
         "type": "object",
         "properties": {
@@ -266,22 +384,28 @@ def _resolve_labels(unknown: Dict[str, str], host: str, model: str) -> Dict[str,
                     "properties": {
                         "label": {"type": "string", "enum": shown},
                         "field_key": {"type": "string", "enum": FIELD_KEYS},
+                        "role": {"type": "string", "enum": ["名稱", "格式"]},
                     },
-                    "required": ["label", "field_key"],
+                    "required": ["label", "field_key", "role"],
                 },
             }
         },
         "required": ["mappings"],
     }
-    user = ("可用的欄位代碼：\n" + describe_fields() +
-            "\n\n表格上的標籤：\n" + "\n".join(f"- {x}" for x in shown))
-    try:
-        result = llm.ask(host, LABEL_PROMPT, user, schema, model=model,
-                         label=f"標籤對映:{len(shown)}個")
-    except llm.LlmError:
-        log.warning("模型不可用，對照表外的 %d 個標籤先留白", len(shown))
-        return {}
-    return {by_shown[m["label"]]: m.get("field_key", "")
+    # 對照表認得的欄位名稱不必問模型，但要放進提示當範例：只把「認不出來的」
+    # 送過去，模型看到的是一份偏斜的樣本，會把「姓　　名」也當成填字的空格
+    examples = ""
+    if settled:
+        examples = ("\n\n這份表格裡已經確認的欄位名稱（role 都是「名稱」）：\n"
+                    + "\n".join(f"- {k} → {v}" for k, v in list(settled.items())[:12]))
+    star = ("（★＝通篇讀過後判斷這份表格有問的欄位，優先從它們裡面挑；"
+            "沒有★的也還是選得到）\n" if allowed else "")
+    user = ("可用的欄位代碼：\n" + star + describe_fields(mark=allowed) + examples +
+            "\n\n要判斷的字：\n" + "\n".join(f"- {x}" for x in shown))
+    result = llm.ask(host, LABEL_PROMPT, user, schema, model=model,
+                     label=f"格子判讀:{len(shown)}則")
+    return {by_shown[m["label"]]:
+            (m.get("field_key", ""), "self" if m.get("role") == "格式" else "next")
             for m in result.get("mappings", []) if m.get("label") in by_shown}
 
 
@@ -303,6 +427,9 @@ ASSIGN_PROMPT = """履歷表格的每一列要填個人資料清單中的哪一�
 _PERIOD_KEYS = {f"{s}[].{f}" for s in ("education", "experience")
                 for f in ("period", "start", "end")}
 
+# 一次問模型幾則格子判讀。見 _resolve_labels：問多了整批答不出來
+BATCH = 16
+
 
 def align_labels(slots: List[Slot], decisions: Dict[str, Decision],
                  headers: Dict[str, Dict[str, str]]) -> Dict[str, Decision]:
@@ -311,7 +438,8 @@ def align_labels(slots: List[Slot], decisions: Dict[str, Decision],
     1. 標籤／欄首與欄位定義的名稱完全一致 → 直接採用那個欄位。
        模型在密集表格常整組位移一格（希望待遇配到可到職日），這裡拉回來。
     2. 印著白名單外資訊（血型、身高、體重、年制…）的格子 → 一律不填。
-    3. 期間欄照欄序：同一列兩格 → 左 start 右 end；只有一格 → period。
+    3. 期間欄照版面順序：同一列兩個位置 → 前 start 後 end；只有一個 → period。
+       （同一格分兩行印「自　年　月」「至　年　月」也算兩個位置）
     只動模型判的格子；快取與手動修正不碰。
     """
     by_id = {s.id: s for s in slots}
@@ -362,7 +490,8 @@ def align_labels(slots: List[Slot], decisions: Dict[str, Decision],
                 (slot.loc["table"], slot.loc["row"], key.split("[].", 1)[0]),
                 []).append(sid)
     for (_t, _row, section), sids in groups.items():
-        sids.sort(key=lambda x: by_id[x].loc["col"])
+        sids.sort(key=lambda x: (by_id[x].loc["col"],
+                                 by_id[x].loc.get("para_in_cell", 0)))
         wanted = ([f"{section}[].period"] if len(sids) == 1 else
                   [f"{section}[].start"] +
                   ["__SKIP__"] * (len(sids) - 2) + [f"{section}[].end"])
@@ -462,11 +591,8 @@ def _ask_rows(section: str, entries: List[Dict[str, Any]],
         },
         "required": ["assignments"],
     }
-    try:
-        result = llm.ask(host, ASSIGN_PROMPT, "\n".join(lines), schema,
-                         model=model, label=f"列指派:{section}")
-    except llm.LlmError:
-        return {}
+    result = llm.ask(host, ASSIGN_PROMPT, "\n".join(lines), schema,
+                     model=model, label=f"列指派:{section}")
     valid_rows = {r for r, _ in rows}
     return {int(a["row"]): int(a["entry"])
             for a in result.get("assignments", [])
@@ -489,9 +615,12 @@ def _renumber(slots: List[Slot], decisions: Dict[str, Decision]) -> None:
         groups.setdefault((slot.loc["table"], slot.loc["col"], key), []).append(
             (slot.loc["row"], sid))
 
+    # 第幾筆看的是第幾列，不是第幾個位置：同一格有起訖兩個位置時
+    # （「自　年　月」「至　年　月」），它們同屬那一列的那一筆
     for items in groups.values():
-        for ordinal, (_row, sid) in enumerate(sorted(items)):
-            decisions[sid] = decisions[sid]._replace(ordinal=ordinal)
+        rank = {row: i for i, row in enumerate(sorted({row for row, _ in items}))}
+        for row, sid in items:
+            decisions[sid] = decisions[sid]._replace(ordinal=rank[row])
 
 
 def build_plan(slots: List[Slot], profile: Dict[str, Any],

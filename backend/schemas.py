@@ -52,6 +52,8 @@ class PlanOut(BaseModel):
     template_cached: bool
     llm_available: bool
     stats: PlanStats
+    # 模型看過版面後認出「這份表格要填哪些欄位」，給使用者對照用（欄位名稱）
+    form_fields: List[str] = []
     items: List[PlanItem]
 
 

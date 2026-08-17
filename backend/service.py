@@ -107,25 +107,33 @@ def _analyze_worker(job_id: str, filename: str) -> None:
         if not document.has_user_values(probe):
             log.info("看起來是空白範本，跳過既有值判讀")
         else:
-            try:
-                existing = reader.read(probe, config.LLM_HOST, config.LLM_MODEL)
-            except llm.LlmError:
-                # 錨定引擎不靠模型也能填空白範本；只是分不出已填值可否覆蓋
-                log.warning("模型不可用，跳過既有值判讀，僅填空白位置")
+            existing = reader.read(probe, config.LLM_HOST, config.LLM_MODEL)
         if existing:
             # 有已填值才需要重掃一次——這次把那些值標成可覆蓋的位置
             text, slots = parsed.flatten(_values_of(existing))
         fp = document.fingerprint(slots)
         cached = db.get_template(fp)
         log.info("解析完成 位置=%d 可覆蓋=%d 全文=%d字 fingerprint=%s 範本快取=%s",
-                 len(slots), sum(1 for s in slots if s.existing.strip()), len(text), fp,
+                 len(slots),
+                 sum(1 for s in slots if s.kind == "cell" and s.existing.strip()),
+                 len(text), fp,
                  "命中" if cached else "未命中")
+
+        # 先讓模型整份讀過，列出「這份表格要求填哪些欄位」。逐格判讀是拿
+        # 一小段字問語意，看不見整體；哪些欄位這份表格根本沒問，要通篇讀過
+        # 才知道。這份清單接著把逐格判讀的選項收斂到只剩它們（實測 83 個
+        # 欄位縮到 42 個）。範本快取命中就整步跳過。
+        form_fields: List[str] = []
+        if not cached:
+            db.update_job(job_id, stage="辨識表格欄位")
+            form_fields = reader.list_fields(probe, config.LLM_HOST, config.LLM_MODEL)
 
         db.update_job(job_id, stage="辨識欄位對映" if not cached else "套用已學過的格式")
         headers = parsed.slot_headers(slots)
         decisions = planner.decide_by_anchor(
             parsed.table_texts(), slots, config.LLM_HOST, config.LLM_MODEL, cached,
-            headers=headers, learned=db.get_kv("learned_labels") or {})
+            headers=headers, learned=db.get_kv("learned_labels") or {},
+            allowed=form_fields or None)
 
         # 第二輪修正：只在有新錨定的格子時跑（純快取代表使用者確認過）。
         # 先做零成本的確定性對齊（白名單外格子、期間欄拆併），
@@ -140,9 +148,9 @@ def _analyze_worker(job_id: str, filename: str) -> None:
         db.update_job(job_id, fingerprint=fp,
                       anchors=[s.to_dict() for s in slots],
                       decided={k: list(v) for k, v in decisions.items()},
-                      status="analyzed", stage="")
+                      form_fields=form_fields, status="analyzed", stage="")
 
-        plan = _render(job_id, filename, bool(cached), slots, decisions)
+        plan = _render(job_id, filename, bool(cached), slots, decisions, form_fields)
         log.info("比對完成 fill=%d skip=%d by_source=%s 耗時=%dms",
                  plan.stats.fill, plan.stats.skip, plan.stats.by_source,
                  int((time.perf_counter() - t0) * 1000))
@@ -178,7 +186,8 @@ def get_plan(job_id: str) -> Optional[PlanOut]:
         return None
     slots, decisions = _restore(job)
     return _render(job_id, job["filename"],
-                   bool(db.get_template(job["fingerprint"])), slots, decisions)
+                   bool(db.get_template(job["fingerprint"])), slots, decisions,
+                   job.get("form_fields"))
 
 
 def preview_docx(job_id: str, which: str) -> Optional[bytes]:
@@ -235,7 +244,8 @@ def apply_fixes(job_id: str, fixes: List[Tuple[str, str]]) -> Optional[PlanOut]:
 
     db.update_job(job_id, decided={k: list(v) for k, v in decisions.items()})
     return _render(job_id, job["filename"],
-                   bool(db.get_template(job["fingerprint"])), slots, decisions)
+                   bool(db.get_template(job["fingerprint"])), slots, decisions,
+                   job.get("form_fields"))
 
 
 def _learn_label(lessons: Dict[str, Any], label: str, field_key: str) -> bool:
@@ -293,8 +303,8 @@ def write_output(job_id: str) -> Optional[Dict[str, Any]]:
     return {"job_id": job_id, "written": result["written"], "failed": result["failed"]}
 
 
-def _render(job_id: str, filename: str, cached: bool,
-            slots: List[Slot], decisions: Dict[str, Any]) -> PlanOut:
+def _render(job_id: str, filename: str, cached: bool, slots: List[Slot],
+            decisions: Dict[str, Any], form_fields: Optional[List[str]] = None) -> PlanOut:
     ops, skipped = planner.build_plan(slots, db.get_kv("profile") or {}, decisions)
 
     items = [_item(o, "fill") for o in ops] + [_item(s, "skip") for s in skipped]
@@ -309,6 +319,7 @@ def _render(job_id: str, filename: str, cached: bool,
         template_cached=cached, llm_available=llm.available(config.LLM_HOST),
         stats=PlanStats(slots=len(slots), fill=len(ops), skip=len(skipped),
                         by_source=by_source),
+        form_fields=[BY_KEY[k].label for k in (form_fields or []) if k in BY_KEY],
         items=items)
 
 
