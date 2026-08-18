@@ -278,7 +278,8 @@ def _paragraph_line(para: Paragraph, index: int, slots: List[Slot]) -> str:
 
 def _para_render(text: str, sid: str, loc: Dict[str, Any], slots: List[Slot],
                  chk_text: Optional[str] = None,
-                 chk_loc: Optional[Dict[str, Any]] = None) -> str:
+                 chk_loc: Optional[Dict[str, Any]] = None,
+                 room: bool = True) -> str:
     """一個段落的可填位置：勾選群一個，段落裡的每條底線各一個，
     都沒有但字裡留了空白時，那段印好的字自己就是一個位置。
 
@@ -308,7 +309,7 @@ def _para_render(text: str, sid: str, loc: Dict[str, Any], slots: List[Slot],
         out.append(text[cursor:m.start()] + f"{{{{{sid}.b{bi}}}}}")
         cursor = m.end()
 
-    if not out and has_room(text):
+    if not out and room and has_room(text):
         slots.append(Slot(id=f"{sid}.txt", kind="print", loc=loc, existing=text))
         return f"{text}{{{{{sid}.txt}}}}"
     return "".join(out) + text[cursor:]
@@ -370,6 +371,10 @@ def _cell_render(cell: _Cell, table_index: int, r: int, c: int,
         return f"{{{{{sid}}}}}{text}".replace("\n", " ")
 
     paras = [p.text.strip() for p in cell.paragraphs]
+    # 這一段已經寫著使用者的值（「民國 87 年 3 月 25 日」）就不再插字：
+    # 插進去會變成「民國 1998 87 0 年」，把原本正確的資料弄壞。
+    # 整格值的覆蓋是上面那條路（kind=cell），這裡處理的是標籤與值混在一段的格子
+    written = [any(v and v in squash(x) for v in overwritable) for x in paras]
     if any(paras):
         # 印著字的格子逐段處理，跟一般段落同一套規則：每段的勾選群是一個位置，
         # 段落裡的底線各自也是一個位置，字裡留了空白的那段自己是一個位置。
@@ -388,7 +393,7 @@ def _cell_render(cell: _Cell, table_index: int, r: int, c: int,
                 chk_text = ""                 # 組員：位置已經由組長建過了
             rendered.append(_para_render(ptext, f"{sid}.p{i}",
                                          {**loc, "para_in_cell": i}, slots,
-                                         chk_text, chk_loc))
+                                         chk_text, chk_loc, not written[i]))
         if any("{{" in x for x in rendered):
             return " ".join(rendered).replace("\n", " ")
 

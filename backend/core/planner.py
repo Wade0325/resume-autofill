@@ -614,12 +614,17 @@ def assign_rows(slots: List[Slot], decisions: Dict[str, Decision],
             entry = assignment.get(r)
             if entry is None:
                 continue
+            # 一列可能並排好幾筆（家庭成員常印成「姓名 稱謂 年齡 職業」兩組）。
+            # _renumber 已經照閱讀順序給過序號，這裡保留同列內的相對位移：
+            # 這一列指派到第 n 筆，右邊那組就是第 n+1 筆
+            base = min(decisions[sid].ordinal for sid in sids)
             for sid in sids:
-                key, _old, src, label = decisions[sid]
-                if entry < 0 or entry >= len(entries):
+                key, ordinal, src, label = decisions[sid]
+                got = entry + (ordinal - base) if entry >= 0 else -1
+                if got < 0 or got >= len(entries):
                     decisions[sid] = Decision("__SKIP__", 0, src, label)
                 else:
-                    decisions[sid] = Decision(key, entry, src, label)
+                    decisions[sid] = Decision(key, got, src, label)
         log.info("列指派 %s tbl%d：%s", section, table,
                  {r: assignment.get(r) for r in sorted(rows)})
     return decisions
@@ -678,15 +683,18 @@ def _renumber(slots: List[Slot], decisions: Dict[str, Decision]) -> None:
         slot = by_id.get(sid)
         if "[]" not in key or slot is None or "row" not in slot.loc:
             continue
-        groups.setdefault((slot.loc["table"], slot.loc["col"], key), []).append(
-            (slot.loc["row"], sid))
+        groups.setdefault((slot.loc["table"], key), []).append(
+            (slot.loc["row"], slot.loc["col"], sid))
 
-    # 第幾筆看的是第幾列，不是第幾個位置：同一格有起訖兩個位置時
-    # （「自　年　月」「至　年　月」），它們同屬那一列的那一筆
+    # 第幾筆照版面的閱讀順序：先由上而下，同一列再由左而右。
+    # 同一列印兩組「姓名 稱謂 年齡 職業」是兩位家人，不是同一位填兩次；
+    # 同一格的起訖兩個位置（「自　年　月」「至　年　月」）則屬於同一筆
     for items in groups.values():
-        rank = {row: i for i, row in enumerate(sorted({row for row, _ in items}))}
-        for row, sid in items:
-            decisions[sid] = decisions[sid]._replace(ordinal=rank[row])
+        rank: Dict[Tuple[int, int], int] = {}
+        for row, col, _sid in sorted(items):
+            rank.setdefault((row, col), len(rank))
+        for row, col, sid in items:
+            decisions[sid] = decisions[sid]._replace(ordinal=rank[(row, col)])
 
 
 def build_plan(slots: List[Slot], profile: Dict[str, Any],
