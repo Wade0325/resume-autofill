@@ -40,6 +40,14 @@ role：這幾個字本身是什麼？只看字，不用管排版留了多少空�
 每一則都要輸出一次，label 照抄輸入的字串。"""
 
 
+# 這份表格真的分了區才附上去：沒有區塊的表格看到這段，會把「姓名」
+# 一律當成本人的，反而丟掉家人與諮詢人的欄位（實測少 4 個欄位）
+ZONE_RULE = """
+
+補充：有些則標了「區塊:XXX」，那是它在表格裡所屬的區段，最能分辨同名的欄位——
+「姓名｜區塊:家庭成員」是家人的姓名（family[].name），不是本人姓名。"""
+
+
 @dataclass
 class FillOp:
     slot: Slot
@@ -174,14 +182,17 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
     # 各一次就好——寬標題橫跨八欄時，每欄都往下錨定會把生日塞滿整排分位格
     has_next: set = set()          # 這段字的右邊或下面真的有空格可填
     can_self: set = set()          # 這段字自己插得下值（有 print 位置）
+    filled = {(s.loc["table"], s.loc["row"], s.loc["col"])
+              for s in pending if s.kind == "cell" and s.existing.strip()}
     for t, grid in enumerate(texts):
+        zones = regions(grid, {(r, c) for (tt, r, c) in filled if tt == t})
         for r, row in enumerate(grid):
             for c, text in enumerate(row):
                 # 使用者填過的值不是標籤（那格是待覆蓋的位置，kind=cell）
                 if not text.strip() or any(s.kind == "cell"
                                            for s in covered.get((t, r, c), ())):
                     continue
-                ctx = _ctx(grid, r, c)
+                ctx = _ctx(grid, r, c, zones)
                 # 印著字又插得下值的格子：那段字既可能是「欄位名稱」（值填旁邊
                 # 那格），也可能是「印好的提示」（人就寫在字中間的空白）。
                 # 兩種都當候選，由模型的 where 決定——規則分不出來的是語意。
@@ -296,18 +307,72 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
     return decisions
 
 
-def _ctx(grid: List[List[str]], r: int, c: int) -> str:
-    """這一格旁邊印的字：同列往左、同欄往上第一格有字的。
-    模型判語意全靠它——「姓名｜稱謂」是家人的姓名，
-    「自　年　月｜就學期間」是入學年月。"""
+def regions(grid: List[List[str]],
+            taken: Optional[set] = None) -> Dict[int, str]:
+    """列號 -> 這一列屬於哪個區塊。機械抽取，不經過模型。
+
+    履歷表的區塊標題有兩種印法，都在這裡認：直排合併在最左邊幾欄的
+    （「學　歷」一格佔三列），以及橫跨整列的短標題。整段說明文字不算——
+    宣告事項那種長問句橫跨整列，當區塊名只會洗掉真正的上下文。
+
+    taken 是使用者填過值的座標：那些格子印的是這個人的資料（「中文：郭韋德」
+    也可能垂直合併），不是區塊標題。
+    """
+    taken = taken or set()
+    out: Dict[int, str] = {}
+
+    def is_title(text: str) -> bool:
+        """區塊標題長什麼樣：短、而且只有一個名字。
+        「中文：郭韋德」（標籤配值）、「健康狀況：□優 □良」（勾選題）
+        都是欄位不是區塊——它們一旦被當成區塊名，整區的上下文就被洗掉了。
+        """
+        return (0 < len(_squash(text)) <= 12
+                and not re.search(r"[:：]\s*\S", text)
+                and not any(ch in text for ch in
+                            document.CHECKBOX_CHARS + document.CHECKED_CHARS))
+    for r, row in enumerate(grid):
+        if (r, 0) in taken:
+            continue
+        if row and len(set(row)) == 1 and is_title(row[0]):
+            for rr in range(r + 1, len(grid)):
+                if grid[rr] and len(set(grid[rr])) == 1:
+                    break
+                out[rr] = row[0]
+    for r, row in enumerate(grid):
+        for c, cell in enumerate(row[:3]):
+            if not cell.strip() or (r, c) in taken:
+                continue
+            last = r
+            while (last + 1 < len(grid) and c < len(grid[last + 1])
+                   and grid[last + 1][c] == cell):
+                last += 1
+            if last > r and is_title(cell):   # 直排合併＋長得像標題才算
+                for rr in range(r, last + 1):
+                    out[rr] = cell
+    return out
+
+
+def _ctx(grid: List[List[str]], r: int, c: int,
+         zones: Optional[Dict[int, str]] = None) -> str:
+    """這一格旁邊印的字：所屬區塊、同列往左、同欄往上第一格有字的。
+    模型判語意全靠它——「姓名｜區塊:家庭成員」是家人的姓名，
+    「自　年　月｜欄首:就學期間」是入學年月。
+
+    區塊要單獨給：「家 庭 成 員」是垂直合併的大格，「姓名」那一格的列首
+    是隔壁的「稱謂」，光看列首欄首永遠看不到自己在哪一區。
+    """
     # 合併儲存格在左邊／上面重複出現的是自己，不是旁邊那格
     text = grid[r][c]
     row_hdr = next((x for x in reversed(grid[r][:c]) if x.strip() and x != text), "")
     col_hdr = next((grid[rr][c] for rr in range(r - 1, -1, -1)
                     if c < len(grid[rr]) and grid[rr][c].strip()
                     and grid[rr][c] != text), "")
+    zone = (zones or {}).get(r, "")
+    if zone == text or _squash(zone) in (_squash(row_hdr), _squash(col_hdr)):
+        zone = ""                             # 已經是列首欄首了，不必重複
     parts = [f"{name}:{x.replace(chr(10), ' ').strip()[:12]}"
-             for name, x in (("列首", row_hdr), ("欄首", col_hdr)) if x.strip()]
+             for name, x in (("區塊", zone), ("列首", row_hdr), ("欄首", col_hdr))
+             if x.strip()]
     return "｜".join(parts)
 
 
@@ -402,7 +467,8 @@ def _ask_cells(shown: List[str], by_shown: Dict[str, str], settled: Dict[str, st
             "沒有★的也還是選得到）\n" if allowed else "")
     user = ("可用的欄位代碼：\n" + star + describe_fields(mark=allowed) + examples +
             "\n\n要判斷的字：\n" + "\n".join(f"- {x}" for x in shown))
-    result = llm.ask(host, LABEL_PROMPT, user, schema, model=model,
+    system = LABEL_PROMPT + (ZONE_RULE if any("區塊:" in x for x in shown) else "")
+    result = llm.ask(host, system, user, schema, model=model,
                      label=f"格子判讀:{len(shown)}則")
     return {by_shown[m["label"]]:
             (m.get("field_key", ""), "self" if m.get("role") == "格式" else "next")
