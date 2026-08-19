@@ -61,11 +61,21 @@ def is_blank(text: str) -> bool:
     return bool(PLACEHOLDER_RE.match(text or ""))
 
 
+# 整段都被括號包起來的字是「寫法說明」，不是欄位名稱：
+# 戶籍地址右邊那格印著「(請註明里、鄰)」，人就是寫在那格裡
+ANNOTATION_RE = re.compile(r"^[（(][^（()）]*[)）]$")
+
+
+def is_annotation(text: str) -> bool:
+    return bool(ANNOTATION_RE.match((text or "").strip()))
+
+
 def has_room(text: str) -> bool:
     """這段印好的字裡插不插得下值。純機械判斷，寫入端的前提條件：
     字與字之間有留白（「自　　年　　月」），或結尾是冒號、方框
-    （「備註：」「郵遞區號□□□」）——值接在後面。"""
-    return bool(GAP_RE.search(text or "") or TRAILING_COLON_RE.search(text or ""))
+    （「備註：」「郵遞區號□□□」），或整段只是括號說明——值接在後面。"""
+    return bool(GAP_RE.search(text or "") or TRAILING_COLON_RE.search(text or "")
+                or is_annotation(text))
 
 
 def squash(text: str) -> str:
@@ -310,7 +320,9 @@ def _para_render(text: str, sid: str, loc: Dict[str, Any], slots: List[Slot],
         cursor = m.end()
 
     if not out and room and has_room(text):
-        slots.append(Slot(id=f"{sid}.txt", kind="print", loc=loc, existing=text))
+        note = {"annotation": True} if is_annotation(text) else {}
+        slots.append(Slot(id=f"{sid}.txt", kind="print", loc={**loc, **note},
+                          existing=text))
         return f"{text}{{{{{sid}.txt}}}}"
     return "".join(out) + text[cursor:]
 

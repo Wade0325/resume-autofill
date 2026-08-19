@@ -221,6 +221,15 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
     # 對照表與學過的比對不看上下文（能精確對上的標籤本身就無歧義，
     # 泛用短標籤在學習端就被擋掉了）；模型解析要看：
     # 同字不同列首（姓名｜緊急連絡人）是不同的欄位
+    def lookup(label: str) -> str:
+        """標籤對到哪個欄位。整串對不上時，用第一段空白前面的字再試一次——
+        「血型：　　型」的欄位名稱是前面那個「血型」，後面的「型」是單位。"""
+        sq = _squash(label)
+        if sq in LABEL_MAP:
+            return LABEL_MAP[sq]
+        head = _squash(document.GAP_RE.split(label)[0])
+        return LABEL_MAP.get(head, "") if head and head != sq else ""
+
     resolved: Dict[str, str] = {}
     known: Dict[str, str] = {}        # 學過的命中（值可能是 __SKIP__＝學過「這不用填」）
     unknown: Dict[str, str] = {}      # composite key → 給模型看的顯示字串
@@ -228,9 +237,10 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
     blocked = [_squash(b) for b in BLOCKED_LABELS]
     for label, _targets, mode, ctx in anchors:
         sq = _squash(label)
-        if not sq or sq in LABEL_MAP:
+        known_key = lookup(label)
+        if not sq or known_key:
             if sq and sq not in resolved:
-                resolved[sq] = LABEL_MAP.get(sq, "")
+                resolved[sq] = known_key
                 if resolved[sq]:
                     settled[label.replace("\n", " ").strip()] = resolved[sq]
             continue
@@ -411,8 +421,11 @@ def _empty_at(by_loc: Dict, t: int, r: int, c: int) -> List[Slot]:
     印著字的位置（kind=print）不算：那格要不要填、填什麼，由它自己那則判讀
     決定。算進來的話，直排的標籤欄（姓名／婚姻／出生地各一列）會一路往下
     錨定——「姓名」把值寫進「婚姻」那格，整欄跟著錯開一格。
+    只印著括號說明的格子例外（「(請註明里、鄰)」）：那不是別的欄位，
+    是這個欄位的寫法說明，值就寫在那裡。
     """
-    return [s for s in by_loc.get((t, r, c), ()) if s.kind != "print"]
+    return [s for s in by_loc.get((t, r, c), ())
+            if s.kind != "print" or s.loc.get("annotation")]
 
 
 def _resolve_labels(unknown: Dict[str, str], settled: Dict[str, str],
