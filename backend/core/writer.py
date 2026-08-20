@@ -16,6 +16,7 @@ highlight 模式會把填入的字加上黃色底色，只給網頁預覽用；�
 from __future__ import annotations
 
 import copy
+import logging
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -25,6 +26,8 @@ from docx.table import Table
 
 from .document import (BLANK_RUN_RE, CHECKBOX_CHARS, CHECKED_CHARS, GAP_RE,
                        TRAILING_COLON_RE, _grid)
+
+log = logging.getLogger(__name__)
 
 # 只列 CHECKBOX_CHARS 裡的字元——document.py 刻意把 ○〇◯ 排除在方框之外
 CHECK_MAP = {"□": "■", "☐": "☑", "▢": "■", "◻": "◼"}
@@ -408,6 +411,10 @@ def apply_ops(src_path: str, out_path: str, ops: List[Any],
         except Exception as e:                    # 單一格失敗不影響其他欄位
             fail.append({"slot": slot.id, "error": str(e)})
             continue
+        # 值是個資，只記長度；欄位代碼與位置代碼可以記
+        log.debug("  寫入 %-24s %-9s %-26s %d字 → %s",
+                  slot.id, kind, op.field_key, len(str(op.value)),
+                  "成功" if done else "定位失敗")
         (ok if done else fail).append(
             {"slot": slot.id, "field": op.field_key}
             if done else {"slot": slot.id, "error": "定位失敗"})

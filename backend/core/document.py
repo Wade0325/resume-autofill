@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
@@ -16,6 +17,8 @@ from docx.document import Document as _Doc
 from docx.oxml.ns import qn
 from docx.table import Table, _Cell
 from docx.text.paragraph import Paragraph
+
+log = logging.getLogger(__name__)
 
 PLACEHOLDER_RE = re.compile(r"^[\s　_＿…．\.\-—–]*$")
 BLANK_RUN_RE = re.compile(r"[_＿]{2,}|[\.．]{4,}")
@@ -152,6 +155,16 @@ class ParsedDoc:
                                       slots, overwritable)
                 table_index += 1
 
+        by_kind: Dict[str, int] = {}
+        for s in slots:
+            by_kind[s.kind] = by_kind.get(s.kind, 0) + 1
+        log.info("可填位置盤點 共%d個 %s", len(slots),
+                 " ".join(f"{k}={v}" for k, v in sorted(by_kind.items())))
+        for s in slots:
+            # existing 對 cell 來說是使用者填的值，不能進 log；其餘種類的
+            # existing 是表格印好的字（選項、格式），是版面不是個資
+            shown = "" if s.kind == "cell" else s.existing.replace(chr(10), " ")[:28]
+            log.debug("  位置 %-24s %-9s %s", s.id, s.kind, shown)
         return "\n".join(lines), slots
 
     def slot_headers(self, slots: List[Slot]) -> Dict[str, Dict[str, str]]:

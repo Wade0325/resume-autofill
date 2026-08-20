@@ -258,6 +258,14 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
             if ctx:
                 shown += f"｜{ctx}"
             unknown[comp] = shown
+    modes: Dict[str, int] = {}
+    for _l, _t, _m, _c in anchors:
+        modes[_m] = modes.get(_m, 0) + 1
+    log.info("錨點盤點 共%d個 %s ｜ 對照表命中=%d 學過的=%d 要問模型=%d",
+             len(anchors), " ".join(f"{k}={v}" for k, v in sorted(modes.items())),
+             sum(1 for v in resolved.values() if v), len(known), len(unknown))
+    for _shown in unknown.values():
+        log.debug("  待問模型 %s", _shown)
     answers = _resolve_labels(unknown, settled, allowed, host, model) if unknown else {}
 
     # self/right/below＝同格自帶 > 右鄰 > 下方，先到先得
@@ -303,6 +311,10 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
                 if s.id not in decisions:
                     decisions[s.id] = Decision(key, 0, source,
                                                label.replace("\n", " ")[:40])
+                    log.debug("  對映 %-24s %-26s 來源=%-7s 落點=%-4s 標籤=%s%s",
+                              s.id, key, source, where,
+                              label.replace(chr(10), " ")[:18],
+                              f"｜{ctx}" if ctx else "")
 
     # 錨不住的一律留白待人工，標籤用機械抽取的給使用者認格子
     for s in pending:
