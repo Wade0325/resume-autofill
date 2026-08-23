@@ -89,3 +89,6 @@ desktop.ini
 
 # C# 啟動器建置產物
 launcher/**/obj/
+
+# 本機實驗用的測試腳本，不入版控
+tests/
