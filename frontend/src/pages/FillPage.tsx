@@ -204,7 +204,7 @@ function Row({
   onRemap: (slotId: string, fieldKey: string) => void
 }) {
   const skipped = item.status === 'skip'
-  // 模型判斷的值得使用者優先看一眼；規則、快取、學過的都是確定性來源
+  // 模型判斷的值得使用者優先看一眼；規則與快取都是確定性來源
   const needsReview = !skipped && item.source === 'model'
 
   return (
@@ -277,7 +277,6 @@ function SkipReason({ note }: { note: string }) {
 function sourceLabel(source: string) {
   const names: Record<string, string> = {
     rule: '規則',
-    learned: '學過',
     cache: '快取',
     model: '模型',
     manual: '手動',

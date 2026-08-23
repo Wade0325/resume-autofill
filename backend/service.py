@@ -132,8 +132,7 @@ def _analyze_worker(job_id: str, filename: str) -> None:
         headers = parsed.slot_headers(slots)
         decisions = planner.decide_by_anchor(
             parsed.table_texts(), slots, config.LLM_HOST, config.LLM_MODEL, cached,
-            headers=headers, learned=db.get_kv("learned_labels") or {},
-            allowed=form_fields or None)
+            headers=headers, allowed=form_fields or None)
 
         # 第二輪修正：只在有新錨定的格子時跑（純快取代表使用者確認過）。
         # 先做零成本的確定性對齊（白名單外格子、期間欄拆併），
@@ -220,15 +219,13 @@ def apply_fixes(job_id: str, fixes: List[Tuple[str, str]]) -> Optional[PlanOut]:
     valid = {s.id for s in slots}
 
     # 先整批驗證再套用：中途才發現非法值的話，前面幾筆已經播報了
-    # 「修改成功」、學習字典也動了，但整批決策不會落庫
+    # 「修改成功」，但整批決策不會落庫
     for slot_id, field_key in fixes:
         if slot_id not in valid:
             raise ValueError(f"位置不存在：{slot_id}")
         if field_key not in BY_KEY and field_key not in ("__SKIP__", "__UNKNOWN__"):
             raise ValueError(f"未知欄位代碼：{field_key}")
 
-    lessons = db.get_kv("learned_labels") or {}
-    lessons_dirty = False
     for slot_id, field_key in fixes:
         previous = decisions.get(slot_id)
         old = previous.field_key if previous else ""
@@ -238,38 +235,11 @@ def apply_fixes(job_id: str, fixes: List[Tuple[str, str]]) -> Optional[PlanOut]:
         # 這是日後改進提示詞的唯一依據
         log.info("使用者修正 %s：%s → %s", slot_id, old or "(未決定)", field_key)
         actions.record("修改欄位「%s」", label or slot_id)
-        lessons_dirty |= _learn_label(lessons, label, field_key)
-    if lessons_dirty:
-        db.put_kv("learned_labels", lessons)
 
     db.update_job(job_id, decided={k: list(v) for k, v in decisions.items()})
     return _render(job_id, job["filename"],
                    bool(db.get_template(job["fingerprint"])), slots, decisions,
                    job.get("form_fields"))
-
-
-def _learn_label(lessons: Dict[str, Any], label: str, field_key: str) -> bool:
-    """把使用者修正回饋成跨表格的「標籤→欄位」知識。回傳有沒有改動。
-
-    只學內建對照表外、squash 後 ≥3 字的標籤：「姓名」「電話」這種泛用
-    短標籤在不同區塊指不同欄位（緊急連絡人的姓名≠本人姓名），
-    學成全域反而誤傷。改成「找不到對應」＝遺忘，是反悔的出口。
-    """
-    sq = planner._squash(label)
-    if not sq or len(sq) < 3 or sq in planner.LABEL_MAP:
-        return False
-    if field_key == "__UNKNOWN__":
-        if sq not in lessons:
-            return False
-        del lessons[sq]
-        actions.record("忘掉標籤「%s」學過的對應", label)
-        return True
-    if lessons.get(sq, {}).get("field_key") == field_key:
-        return False
-    lessons[sq] = {"label": label, "field_key": field_key}
-    shown = "不填" if field_key == "__SKIP__" else BY_KEY[field_key].label
-    actions.record("學會標籤「%s」→「%s」，之後所有表格都適用", label, shown)
-    return True
 
 
 def write_output(job_id: str) -> Optional[Dict[str, Any]]:

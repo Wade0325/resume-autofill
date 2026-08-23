@@ -34,7 +34,7 @@ class PlanItem(BaseModel):
     field_key: str
     value: str
     existing: str = ""                # 文件原本就有的內容，非空代表這一格會被覆蓋
-    source: str                       # rule | learned | model | cache | manual
+    source: str                       # rule | model | cache | manual
     status: Literal["fill", "skip"]
     note: str = ""
 

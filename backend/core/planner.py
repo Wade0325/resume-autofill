@@ -64,7 +64,7 @@ class Decision(NamedTuple):
     """一個位置的對映決策。存進 DB 時仍以四元 list 序列化，格式不變。"""
     field_key: str
     ordinal: int
-    source: str       # rule | learned | model | cache | manual
+    source: str       # rule | model | cache | manual
     label: str
 
 # 舊版由模型照抄標籤，常把 {{tbl1.r2.c6}} 位置標記一起抄回來；
@@ -99,7 +99,6 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
                      host: str, model: str,
                      cached: Optional[Dict[str, Any]] = None,
                      headers: Optional[Dict[str, Dict[str, str]]] = None,
-                     learned: Optional[Dict[str, Any]] = None,
                      allowed: Optional[List[str]] = None
                      ) -> Dict[str, Decision]:
     """標籤驅動的對映：程式找標籤、定位置，模型只處理對照表外的標籤。
@@ -114,13 +113,10 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
     但沒標★的仍然選得到——實測拿它當硬性約束（把其他欄位從文法裡拿掉）
     會擋掉真的要填的欄位：清單漏一個，那個欄位就再也填不進去。
 
-    learned 是使用者修正累積出來的「標籤→欄位」全域字典（跨表格通用，
-    見 service.apply_fixes 的學習端）：A 公司教過的「服務單位＝公司名稱」，
-    B 公司的表格直接受益。解析順位：內建對照表 → 學過的 → 問模型。
+    解析順位：內建對照表 → 問模型。
     """
     cached = cached or {}
     headers = headers or {}
-    learned_keys = {sq: v.get("field_key", "") for sq, v in (learned or {}).items()}
     decisions: Dict[str, Decision] = {}
     pending: List[Slot] = []
     for slot in slots:
@@ -218,8 +214,7 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
                         if any(s.kind == "cell" for s in below):
                             has_next.add(_squash(label))
 
-    # 對照表與學過的比對不看上下文（能精確對上的標籤本身就無歧義，
-    # 泛用短標籤在學習端就被擋掉了）；模型解析要看：
+    # 對照表比對不看上下文（能精確對上的標籤本身就無歧義）；模型解析要看：
     # 同字不同列首（姓名｜緊急連絡人）是不同的欄位
     def lookup(label: str) -> str:
         """標籤對到哪個欄位。整串對不上時，用第一段空白前面的字再試一次——
@@ -231,7 +226,6 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
         return LABEL_MAP.get(head, "") if head and head != sq else ""
 
     resolved: Dict[str, str] = {}
-    known: Dict[str, str] = {}        # 學過的命中（值可能是 __SKIP__＝學過「這不用填」）
     unknown: Dict[str, str] = {}      # composite key → 給模型看的顯示字串
     settled: Dict[str, str] = {}      # 這份表格裡已經確認的欄位名稱，當模型的範例
     blocked = [_squash(b) for b in BLOCKED_LABELS]
@@ -243,9 +237,6 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
                 resolved[sq] = known_key
                 if resolved[sq]:
                     settled[label.replace("\n", " ").strip()] = resolved[sq]
-            continue
-        if sq in learned_keys:
-            known[sq] = learned_keys[sq]
             continue
         comp = f"{sq}|{_squash(ctx)}"
         if comp in unknown:
@@ -261,9 +252,9 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
     modes: Dict[str, int] = {}
     for _l, _t, _m, _c in anchors:
         modes[_m] = modes.get(_m, 0) + 1
-    log.info("錨點盤點 共%d個 %s ｜ 對照表命中=%d 學過的=%d 要問模型=%d",
+    log.info("錨點盤點 共%d個 %s ｜ 對照表命中=%d 要問模型=%d",
              len(anchors), " ".join(f"{k}={v}" for k, v in sorted(modes.items())),
-             sum(1 for v in resolved.values() if v), len(known), len(unknown))
+             sum(1 for v in resolved.values() if v), len(unknown))
     for _shown in unknown.values():
         log.debug("  待問模型 %s", _shown)
     answers = _resolve_labels(unknown, settled, allowed, host, model) if unknown else {}
@@ -275,14 +266,13 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
                 continue
             sq = _squash(label)
             hit = answers.get(f"{sq}|{_squash(ctx)}")
-            key = resolved.get(sq) or known.get(sq) or (hit[0] if hit else "")
-            # __SKIP__／__UNKNOWN__ 也是有效結論：使用者教過「這不用填」或
-            # 模型明確判過的，要保留下來，不能掉進兜底變成「找不到對應」
+            key = resolved.get(sq) or (hit[0] if hit else "")
+            # __SKIP__／__UNKNOWN__ 也是有效結論：模型明確判過的要保留下來，
+            # 不能掉進兜底變成「找不到對應」
             if key not in BY_KEY and key not in ("__SKIP__", "__UNKNOWN__"):
                 continue
-            source = ("rule" if resolved.get(sq)
-                      else "learned" if known.get(sq) else "model")
-            # 值寫在哪：模型說了算；對照表與學過的標籤是欄位名稱，值填旁邊，
+            source = "rule" if resolved.get(sq) else "model"
+            # 值寫在哪：模型說了算；對照表的標籤是欄位名稱，值填旁邊，
             # 但旁邊要真的有空格——「希望待遇：」右邊下面都沒空位時，
             # 值就寫在它自己留的空白上
             # 值寫在哪：以模型判的「名稱／格式」為主，但兩個結構事實蓋過它——
@@ -323,8 +313,8 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
                                        _mech_label(s, headers))
 
     anchored = sum(1 for s in pending if decisions[s.id].field_key in BY_KEY)
-    log.info("錨定完成 可填=%d 留白=%d 學過的標籤=%d 對照表外=%d",
-             anchored, len(pending) - anchored, len(known), len(unknown))
+    log.info("錨定完成 可填=%d 留白=%d 對照表外=%d",
+             anchored, len(pending) - anchored, len(unknown))
     _renumber(slots, decisions)
     return decisions
 
