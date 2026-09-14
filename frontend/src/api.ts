@@ -35,6 +35,9 @@ export type JobState =
   | { status: 'failed'; error: string; filename: string }
   | { status: 'ready'; plan: Plan }
 
+// 兩條填寫路線：classic 看文字、vlm 看版面。vision 是這台機器的模型看不看得到圖
+export type EngineOut = { engine: string; engines: string[]; vision: boolean }
+
 export type ImportRow = {
   row_id: string
   field_key: string
@@ -178,6 +181,9 @@ function postJson<T>(path: string, body: unknown): Promise<T> {
 
 export const api = {
   fields: () => request<FieldSpec[]>('/fields'),
+
+  getEngine: () => request<EngineOut>('/engine'),
+  setEngine: (engine: string) => postJson<{ engine: string }>('/engine', { engine }),
 
   getProfile: () => request<Profile>('/profile'),
   saveProfile: (profile: Profile) => putJson<{ ok: boolean }>('/profile', profile),

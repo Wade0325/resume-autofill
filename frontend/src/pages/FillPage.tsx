@@ -76,6 +76,7 @@ export default function FillPage() {
           phase={phase}
           onFile={upload}
         />
+        <EnginePicker />
       </PageShell>
     )
   }
@@ -148,6 +149,74 @@ export default function FillPage() {
         label={busy ? '處理中…' : `套用並下載（${plan.stats.fill} 格）`}
       />
     </PageShell>
+  )
+}
+
+const ENGINE_TEXT: Record<string, { name: string; desc: string }> = {
+  classic: { name: '讀文字', desc: '照表格印的字與列首欄首判斷，快，不需要看得懂圖的模型' },
+  vlm: { name: '看版面', desc: '模型看著版面示意圖逐格判斷，慢一倍，沒看過的排版準得多' },
+}
+
+/** 用哪一條路填表。放在上傳畫面：換引擎要重新分析，上傳後才換沒有意義。 */
+function EnginePicker() {
+  const [engine, setEngine] = useState('')
+  const [vision, setVision] = useState(true)
+  const [options, setOptions] = useState<string[]>([])
+
+  useEffect(() => {
+    api
+      .getEngine()
+      .then((e) => {
+        setEngine(e.engine)
+        setVision(e.vision)
+        setOptions(e.engines)
+      })
+      .catch(() => setOptions([]))
+  }, [])
+
+  async function pick(next: string) {
+    setEngine(next) // 先動，切換是即時回饋；失敗再讀回後端的值
+    try {
+      await api.setEngine(next)
+    } catch {
+      const e = await api.getEngine()
+      setEngine(e.engine)
+    }
+  }
+
+  if (options.length < 2) return null
+  return (
+    <div className="mt-4 text-sm">
+      <div className="text-slate-600 mb-2">判斷方式</div>
+      <div className="flex flex-wrap gap-2">
+        {options.map((key) => {
+          const t = ENGINE_TEXT[key] ?? { name: key, desc: '' }
+          const on = engine === key
+          return (
+            <button
+              key={key}
+              type="button"
+              data-testid={`engine-${key}`}
+              aria-pressed={on}
+              onClick={() => pick(key)}
+              className={`text-left rounded-lg border px-4 py-3 max-w-xs transition ${
+                on
+                  ? 'border-sky-400 bg-sky-50 text-sky-900'
+                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+              }`}
+            >
+              <div className="font-medium">{t.name}</div>
+              <div className="text-xs mt-0.5 opacity-80">{t.desc}</div>
+            </button>
+          )
+        })}
+      </div>
+      {!vision && engine === 'vlm' && (
+        <div className="mt-2 text-xs text-amber-700">
+          目前的模型看不到圖，這次會自動改用「讀文字」。要用看版面得換成帶視覺的模型。
+        </div>
+      )}
+    </div>
   )
 }
 

@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS job (
     anchors     TEXT NOT NULL,
     decided     TEXT NOT NULL,
     form_fields TEXT NOT NULL DEFAULT '[]', -- VLM 看版面認出「這份表格要填哪些欄位」
+    engine      TEXT NOT NULL DEFAULT 'classic', -- 這份是哪一條路填的：classic | vlm
     stage       TEXT NOT NULL DEFAULT '',   -- processing 時目前進行到哪一步
     error       TEXT NOT NULL DEFAULT '',   -- failed 時給使用者看的原因
     created_at  TEXT NOT NULL
@@ -80,6 +81,7 @@ def init() -> None:
         for ddl in ("ALTER TABLE job ADD COLUMN stage TEXT NOT NULL DEFAULT ''",
                     "ALTER TABLE job ADD COLUMN error TEXT NOT NULL DEFAULT ''",
                     "ALTER TABLE job ADD COLUMN form_fields TEXT NOT NULL DEFAULT '[]'",
+                    "ALTER TABLE job ADD COLUMN engine TEXT NOT NULL DEFAULT 'classic'",
                     "ALTER TABLE import_job ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'",
                     "ALTER TABLE import_job ADD COLUMN stage TEXT NOT NULL DEFAULT ''",
                     "ALTER TABLE import_job ADD COLUMN error TEXT NOT NULL DEFAULT ''"):
@@ -155,12 +157,12 @@ def _update_row(table: str, row_id: str, fields: Dict[str, Any]) -> None:
         conn.execute(f"UPDATE {table} SET {', '.join(sets)} WHERE id = ?", params)
 
 
-def create_job(job_id: str, filename: str, status: str) -> None:
+def create_job(job_id: str, filename: str, status: str, engine: str = "classic") -> None:
     with connect() as conn:
         conn.execute(
             "INSERT INTO job (id, filename, fingerprint, status, anchors, decided, "
-            "created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (job_id, filename, "", status, "[]", "{}", _now()))
+            "engine, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (job_id, filename, "", status, "[]", "{}", engine, _now()))
 
 
 def get_job(job_id: str) -> Optional[Dict[str, Any]]:

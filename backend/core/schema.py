@@ -28,6 +28,10 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("basic.gender", "性別", kind="choice", choices=["男", "女"]),
     FieldSpec("basic.birthday", "出生年月日", kind="date",
               hint="西元年月日，例如 1996年04月15日。只寫「28歲」是年齡，不是生日"),
+    # 表格有的印民國、有的印西元。存的是哪一種要講清楚，填寫時才知道要不要換算；
+    # 表格沒指定就填西元
+    FieldSpec("basic.birthday_era", "生日曆制", kind="choice", choices=["西元", "民國"],
+              hint="上面那個出生年月日填的是西元還是民國"),
     FieldSpec("basic.age", "年齡"),
     FieldSpec("basic.nationality", "國籍", hint="例如 中華民國"),
     FieldSpec("basic.birthplace", "出生地"),
@@ -88,6 +92,9 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("experience[].leave_reason", "離職原因", kind="list"),
 
     FieldSpec("skills.languages", "語文能力", kind="longtext"),
+    # 表格通常分開問「哪一個語言」與「程度到哪」，合在一句話裡就拆不出來
+    FieldSpec("skills.language", "語言", hint="例如 英文、日文"),
+    FieldSpec("skills.language_level", "語文程度", hint="例如 中等、尚可、精通"),
     FieldSpec("skills.certificates", "專業證照", kind="longtext"),
     FieldSpec("skills.computer", "電腦技能", kind="longtext"),
     FieldSpec("skills.driver_license", "駕照", kind="choice",

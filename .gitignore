@@ -92,3 +92,7 @@ launcher/**/obj/
 
 # 本機實驗用的測試腳本，不入版控
 tests/
+
+# 研究迴圈：考題與答案卷是本人的真實履歷，評分與紀錄也只在本機跑。
+# 解法本體不在這裡——它是產品的 backend/core/filler.py，那份有入版控
+claude_code_in_agent/
