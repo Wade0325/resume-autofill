@@ -40,6 +40,7 @@ import io
 import logging
 import os
 import re
+import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
 from itertools import groupby, permutations
@@ -399,6 +400,10 @@ def _line_slots(line: str) -> List[Tuple[str, int, int, str]]:
     # 再補一個 append 就會有兩個位置搶同一個地方
     if line.endswith(("：", ":")) or re.search(r"\d[.．、)）]$", line):
         out.append(("append", len(line), len(line), ""))
+    elif not out and re.search(r"[：:][ 　]*同[^\s：:]{1,5}[ 　]*$", line):
+        # 「通訊地址：同上」：冒號後面印好的「同上」只是提示，地址照樣寫在後面
+        # （跟 AT-1 通訊地址欄印著「同戶籍地址」一樣）
+        out.append(("append", len(line.rstrip()), len(line.rstrip()), ""))
     elif not out and line.rstrip().endswith(("？", "?")):
         out.append(("line", len(line), len(line), ""))   # 整格是一個問句，答案寫下一行
     return out
@@ -815,15 +820,34 @@ def _split_by_markers(value: str, markers: List[str]) -> List[str]:
     return parts if all(parts) and not value[cursor:].strip() else []
 
 
-def _pad(slot: Slot, value: str) -> str:
-    """值比原本的留白短就補回空白，欄寬不會跑掉。
+def _width(text: str) -> int:
+    """印出來佔幾個半形寬：中文字、全形空白算兩個。"""
+    return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in text)
 
-    值擺在留白中間：靠左寫的話「1998年3     月25     日」的 25 看起來像接在「月」
-    後面，「,KUO」「NT$75,000」也黏著前面印的字。"""
+
+def _pad(slot: Slot, value: str) -> str:
+    """值取代整段留白，前後各留一個空白就好——前提是放得進原本的寬度。
+
+    留白是給人手寫的空間，字打上去就不需要了。原本把剩下的空白全留著（值靠左或置中），
+    「□ 隨時　□　8　月　24　日後」這種本來就排滿的一行會變長、被擠到下一行
+    （使用者親自修答案卷時指出的）。所以只在「值＋前後各一個空白」不超過原本寬度時
+    才留空白，放不下就一個都不留。行首、左括號與破折號後面不留前面那個（「－2021年」），
+    逗號、斜線、右括號前面不留後面那個（「75,000/月」）。
+    """
     if not slot.filler.isspace():
         return value
-    spare = max(len(slot.filler) - len(value), 0)
-    return slot.filler[:spare // 2] + value + slot.filler[len(value) + spare // 2:]
+    # 半形全形混著的留白（「身高　    cm」）用半形空白隔：全形的太寬，常常放不下就一個都不隔
+    sp = " " if " " in slot.filler else slot.filler[0]
+    if _width(slot.filler) < _width(value) + 2 * _width(sp):
+        return value
+    text = slot.cell.paras[slot.para].text
+    before, after = text[:slot.start].split("\n")[-1], text[slot.end:]
+    padded = sp + value + sp
+    if not before.strip() or re.search(r"[(（「［\[－—–~～\-]$", before):
+        padded = padded.lstrip(" 　")
+    if re.match(r"[,，、。：:/／)）」］\]]", after):
+        padded = padded.rstrip(" 　")
+    return padded
 
 
 def _area_code(slot: Slot, value: str) -> str:
@@ -839,10 +863,8 @@ def _area_code(slot: Slot, value: str) -> str:
             else next((c for c in AREA_CODES if digits.startswith(c)), ""))
     if not code or digits.startswith("09") or len(digits) < 9:
         return ""
-    inside = slot.filler[:-1]
-    spare = max(len(inside) - len(code), 0)
-    return (inside[:spare // 2] + code + inside[len(code) + spare // 2:]
-            + slot.filler[-1] + digits[len(code):])
+    # 括號裡不留空白：「(02)24596466」，跟一般寫電話的樣子一樣
+    return code + slot.filler[-1] + digits[len(code):]
 
 
 def _replacement(slot: Slot, value: str) -> str:
@@ -947,8 +969,14 @@ def _spread(run: List[Slot], value: str, texts: Dict[str, str]) -> Dict[str, str
                     break
     if not parts:
         return {run[0].id: _pad(run[0], value)}
-    return {x.id: _pad(x, _roc(texts[x.id], x, part, marker))
-            for x, part, marker in zip(run, parts, markers)}
+    out = {x.id: _pad(x, _roc(texts[x.id], x, part, marker))
+           for x, part, marker in zip(run, parts, markers)}
+    # 月、日這種一兩位數的幾格要一致：「2021年10月－2023年 2 月」「■ 8 月24日」一格有空白
+    # 一格沒有，看起來像打錯。有一格放不下空白就全部不留；四位數的年份本來就常貼著寫，不算
+    short = [x.id for x, part in zip(run, parts) if len(part) <= 2]
+    if len({out[i] != out[i].strip(" 　") for i in short}) > 1:
+        out.update({i: out[i].strip(" 　") for i in short})
+    return out
 
 
 def _bigrams(text: str) -> set:
@@ -996,7 +1024,11 @@ def _around(slot: Slot) -> str:
         near = text
     else:
         head = text[:i].rstrip("：: 　")
-        near = head[max(head.rfind(c) for c in "：:↵。") + 1:] + text[i:i + 8]
+        cut = max(head.rfind(c) for c in "：:↵。")
+        # 冒號後面只印著「同上」「同戶籍地址」這種提示時，欄位名稱在冒號前面（「通訊地址：同上▁」）
+        if cut >= 0 and re.fullmatch(r"[ 　]*同[^\s：:]{0,5}[ 　]*", head[cut + 1:]):
+            cut = max(head.rfind(c, 0, cut) for c in "：:↵。")
+        near = head[cut + 1:] + text[i:i + 8]
     return re.sub(r"本公司|本人", "", slot.cell.row_head + slot.cell.col_head + label + near)
 
 
@@ -1846,6 +1878,33 @@ def _names_question(box: Slot, key: str, fields: Dict[str, str]) -> bool:
                if k.rsplit(".", 1)[0] == group and k != key)
 
 
+def one_question_per_field(groups: Dict[Tuple[str, int, int], List[Slot]], fields: Dict[str, str],
+                           picked: Dict[str, str], ticks: Dict[str, bool]) -> None:
+    """同一格裡兩題勾選題對到同一項資料時，只留題目跟它最像的那一題。
+
+    富邦「其他」那一格印了兩題：「是否曾至富邦集團任職過？」與「是否有配偶或二親等血親
+    姻親於富邦集團任職？」。親友任職只回答第二題，模型卻兩題都拿它勾「否」——第一題
+    app.db 根本沒有資料。兩題的「任職」「公司」一樣多，第二題多了「血親」「姻親」這兩個
+    別名，分數高的留下。分數一樣就都留（兩題題目都沒比對不出差別時，不替模型決定）。
+    """
+    claims: Dict[Tuple[str, str], List[List[Slot]]] = {}
+    for boxes in groups.values():
+        key = next((picked[b.id] for b in boxes if b.id in picked), None)
+        if key:
+            claims.setdefault((boxes[0].addr, key), []).append(boxes)
+    for (_addr, key), questions in claims.items():
+        if len(questions) < 2:
+            continue
+        score = {id(q): _support(q[0], key, fields) for q in questions}
+        best = max(score.values())
+        for q in questions:
+            if score[id(q)] < best:
+                log.info("勾選題不採用 %s %s（同一格另一題更像）", q[0].id, key)
+                for b in q:
+                    picked.pop(b.id, None)
+                    ticks.pop(b.id, None)
+
+
 def obvious_boxes(groups: Dict[Tuple[str, int, int], List[Slot]], fields: Dict[str, str],
                   picked: Dict[str, str], ticks: Dict[str, bool]) -> Dict[str, str]:
     """模型沒答出來的勾選題，程式自己認得出來的就自己填。
@@ -1984,6 +2043,7 @@ def analyze(blank: Path, profile: Dict[str, Any],
                 picked.update(more)
                 ticks.update(tk)
             picked.update(obvious_boxes(groups, fields, picked, ticks))
+            one_question_per_field(groups, fields, picked, ticks)
             chosen.update(picked)
         except llm.LlmError as e:
             log.warning("勾選題判讀失敗：%s", e)
