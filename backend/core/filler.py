@@ -12,7 +12,8 @@ r"""空白履歷表 ＋ 個人資料（app.db 那份 JSON）→ 填好的履歷�
   1. 照 docx 的表格骨架自己畫版面示意圖，每格標上地址 —— 讓 VLM 看得到位置
   2. 機械地列出所有「可以寫字的位置」：空格子、印好的字之間的留白、冒號後面、
      勾選框。「以下由公司填寫」之後、應徵職務這種每間公司不同的欄位不列
-  3. 一列一筆的表（學經歷、家人）整張問模型「每一欄是什麼」，列的順序由程式排
+  3. 一列一筆的表（學經歷、家人）整張問模型「每一欄是什麼」，列的順序由程式排：
+     列首印著學位的照學位放、有序號欄的照序號、都沒有才由上而下
   4. 其餘位置分批問模型：這裡該填哪一項資料（挑不到就 __無__）。答案被 JSON Schema
      約束成只能挑既有的項目代碼，模型編不出不存在的資料
   5. 補漏：還空著的位置，只拿名稱相近、還沒用到的幾項資料再問一次
@@ -52,7 +53,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from . import llm
 from .document import iter_block_items
-from .schema import BLOCKED_LABELS, BY_KEY, LABEL_ALIASES
+from .schema import BLOCKED_LABELS, BY_KEY, LABEL_ALIASES, OPTION_SYNONYMS
 
 log = logging.getLogger(__name__)
 
@@ -72,6 +73,9 @@ NONE = "__無__"
 
 CHECKBOX_CHARS = "□☐▢◻"
 CHECKED = "■"
+# 沒有印框、而是「欄名是選項、底下空一格」的表（區部：日間｜夜間，狀態：畢業｜肄業）
+# 在格子裡打的記號
+MARK = "✓"
 # 印好的字之間留出來的書寫空間：「自　　年　　月」「血型：　　型」。
 # 兩格以上的空白才算，全形半形混著數；剛好兩格的、以及行首的，要後面接著單位才算
 # ——「年  月  日」的月日前面只有兩格，而「cm  體重」中間那兩格只是排版間隔，
@@ -81,6 +85,11 @@ GAP_RE = re.compile(r"[ 　]{2,}|[_＿]{2,}|[.．]{4,}")
 # 用處：判斷一段空白是不是留白，以及日期要拆成哪幾格
 UNITS = ("公分", "公斤", "cm", "kg", "年", "月", "日", "時", "分", "秒", "歲", "型", "元")
 DATE_UNITS = ("年", "月", "日", "時", "分", "秒")
+# 單位後面可以再接的字：「＿月＿日後」的「日」一樣是單位
+UNIT_SUFFIX = "後前起"
+# 台灣的市話區碼，長的排前面（「(　　)＿＿」要把 0224596466 拆成 02 與 24596466）
+AREA_CODES = ("0836", "0826", "089", "082", "049", "037",
+              "02", "03", "04", "05", "06", "07", "08")
 DATE_RE = re.compile(r"(\d{2,4})\s*[年/.\-]\s*(\d{1,2})(?:\s*[月/.\-]\s*(\d{1,2}))?")
 PLACEHOLDER_RE = re.compile(r"^[\s　_＿…．.\-—–]*$")
 # 多選值的分隔符號。刻意不含空白：「2026 年 8 月 24日」用空白拆會拆出一個「月」，
@@ -96,9 +105,13 @@ OTHER_PEOPLE = {
 }
 # 公司自己填的欄位。「以下由公司填寫」那條線之前也會夾雜這種欄位（面談日期印在最上面）
 COMPANY_WORDS = ("面談", "初試", "複試", "任用", "建議薪資", "主管簽章", "到職日期")
+# 親筆簽名留給本人手寫；同一行的「日期＿年＿月＿日」是簽名的日期，個人資料也不會有
+SIGN_WORDS = ("簽名", "簽章")
 # 兩邊都常出現、卻不代表相關的詞：履歷表的問答題幾乎都有「工作」；
 # 「期間」則是服役期間、就學期間、任職期間都有，光靠它會把學歷填進服役欄
 GENERIC_WORDS = {"工作", "期間"}
+# 否定的選項或值：「□否」「□無」「不同意」
+NEGATIVE = r"否|無|沒有|不.*"
 
 SYSTEM = """你是履歷表格的填寫助理。表格上每一個「可以寫字的位置」都編了號，
 位置在那一格的字裡用 ▁ 標出來。請為每一個位置指出：該填個人資料裡的哪一項。
@@ -131,6 +144,12 @@ class Cell:
     printed_in_row: int = 0    # 這一列有幾格印著欄位名稱（欄名列不會只有一兩格）
     value_after: bool = False  # 右邊還有空格子（代表這格是欄名，不是提示字）
     caption: str = ""          # 欄名列正上方那一句說明（「請列舉…並同意我們諮詢」）
+    head_row: int = -1         # col_head 印在第幾列
+    col_parent: str = ""       # 欄名上面那一層（「區部」底下分「日間｜夜間」）
+    origin: int = -1           # 一列一筆的表：表頭從第幾列開始，同一張表的格子這個值相同
+    key: str = ""              # 列首印的這一筆是哪一種（「碩／博士」「大學」），沒有就空
+    seq: int = 0               # 左邊序號欄印的數字（「1」「2」），沒有就 0
+    row_first: str = ""        # 整列都是字的那種列（「緊急聯絡人｜關係｜聯絡電話：…」）最左邊那格
 
 
 @dataclass
@@ -159,12 +178,14 @@ def _unit_at(text: str, pos: int) -> str:
     """
     rest = text[pos:]
     for unit in sorted(UNITS, key=len, reverse=True):
-        if rest.startswith(unit) and not re.match(r"[一-鿿A-Za-z]", rest[len(unit):]):
+        after = rest[len(unit):].lstrip(UNIT_SUFFIX) if rest.startswith(unit) else ""
+        if rest.startswith(unit) and not re.match(r"[一-鿿A-Za-z]", after):
             return unit
     return ""
 
 
-_TEMPLATE_RE = re.compile(r"[\s　\d自至到~～\-—/／()（）]|" + "|".join(sorted(UNITS, key=len, reverse=True)))
+_TEMPLATE_RE = re.compile(r"[\s　\d自至到~～\-—–－/／()（）]|"
+                          + "|".join(sorted(UNITS, key=len, reverse=True)))
 
 
 def _is_template(text: str) -> bool:
@@ -187,6 +208,36 @@ def _merged_away(tc) -> bool:
     return vmerge is not None and vmerge.get(qn("w:val"), "continue") == "continue"
 
 
+def _head(heads: List[Tuple[int, int, list]], edges: List[int], index: int, count: int,
+          col: int, span: int) -> Tuple[str, int, int, int]:
+    """這一格頭上最近的欄名：(字, 在第幾列, 起始網格欄, 結束網格欄)，找不到列號是 -1。
+
+    上面那一列跟這一列格數相同時，看同一個位置的那一格。網格欄（gridCol）常常
+    對不齊：學歷表「在學」底下那一格的網格從「肄業」中間開始，照網格欄找會找到
+    肄業，Word 畫出來卻在「在學」底下——一格一格對著排的表，第幾格才是真的。
+    格數不同時（上面一格「身分證字號」，底下切成十格）才看寬度重疊得最多的那一格。
+    """
+    lo, hi = edges[col], edges[min(col + span, len(edges) - 1)]
+    for row_no, above_count, labels in reversed(heads):
+        if count is None:       # 只認網格起點相同的（不在表格清單裡的格子，沿用原本的找法）
+            hit = next((x for x in labels if x[1] == col), None)
+            if hit:
+                return hit[3], row_no, hit[1], hit[2]
+            continue
+        if above_count == count:
+            hit = next((x for x in labels if x[0] == index), None)
+            if hit:
+                return hit[3], row_no, hit[1], hit[2]
+            continue
+        last = len(edges) - 1
+        overlap = [(min(hi, edges[min(c1, last)]) - max(lo, edges[min(c0, last)]), c0, c1, text)
+                   for _i, c0, c1, text in labels]
+        best = max(overlap, key=lambda x: (x[0], -x[1]), default=None)
+        if best and best[0] > 0:
+            return best[3], row_no, best[1], best[2]
+    return "", -1, col, col + span
+
+
 def cells(doc) -> List[Cell]:
     """列出所有格子。地址與 evaluate.py 的報告一致，對錯照著地址查得到。
 
@@ -198,54 +249,94 @@ def cells(doc) -> List[Cell]:
     table_no = para_no = 0
     for block in iter_block_items(doc):
         if isinstance(block, Table):
-            above: Dict[int, str] = {}          # 網格欄 -> 上面最近一格的欄名
-            above_row: Dict[int, int] = {}      # 網格欄 -> 那個欄名在第幾列
+            edges = [0]
+            for g in block._tbl.tblGrid.gridCol_lst:
+                edges.append(edges[-1] + int(g.w or 0))
+            heads: List[Tuple[int, int, list]] = []   # (列, 這一列幾格, [(第幾格, 起, 迄, 字)])
+            header_rows = set()                     # 整列都是欄位名稱的列（表頭）
             cap_row, cap_text = -2, ""          # 最近一列「整列只有一句長說明」的列
             for r, row in enumerate(block.rows):
+                tcs = row._tr.tc_lst
                 grid_col, in_row = 0, []
-                for c, tc in enumerate(row._tr.tc_lst):
-                    col = grid_col
-                    grid_col += tc.grid_span or 1
+                for c, tc in enumerate(tcs):
+                    col, span = grid_col, tc.grid_span or 1
+                    grid_col += span
+                    head = _head(heads, edges, c, len(tcs), col, span)
                     if _merged_away(tc):
                         # 延續格不是填寫位置，但上面那格的字仍是它右邊格子的欄名：
                         # 「聯絡電話」跨兩列，第二列的「(H)：」左邊就是它
-                        in_row.append((col, None, None, above.get(col, "")))
+                        in_row.append((c, None, None, _head(heads, edges, c, None, col, span)[0],
+                                       head, col, col + span))
                         continue
                     paras = _Cell(tc, block).paragraphs
                     text = "\n".join(p.text for p in paras).strip()
-                    in_row.append((col, f"t{table_no}.r{r}.c{c}", paras, text))
+                    in_row.append((c, f"t{table_no}.r{r}.c{c}", paras, text, head,
+                                   col, col + span))
 
                 def is_label(t):
                     return bool(t) and not _is_template(t) and not _box_only(t)
 
-                labels = [t for _c, a, _p, t in in_row if a and is_label(t)]
+                real = [x for x in in_row if x[1]]
+                labels = [x for x in real if is_label(x[3])]
                 # 整列只有一句長說明：那是這一區在講什麼。諮詢人那張表沒有左邊的
                 # 區塊標題，欄名又只有「姓名／職稱／公司名稱」，跟家庭成員長得一樣，
                 # 只有上面那句「請列舉…並同意我們諮詢」認得出它問的是誰
-                if len(labels) == 1 and len(_squash(labels[0])) > 8:
-                    cap_row, cap_text = r, labels[0]
-                for i, (col, addr, paras, text) in enumerate(in_row):
+                if len(labels) == 1 and len(_squash(labels[0][3])) > 8:
+                    cap_row, cap_text = r, labels[0][3]
+                # 列首印著這一筆是哪一種（碩／博士｜大學｜專科）：整列只有最左邊那格有字，
+                # 列首與每一格頭上都是表頭。這種表不是由上往下一筆一筆填，是照列首放
+                # ——資料裡的大學放在「大學」那一列，碩士那一列空著
+                keyed = (len(real) >= 3 and len(labels) == 1 and labels[0] is real[0]
+                         and len(_squash(real[0][3])) <= 12 and not re.search(r"[：:]", real[0][3])
+                         and all(x[4][1] in header_rows for x in real))
+                # 空著的、只印格式的（「自　年　月」）、整格勾選框的（「□畢 □肄」）
+                # 都是拿來填的。左邊整排都沒有欄位名稱（或只有列首）時，標出它在表頭
+                # 底下第幾列——模型靠這個分辨該填第幾筆，沒有它會整批錯位一列
+                data = [x for i, x in enumerate(in_row)
+                        if x[1] and not is_label(x[3]) and x[4][1] >= 0
+                        and (keyed or not any(y[1] and is_label(y[3]) for y in in_row[:i]))]
+                # 表頭分兩層時（「區部」底下「日間｜夜間」），第幾列從最下面那層算起
+                bottom = max((x[4][1] for x in data), default=-1)
+                top = min((x[4][1] for x in data), default=-1)
+                seq = 0
+                for i, (c, addr, paras, text, head, c0, c1) in enumerate(in_row):
                     if addr is None:
                         continue
+                    if re.fullmatch(r"\d{1,2}", text):
+                        seq = int(text)         # 序號欄：印著 1、2、3 的那一格
                     # 左邊最近一格印的字才是這一格的欄位名稱。取「整列第一格」會
                     # 把「性別｜　｜血型｜　」的血型欄也標成性別——履歷表一列排
                     # 兩三組「標籤＋值」是常態，錯的標籤比沒有標籤還糟
-                    left = next((t for _c, _a, _p, t in reversed(in_row[:i]) if t), "")
-                    # 空著的、只印格式的（「自　年　月」）、整格勾選框的（「□畢 □肄」）
-                    # 都是拿來填的。左邊整排都沒有欄位名稱時，標出它在欄名底下第幾列
-                    # ——模型靠這個分辨該填第幾筆，沒有它會整批錯位一列
-                    alone = (not is_label(text)
-                             and not any(a and is_label(t) for _c, a, _p, t in in_row[:i]))
-                    depth = r - above_row[col] if alone and col in above_row else 0
+                    left = next((x[3] for x in reversed(in_row[:i]) if x[3]), "")
+                    alone = any(x[1] == addr for x in data)
+                    if not alone:       # 標籤＋值排在同一列的格子，頭上的字多半是別的欄位
+                        head = _head(heads, edges, c, None, c0, c1 - c0)
+                    depth = r - bottom if alone else 0
                     # 說明要緊貼著欄名列才算數，隔了幾列的就不是在講這一區
                     caption = cap_text if depth and cap_row == r - depth - 1 else ""
+                    parent = (_head([h for h in heads if h[0] < head[1] and h[0] in header_rows],
+                                    edges, -1, -1, head[2], head[3] - head[2])[0]
+                              if alone and head[1] in header_rows else "")
                     out.append(Cell(addr, paras, row_head=left, depth=depth,
-                                    col_head="" if is_label(text) else above.get(col, ""),
+                                    col_head="" if is_label(text) else head[0],
                                     printed_in_row=len(labels), caption=caption,
-                                    value_after=any(a and not t
-                                                    for _c, a, _p, t in in_row[i + 1:])))
-                    if is_label(text):
-                        above[col], above_row[col] = text, r
+                                    value_after=any(x[1] and not x[3] for x in in_row[i + 1:]),
+                                    head_row=head[1], col_parent=parent,
+                                    origin=top if alone else -1,
+                                    key=real[0][3] if keyed and alone else "",
+                                    seq=seq if alone else 0,
+                                    # 「聯絡電話：(　)↵手機：」夾在「緊急聯絡人｜關係」那一列，
+                                    # 左邊最近的欄名只看得到「關係」，看不出是誰的電話
+                                    row_first=(real[0][3] if len(real) >= 3 and len(labels) == len(real)
+                                               and real[0][1] != addr and real[0][3] != left
+                                               and any(w in _squash(real[0][3])
+                                                       for ws in OTHER_PEOPLE.values() for w in ws)
+                                               else "")))
+                if len(real) >= 3 and len(labels) == len(real):
+                    header_rows.add(r)
+                # 列首那一列不是表頭：「專科」不是下一列「高中(職)」的欄名
+                if labels and not keyed:
+                    heads.append((r, len(tcs), [(x[0], x[5], x[6], x[3]) for x in labels]))
             table_no += 1
         else:
             if COMPANY_ONLY_RE.search(block.text):
@@ -258,32 +349,50 @@ def cells(doc) -> List[Cell]:
 def _line_slots(line: str) -> List[Tuple[str, int, int, str]]:
     """一行字裡有哪些可以寫字的位置：(kind, start, end, 選項字或單位)。
 
-    有勾選框的行，只有最後一個框之後的留白算數——框與框之間的空白是排版
-    （「□隨時  □   週」），填進去只會把版面弄壞；框後面的才是真的要寫字
-    （「□   月   日」要寫月份與日期）。
+    有勾選框的行，框與框之間的空白多半是排版（「□隨時  □   週」），填進去只會把
+    版面弄壞。算數的只有兩種：最後一個框之後的（「□   月   日」要寫月份與日期），
+    以及夾在同一個選項的字中間的（「□ NT$＿＿＿/月」——選項本身就是一個填空）。
     """
     if not line.strip():
         return []
-    if any(b in _squash(line) for b in BLOCKED_LABELS + COMPANY_WORDS):
-        return []    # 應徵職務（每間公司不一樣，產品刻意留白）與公司自己填的欄位
+    if any(b in _squash(line) for b in BLOCKED_LABELS + COMPANY_WORDS + SIGN_WORDS):
+        return []    # 應徵職務（每間公司不一樣，產品刻意留白）、公司自己填的欄位、親筆簽名
     out: List[Tuple[str, int, int, str]] = []
     boxes = [m.start() for m in re.finditer(f"[{CHECKBOX_CHARS}]", line)]
     for i, pos in enumerate(boxes):
         stop = boxes[i + 1] if i + 1 < len(boxes) else len(line)
-        option = re.split(r"[\s　,，、/／]+", line[pos + 1:stop].strip())[0].strip(" :：()（）")
+        option = re.split(r"[\s　,，、/／_＿]+", line[pos + 1:stop].strip())[0].strip(" :：()（）")
         out.append(("box", pos, pos + 1, option))
     # 「學  歷」「姓    名」中間的空白是把字撐開的排版，不是留給人寫字的。
-    # 拿掉空白後只剩三兩個字、又沒有冒號、數字或單位的，整段就是個欄位名稱
-    padded = (len(_squash(line)) <= 4 and not re.search(r"[：:\d]", line)
-              and not any(u in line for u in UNITS))
+    # 拿掉空白後只剩三兩個中文字、又沒有冒號、數字或單位的，整段就是個欄位名稱
+    # （「　　　,　　　」只剩一個逗號，那是「英文名, 姓氏」兩個要填的空，不是欄位名稱）
+    padded = (len(_squash(line)) <= 4 and re.search(r"[一-鿿]", line)
+              and not re.search(r"[：:\d]", line) and not any(u in line for u in UNITS))
     if not padded:
-        for m in GAP_RE.finditer(line, boxes[-1] + 1 if boxes else 0):
+        # 行首直接印著單位（「年　月－　年　月」「公分」）：數字寫在單位前面，
+        # 那裡沒有留白可以認，位置就是行首
+        lead = len(line) - len(line.lstrip(" 　"))
+        if lead < 2 and _unit_at(line, lead):
+            out.append(("gap", 0, lead, _unit_at(line, lead)))
+        for m in GAP_RE.finditer(line):
+            if boxes and m.start() < boxes[-1]:
+                owner = [b for b in boxes if b < m.start()]
+                stop = min(b for b in boxes if b > m.start())
+                if (not owner or not line[owner[-1] + 1:m.start()].strip()
+                        or not line[m.end():stop].strip()):
+                    continue    # 框與框之間、又不是夾在選項的字中間的空白是排版
             unit = _unit_at(line, m.end() + len(line[m.end():]) - len(line[m.end():].lstrip(" 　")))
             filler = m.group()
             if len(filler) < 3 and not unit and filler[0] not in "_＿.．":
                 continue    # 兩格寬的空白要後面接著單位才算（「cm  體重」中間那兩格不算）
-            if not line[:m.start()].strip() and not unit:
+            if (not line[:m.start()].strip() and not unit
+                    and not re.match(r"[,，、/／]", line[m.end():])):
                 continue    # 行首的空白後面接欄位名稱就只是縮排（「　　　初試日期：」）
+            # 括號裡的留白是區碼（「聯絡電話：(　　)」），號碼其餘的部分寫在括號後面
+            if (m.start() and line[m.start() - 1] in "(（" and line[m.end():m.end() + 1] in (")", "）")
+                    and line[m.end():m.end() + 1]):
+                out.append(("gap", m.start(), m.end() + 1, "()"))
+                continue
             out.append(("gap", m.start(), m.end(), unit))
     # 冒號結尾＝值接在後面；「語言:1.」這種編號結尾也是（1. 是清單序號，值寫在後面）。
     # 要看未經 strip 的原字：「中文：      」的留白已經被上面認成 gap 了，
@@ -310,7 +419,8 @@ def _fill_after(cell: Cell, text: str) -> bool:
     """
     body = text.strip()
     if re.fullmatch(r"[（(][^（()）]*[)）]", body):
-        return True
+        # 整格就只有這句說明才算。「專 科↵(二.三.五專)」的括號是欄位名稱的補充，不是寫字的地方
+        return _squash("".join(p.text for p in cell.paras)) == _squash(body)
     return (bool(cell.row_head) and not cell.value_after and cell.printed_in_row <= 2
             and 0 < len(_squash(body)) <= 8 and not re.search(r"[：:？?]", body))
 
@@ -321,10 +431,14 @@ def slots_of(cell: Cell) -> List[Slot]:
     full, offset = "\n".join(p.text for p in cell.paras), 0
     # 聲明條文那種長段落之間的空行是排版，不是填寫位置
     legal = any(len(p.text) > 60 and p.text.rstrip().endswith("。") for p in cell.paras)
+    first = cell.paras[0].text if cell.paras else ""
     for pi, para in enumerate(cell.paras):
         text = para.text
+        above = cell.paras[pi - 1].text.rstrip() if pi else ""
         if PLACEHOLDER_RE.match(text):
-            found = [] if legal else [("blank", 0, len(text), "")]
+            # 「中文姓名：↵（空行）」的空行是上一行那個欄位的地方：值接在冒號後面，
+            # 冒號那一行被擋掉的（應徵職務：）空行也跟著不填
+            found = [] if legal or above.endswith(("：", ":")) else [("blank", 0, len(text), "")]
         else:
             found, base = [], 0
             for line in text.split("\n"):
@@ -333,12 +447,19 @@ def slots_of(cell: Cell) -> List[Slot]:
                 base += len(line) + 1
             if not found and _fill_after(cell, text):
                 found = [("append", len(text), len(text), "")]
+            # 「聯絡電話：(　　)↵手機」：第二段只印一個欄位名稱，號碼寫在它後面
+            if (not found and pi and re.search(r"[：:]", first)
+                    and _squash(text) in set(LABEL_ALIASES) | {f.label for f in BY_KEY.values()}):
+                found = [("append", len(text.rstrip()), len(text.rstrip()), "")]
         for n, (kind, start, end, option) in enumerate(found, 1):
-            if kind == "blank" and len(cell.paras) > 1:
-                # 格子裡的空白段本身沒有字，要把整格攤開才看得出它夾在什麼中間
-                shown = full[:offset] + "▁" + full[offset + len(text):]
+            shown_end = end - 1 if option == "()" else end
+            if len(cell.paras) > 1 and (kind == "blank" or not re.search(r"[一-鿿A-Za-z]",
+                                                                        text[:start])):
+                # 格子裡的空白段本身沒有字，行首的空格（「▁年　月　日」「▁公分」）前面也
+                # 沒有字，要把整格攤開才看得出它屬於哪個欄位
+                shown = full[:offset + start] + "▁" + full[offset + shown_end:]
             else:
-                shown = text[:start] + "▁" + text[end:]
+                shown = text[:start] + "▁" + text[shown_end:]
             # 排版用的留白先縮成一格：宣告事項那六題的題目與勾選框之間空了五十格，
             # 不縮的話周圍只看得到「▁ 是,請說明:」，題目在問什麼完全看不見
             shown = re.sub(r"[ 　]{2,}", " ", shown.replace("\n", "↵"))
@@ -351,6 +472,16 @@ def slots_of(cell: Cell) -> List[Slot]:
     # 不然模型會把答案寫在問句後面，印好的欄位反而空著
     if any(s.kind == "append" for s in out):
         out = [s for s in out if s.kind != "line"]
+    # 問句的下一段一開頭就是勾選框（「如何得知該職缺資訊？↵□人力銀行 □親友推薦」）：
+    # 答案是勾，不是在問句底下另寫一行字
+    out = [s for s in out if not (
+        s.kind == "line" and s.para + 1 < len(cell.paras)
+        and re.match(f"[ 　]*[{CHECKBOX_CHARS}]", cell.paras[s.para + 1].text))]
+    # 「出生日期：↵年　月　日」「身高：↵公分」：下一段印著單位，值照單位寫在那裡，
+    # 冒號後面不再是位置——不然整串日期寫在冒號後面，底下的年月日照樣空著
+    united = {s.para for s in out if s.kind == "gap" and s.option in UNITS}
+    out = [s for s in out if not (s.kind == "append" and s.para + 1 in united
+                                  and s.end == len(cell.paras[s.para].text))]
     return out
 
 
@@ -426,7 +557,66 @@ def fields_of(profile: Dict[str, Any]) -> Dict[str, str]:
             if isinstance(row, dict) and row.get("start") and row.get("end"):
                 out[f"{root}[{i}].period"] = (f"{_canon_date(row['start'])}"
                                               f"~{_canon_date(row['end'])}")
+                if root == "experience" and _tenure(row["start"], row["end"]):
+                    out[f"{root}[{i}].tenure"] = _tenure(row["start"], row["end"])
+    basic = profile.get("basic") or {}
+    surname = _surname_en(str(basic.get("name_passport") or ""), str(basic.get("name_zh") or ""))
+    if surname:
+        out["basic.surname_en"] = surname
     return out
+
+
+def _tenure(start: str, end: str) -> str:
+    """年資：頭尾兩個月都算，跟 104、LinkedIn 的算法一樣（2023年7月～2026年4月＝2年10個月）。
+    認不出日期、或起訖顛倒就不算——寧可空著，不寫一個錯的年資。"""
+    a, b = DATE_RE.search(start or ""), DATE_RE.search(end or "")
+    if not a or not b:
+        return ""
+    months = (int(b.group(1)) * 12 + int(b.group(2))) - (int(a.group(1)) * 12 + int(a.group(2))) + 1
+    if months <= 0:
+        return ""
+    years, rest = divmod(months, 12)
+    return (f"{years}年" if years else "") + (f"{rest}個月" if rest else "")
+
+
+# 國語羅馬拼音的音節（威妥瑪、漢語、通用拼音混著收）。護照全名存成「KUOWEITE」這種
+# 沒有分隔的寫法時，要靠它切出「KUO WEI TE」才知道姓氏是哪一段
+_SYLLABLE_RE = re.compile(
+    r"(?:CH|SH|ZH|TS|TZ|HS|SZ|SS|[BPMFDTNLGKHJQXZCSRWY])?"
+    r"(?:IUNG|IANG|IONG|UANG|UENG|ANG|ENG|ING|ONG|UNG|IAN|IAO|IEN|IEH|UAI|UAN|UEI|UEN|UEH"
+    r"|AI|AO|AN|EI|EN|ER|EH|IA|IE|IH|IN|IO|IU|OU|UA|UE|UI|UN|UO|U|A|E|I|O)")
+
+
+def _surname_en(passport: str, name_zh: str) -> str:
+    """護照全名裡的姓氏拼音。
+
+    有分隔的（「KUO, WEI-TE」「KUO WEI TE」）取第一段；只有兩段而其中一段帶連字號
+    （「WEI-TE KUO」），帶連字號的是名字，另一段才是姓。沒有分隔的（「KUOWEITE」）
+    照中文姓名的字數切音節——三個字就要剛好切成三個音節，所有切法的第一個音節都
+    相同才採用，切得出兩種姓氏就不猜。四個字的名字當成複姓（歐陽、司馬）。
+    """
+    text = passport.strip().upper()
+    parts = [p for p in re.split(r"[\s,，]+", text) if p]
+    if len(parts) == 2 and sum("-" in p for p in parts) == 1:
+        return next(p for p in parts if "-" not in p)
+    if len(parts) > 1:
+        return parts[0]
+    count = len(re.findall(r"[一-鿿]", name_zh))
+    if not parts or not re.fullmatch(r"[A-Z]+", parts[0]) or not 2 <= count <= 4:
+        return ""
+    word, heads = parts[0], 2 if count == 4 else 1
+
+    def split(rest: str, n: int) -> List[List[str]]:
+        if not rest or not n:
+            return [[]] if not rest and not n else []
+        out = []
+        for size in range(1, min(6, len(rest)) + 1):
+            if _SYLLABLE_RE.fullmatch(rest[:size]):
+                out += [[rest[:size]] + tail for tail in split(rest[size:], n - 1)]
+        return out
+
+    surnames = {"".join(s[:heads]) for s in split(word, count)}
+    return surnames.pop() if len(surnames) == 1 else ""
 
 
 # ---------------------------------------------------------------------------
@@ -533,7 +723,10 @@ def _describe(slot: Slot) -> str:
     if cell.col_head:
         depth = f"（往下第{cell.depth}列）" if cell.depth else ""
         parts.append(f"上面欄名:{_squash(cell.col_head)[:14]}{depth}")
-    kind = f"（勾選框，選項印著「{slot.option}」）" if slot.kind == "box" else ""
+    if cell.row_first:
+        parts.append(f"這一列開頭:{_squash(cell.row_first)[:10]}")
+    kind = (f"（勾選框，選項印著「{slot.option}」）" if slot.kind == "box"
+            else "（括號裡寫區碼，其餘號碼接在括號後面，填市話）" if slot.option == "()" else "")
     return f"{slot.preview}{kind}" + "".join(f"｜{x}" for x in parts)
 
 
@@ -623,8 +816,33 @@ def _split_by_markers(value: str, markers: List[str]) -> List[str]:
 
 
 def _pad(slot: Slot, value: str) -> str:
-    """值比原本的留白短就補回空白，欄寬不會跑掉。"""
-    return value + (slot.filler[len(value):] if slot.filler.isspace() else "")
+    """值比原本的留白短就補回空白，欄寬不會跑掉。
+
+    值擺在留白中間：靠左寫的話「1998年3     月25     日」的 25 看起來像接在「月」
+    後面，「,KUO」「NT$75,000」也黏著前面印的字。"""
+    if not slot.filler.isspace():
+        return value
+    spare = max(len(slot.filler) - len(value), 0)
+    return slot.filler[:spare // 2] + value + slot.filler[len(value) + spare // 2:]
+
+
+def _area_code(slot: Slot, value: str) -> str:
+    """「(　　)」這種區碼位置：區碼寫進括號、其餘號碼接在括號後面。
+
+    位置的範圍包含右括號，所以右括號由這裡原樣寫回去。手機（09 開頭）沒有區碼，
+    不是這個位置該填的——回空字串，那一格就不寫。
+    """
+    text = (value or "").strip()
+    digits = re.sub(r"\D", "", text)
+    given = re.match(r"\(?(0\d{1,3})\)?[\s\-)]", text)      # 值自己就分好了：02-24596466
+    code = (given.group(1) if given
+            else next((c for c in AREA_CODES if digits.startswith(c)), ""))
+    if not code or digits.startswith("09") or len(digits) < 9:
+        return ""
+    inside = slot.filler[:-1]
+    spare = max(len(inside) - len(code), 0)
+    return (inside[:spare // 2] + code + inside[len(code) + spare // 2:]
+            + slot.filler[-1] + digits[len(code):])
 
 
 def _replacement(slot: Slot, value: str) -> str:
@@ -634,6 +852,10 @@ def _replacement(slot: Slot, value: str) -> str:
         return "\n" + value
     if slot.kind == "gap":
         return _pad(slot, value)
+    # 接在沒有冒號的字後面（「手機」「(請註明里、鄰)」）隔一格，不然號碼黏著欄名
+    before = slot.cell.paras[slot.para].text[:slot.start] if slot.cell else ""
+    if slot.kind == "append" and before and not re.search(r"[\s　：:]$", before):
+        return " " + value
     return value
 
 
@@ -712,6 +934,9 @@ def _spread(run: List[Slot], value: str, texts: Dict[str, str]) -> Dict[str, str
     往後看整串空格（跨段落也算，「自…」與「至…」是同一格裡的兩段）；
     切不開就只填第一格——整串值塞進第一格比留白還糟。
     """
+    if run[0].option == "()":
+        written = _area_code(run[0], value)
+        return {run[0].id: written} if written else {}
     markers = [_marker_after(texts[x.id], x.end) for x in run]
     parts = _date_parts(value, markers)
     if not parts:
@@ -749,10 +974,22 @@ def _around(slot: Slot) -> str:
     哪一個人。留著的話，推薦人的公司會因為「公司」兩個字被填進「您對本公司的了解」。
     """
     # 一格分好幾段時，標籤常只印在第一段（「負債狀況：」在第一段，勾選框在第二段）
+    # 這一段在位置前面沒印任何字（「▁　　, ▁」「▁公分」）時，第一段就是它的欄位名稱
+    # 第一段是「聯絡電話：(　　)」時，第二段的「手機：▁」也是聯絡電話底下的一項——取到冒號為止
     label = ""
     if slot.para > 0:
         first = slot.cell.paras[0].text.strip()
-        label = first if first.endswith(("：", ":")) else ""
+        own = slot.cell.paras[slot.para].text[:slot.start]
+        if not re.search(r"[一-鿿A-Za-z]", own):
+            # 往前找最近一段不是勾選框開頭的：「是否有配偶…任職？↵ □否 ↵□是，請說明」
+            # 的兩個框都屬於第二段那一題，不是第一段那一題
+            label = next((p.text.strip() for p in reversed(slot.cell.paras[:slot.para])
+                          if p.text.strip()
+                          and not re.match(f"[ 　]*[{CHECKBOX_CHARS}]", p.text)), first)
+        elif first.endswith(("：", ":")):
+            label = first
+        elif re.search(r"[：:]", first):
+            label = re.match(r".*[：:]", first).group()
     text = slot.preview
     i = text.find("▁")
     if i < 0:
@@ -792,7 +1029,22 @@ def _support(slot: Slot, key: str, fields: Dict[str, str]) -> int:
     squashed = _squash(around)
     return (len(words & _bigrams(around))
             + (1 if word and word in letters else 0)
-            + (2 if any(a in squashed for a in _aliases(key)) else 0))
+            + (2 if any(a in squashed for a in _aliases(key)) else 0)
+            + (1 if _period(slot) and _period(slot) == _field_period(key) else 0))
+
+
+def _period(slot: Slot) -> str:
+    """金額後面印的是「/月」還是「/年」：「NT$＿＿/年」要的是年薪。沒有就空字串。"""
+    text = slot.cell.paras[slot.para].text
+    m = re.match(r"[ 　]*[/／每][ 　]*(月|年)", text[slot.end:])
+    return m.group(1) if m else ""
+
+
+def _field_period(key: str) -> str:
+    """金額欄位是月薪還是年薪（看名稱與說明：「期望年薪」「月薪金額」）。認不出就空字串。"""
+    spec = _spec(key)
+    text = f"{spec.label}{spec.hint}" if spec and spec.kind == "money" else ""
+    return "年" if "年薪" in text else "月" if "月薪" in text else ""
 
 
 def _plausible(slot: Slot, key: str, fields: Dict[str, str]) -> bool:
@@ -810,6 +1062,18 @@ def _plausible(slot: Slot, key: str, fields: Dict[str, str]) -> bool:
     """
     spec = _spec(key)
     around = _squash(_around(slot))
+    value = fields.get(key, "")
+    if slot.option == "()":             # 區碼位置只收市話號碼
+        return bool(_area_code(slot, value))
+    if _period(slot) and _field_period(key) and _period(slot) != _field_period(key):
+        return False                    # 月薪不寫進「NT$＿＿/年」
+    if slot.kind != "box" and not re.search(r"\d", value):
+        # 數字的位置：「每分鐘：＿字」「＿歲」「＿公分」，以及「護照號碼：＿」這種號碼欄。
+        # 值裡一個數字都沒有就不是這裡的——英文姓氏被放進「英文輸入 每分鐘：＿字」
+        text = slot.cell.paras[slot.para].text
+        if (re.match(r"(字|歲|元|公分|公斤|cm|kg)(?![一-鿿])", text[slot.end:].lstrip(" 　"))
+                or re.search(r"(號碼|字號|編號)[.．]?[：:]?[ 　]*$", text[:slot.start])):
+            return False
     if slot.kind != "box" and spec and spec.kind in ("choice", "longtext"):
         return _squash(spec.label) in around
     if re.match(r"\w+\[\d+\]\.", key):
@@ -888,7 +1152,11 @@ def dedupe(slots: List[Slot], chosen: Dict[str, str], fields: Dict[str, str],
                 # 婚姻狀況、「□　8 月 24 日」是勾一個框再把日期寫進後面的空格。
                 # 整段值的位置（空格子、冒號後面、問句下一行）就不行——問答格常有
                 # 「問句後面」和「空白段」兩個位置，兩個都填會把整段答案寫兩次
-                if addr == winner and {group[0].kind, slot.kind} <= {"box", "gap"}:
+                # 沒印單位的兩個空格（「▁　, ▁」英文名與姓氏）不行：值攤不開，第二格只會空著，
+                # 讓出來給補漏問
+                first_gap = next((x for x in group if x.kind == "gap"), None)
+                spreadable = slot.kind == "box" or slot.option in UNITS or slot is first_gap
+                if addr == winner and {group[0].kind, slot.kind} <= {"box", "gap"} and spreadable:
                     continue
                 del out[slot.id]
 
@@ -931,6 +1199,21 @@ def dedupe(slots: List[Slot], chosen: Dict[str, str], fields: Dict[str, str],
     return out
 
 
+def _owned(box: Slot, near: List[Slot]) -> List[Slot]:
+    """這個框管著的空位：同一段同一行、在它後面、中間沒有別的框的那些非框位置
+    （「□ NT$＿＿/月」的空格、「□是，請說明：＿＿」的空格）。"""
+    def line(x: Slot) -> int:
+        return x.cell.paras[x.para].text.count("\n", 0, x.start)
+    same = [x for x in near if x.para == box.para and line(x) == line(box)]
+    after = sorted((x for x in same if x.start > box.start), key=lambda x: x.start)
+    out = []
+    for x in after:
+        if x.kind == "box":
+            break
+        out.append(x)
+    return out
+
+
 def apply_fills(slots: List[Slot], chosen: Dict[str, str], fields: Dict[str, str],
                 ticks: Dict[str, bool] = None, highlight: bool = False) -> int:
     """把選中的值寫回文件。ticks 是 ask_boxes 判斷過意思的勾選框，有給就照它勾。
@@ -952,13 +1235,19 @@ def apply_fills(slots: List[Slot], chosen: Dict[str, str], fields: Dict[str, str
                 reps[slot.id] = CHECKED if ticks[slot.id] else ""
             elif value and slot.kind == "box":
                 reps[slot.id] = _replacement(slot, value)
+            elif slot.id in ticks:      # 欄名是選項的空格子（區部底下的「日間」）：打記號，不寫值
+                reps[slot.id] = MARK if ticks[slot.id] else ""
         # 已經用打勾表達過的資料，不要在同一格再寫一次字：「■良好」勾好了，
-        # 後面「請說明原因：」就不該再補一個「良好」
-        ticked = {chosen.get(x.id) for x in group if x.kind == "box" and reps.get(x.id)} - {None}
+        # 後面「請說明原因：」就不該再補一個「良好」。框後面自己帶著空格、選項字又不是
+        # 那個值的（「□ NT$＿/月」「□　＿月＿日後」）不算表達過——值要寫在它的空格裡
+        ticked = {chosen.get(x.id) for x in group if x.kind == "box" and reps.get(x.id)
+                  and (_ticked(x.option, fields.get(chosen.get(x.id) or "", ""))
+                       or not _owned(x, group))} - {None}
         for slot in group:
             key = chosen.get(slot.id)
             value = fields.get(key or "")
-            if value and slot.kind not in ("gap", "box") and key not in ticked:
+            if (value and slot.kind not in ("gap", "box") and key not in ticked
+                    and slot.id not in ticks):
                 reps[slot.id] = _replacement(slot, value)
 
         # 空格以「整格」為單位：被指名的那一格往後看，把同一項資料攤到連續的空格上。
@@ -982,10 +1271,30 @@ def apply_fills(slots: List[Slot], chosen: Dict[str, str], fields: Dict[str, str
                     and not re.fullmatch(r"[\d.,]+", reps[gap.id].strip())):
                 del reps[gap.id]
 
+    # 一格一個字的格子（身分證字號底下十格）：字數剛好對上才一格一個寫進去。
+    # 對不上就整排不寫——整串塞進第一個小格子比留白還糟，而且字數不合多半是配錯了
+    for leader, run in char_runs(slots).items():
+        chars = re.sub(r"[\s\-－]", "", fields.get(chosen.get(leader) or "", ""))
+        reps.pop(leader, None)
+        if len(chars) == len(run):
+            reps.update({x.id: ch for x, ch in zip(run, chars)})
+
     for (_addr, _pi), group in by_para.items():
         text = texts[group[0].id]
         for line in {text.count("\n", 0, x.start) for x in group}:
             here = [x for x in group if text.count("\n", 0, x.start) == line]
+            boxes = sorted((x for x in here if x.kind == "box"), key=lambda x: x.start)
+
+            def owner(x: Slot):         # 管著這個位置的框：同一行、在它前面最近的那一個
+                return next((b for b in reversed(boxes) if b.start < x.start), None)
+
+            # 選項印的字一模一樣、後面各自帶著空格的框（「□ NT$＿＿/月 □ NT$＿＿/年」），
+            # 字面分不出該勾哪個，看的是框後面的空格有沒有寫東西：月薪那格寫了就勾月薪那個框。
+            # 沒帶空格的（「1.說□很好 □尚可 2.寫□很好 □尚可」）照原本的判斷
+            for b in boxes:
+                if (sum(_squash(o.option) == _squash(b.option) for o in boxes) > 1
+                        and _owned(b, here)):
+                    reps[b.id] = CHECKED if any(reps.get(x.id) for x in _owned(b, here)) else ""
             if not any(x.kind == "box" and reps.get(x.id) for x in here):
                 for filled in [x for x in here if x.kind in ("gap", "append") and reps.get(x.id)
                                and _kind(chosen.get(x.id) or "") == "date"]:
@@ -999,11 +1308,14 @@ def apply_fills(slots: List[Slot], chosen: Dict[str, str], fields: Dict[str, str
                         break
             # 勾選題後面接的「請說明：」「姓名及部門：」「其他：」是補充說明，只有勾了
             # 前面的選項才寫：這一行勾的是「否／無／不…」、或整行一個都沒勾，就不寫字
-            boxes = [x for x in here if x.kind == "box"]
             if not boxes:
                 continue
             picked = [x for x in boxes if reps.get(x.id)]
             if picked and not any(re.fullmatch(r"否|無|沒有|不.*", x.option) for x in picked):
+                # 勾的是別的選項時，沒勾的那個選項後面的空格也不寫：「■台灣 □其他＿＿」
+                for x in here:
+                    if x.kind != "box" and owner(x) and not reps.get(owner(x).id):
+                        reps.pop(x.id, None)
                 continue
             for x in here:
                 if x.kind != "box" and x.start > boxes[0].start:
@@ -1041,22 +1353,49 @@ ROWS_SYSTEM = """表格裡有幾張「一列填一筆」的表（學歷、工作
 1. 只能從給定的代碼挑；那一欄在個人資料裡沒有對應，填 __無__。
 2. 看欄名的意思判斷：「服務單位」是公司名稱、「工作期間」是任職期間。
 3. 同一張表左右印了兩組一樣的欄名（家庭成員常見），兩組都照樣對應。"""
+# 試過加一條「欄名寫成『區部／日間』的是選項，整組都填那個子欄位」：真建築工作經歷表的
+# 第一欄（服務單位公司行號）整欄變成答無、AT-1 推薦人的姓名欄變成關係。9B 模型對這段
+# 提示很敏感，選項欄改由程式補齊（見 ask_rows 裡的「兄弟欄」），不寫進提示
 
 
 def _col(slot: Slot) -> int:
     return int(slot.addr.split(".")[2][1:])
 
 
+def char_runs(slots: List[Slot]) -> Dict[str, List[Slot]]:
+    """一格寫一個字的格子：同一列裡連著四格以上的空格子，頭上是同一個欄名
+    （「身分證字號」底下切成十格）。回傳 {第一格的位置編號: 整排位置}。
+
+    模型只問第一格；寫的時候字數剛好等於格數，才一格一個字攤開。
+    """
+    per_cell = Counter(x.addr for x in slots)
+    rows: Dict[Tuple[str, str, int], List[Slot]] = {}
+    for x in slots:
+        if (x.kind == "blank" and x.addr.startswith("t") and per_cell[x.addr] == 1
+                and x.cell.col_head and x.cell.head_row >= 0):
+            table, row = x.addr.split(".")[:2]
+            rows.setdefault((f"{table}.{row}", x.cell.col_head, x.cell.head_row), []).append(x)
+    out = {}
+    for run in rows.values():
+        run.sort(key=_col)
+        if len(run) >= 4 and _col(run[-1]) - _col(run[0]) == len(run) - 1:
+            out[run[0].id] = run
+    return out
+
+
 def row_blocks(slots: List[Slot]) -> Dict[Tuple[str, int], List[Slot]]:
-    """一列一筆的表：左邊整排沒有欄位名稱、上面有欄名的格子，依欄名那一列分組。
+    """一列一筆的表：左邊整排沒有欄位名稱（或只有列首）、上面有欄名的格子，依表頭分組。
 
     每一格挑代表位置：空格子就是它自己；只印格式的格子（「自　年　月／至　年　月」）
     取第一個空格，值由 _spread 往後攤；整格都是勾選框的（「□畢 □肄」）取全部框。
+    表頭底下只有一列的不算（緊急聯絡人「姓名｜關係」底下一列）——那不是清單，
+    是一個人的幾項資料，照一般的位置問。
     """
     out: Dict[Tuple[str, int], List[Slot]] = {}
     by_cell: Dict[str, List[Slot]] = {}
+    in_runs = {x.id for run in char_runs(slots).values() for x in run}
     for x in slots:
-        if x.cell.depth:
+        if x.cell.depth and x.id not in in_runs:
             by_cell.setdefault(x.addr, []).append(x)
     for addr, group in by_cell.items():
         kinds = {x.kind for x in group}
@@ -1068,25 +1407,67 @@ def row_blocks(slots: List[Slot]) -> Dict[Tuple[str, int], List[Slot]]:
             rep = [x for x in group if x.kind == "gap"][:1]
         else:
             continue
-        table, row = addr.split(".")[:2]
-        out.setdefault((table, int(row[1:]) - group[0].cell.depth), []).extend(rep)
-    return out
+        out.setdefault((addr.split(".")[0], group[0].cell.origin), []).extend(rep)
+    return {k: group for k, group in out.items()
+            if len({x.cell.depth for x in group}) >= 2}
+
+
+def _names_row(value: str, key: str) -> bool:
+    """列首印的就是這一筆的值：「大學」對「大 學」、「專科」對「專 科(二.三.五專)」、
+    「碩士」對「碩 / 博士」。值的每個中文字都要出現在列首，而且至少兩個字——
+    「日」「畢」這種一個字的值什麼列首都沾得上。"""
+    chars = re.findall(r"[一-鿿]", value or "")
+    return len(chars) >= 2 and all(ch in key for ch in chars)
+
+
+def _option_hit(value: str, head: str) -> bool:
+    """選項欄的欄名跟資料的值是同一個選項：「日」對「日間」、「畢」對「畢業」、「日間部」對「日間」。"""
+    v, h = _squash(value), _squash(head)
+    return bool(v and h) and (h.startswith(v) or v.startswith(h))
+
+
+def _row_records(group: List[Slot], root: str, fields: Dict[str, str]) -> Dict[int, int]:
+    """列首印著這一筆是哪一種的表（碩／博士｜大學｜專科｜高中(職)）：{第幾列: 第幾筆}。
+
+    找出「哪一個子欄位的值印在列首」（學歷的學位），再照值把每一筆放到對得上的
+    那一列。一列對到兩筆、或一筆對到兩列，那個子欄位就不算數——分不清就不放。
+    對不上任何一列的資料不填：表格沒有那一類的列，硬塞進別列一定是錯的。
+    """
+    rows = {x.cell.depth: x.cell.key for x in group if x.cell.key}
+    count = len({re.match(r"\w+\[(\d+)\]", k).group(1) for k in fields if k.startswith(root + "[")})
+    subs = {k.split("].", 1)[1] for k in fields if k.startswith(root + "[")}
+    best: Dict[int, int] = {}
+    for sub in sorted(subs):
+        hits = {d: [i for i in range(count) if _names_row(fields.get(f"{root}[{i}].{sub}", ""), key)]
+                for d, key in rows.items()}
+        hits = {d: ids for d, ids in hits.items() if ids}
+        records = [i for ids in hits.values() for i in ids]
+        if (all(len(ids) == 1 for ids in hits.values()) and len(records) == len(set(records))
+                and len(hits) > len(best)):
+            best = {d: ids[0] for d, ids in hits.items()}
+    return best
 
 
 def ask_rows(blocks: Dict[Tuple[str, int], List[Slot]], fields: Dict[str, str],
              images: List[bytes], host: str = LLM_HOST,
-             model: str = LLM_MODEL) -> Dict[str, str]:
+             model: str = LLM_MODEL) -> Tuple[Dict[str, str], Dict[str, bool]]:
     """一列一筆的表：問模型「每一欄是什麼」，再由程式照「往下第 N 列＝第 N 筆」排進去。
 
     逐格問時，這種表的每一格都長得一模一樣（空的，只差欄名），模型會把第二筆
     錯位到第三列、或整列漏掉第三筆。但「服務單位公司行號這一欄是公司名稱」
     它答得很穩——欄的意思交給模型，列的順序交給程式。
+
+    第幾筆放哪一列，依序看三件事：列首印著這一筆是哪一種（大學那筆放「大學」列）、
+    左邊序號欄印的數字（證照表左欄 1、2，右欄 3、4）、都沒有才照由上而下的順序。
+    回傳 {位置編號: 項目代碼} 與 {位置編號: 打不打記號}（選項欄用）。
     """
     roots = {k.split("[")[0] for k in fields if "[" in k}
     choices = [k for k in BY_KEY if "[]" in k and k.split("[]")[0] in roots]
     ids, lines, allowed = [], [], {}
     for bi, group in enumerate(blocks.values(), 1):
-        section = (next((x.cell.row_head for x in group if x.cell.row_head), "")
+        # 左邊的區塊標題；序號（「1」）與列首（「大學」）不是在說這一區是什麼
+        section = (next((x.cell.row_head for x in group if x.cell.row_head and not x.cell.key
+                         and not _is_template(x.cell.row_head)), "")
                    or next((x.cell.caption for x in group if x.cell.caption), ""))
         # 這一區標了是誰（「家庭成員」、「請列舉…並同意我們諮詢」），可選的就只剩
         # 那一組。不先收斂的話，欄名「稱謂／姓名／服務機關／職位」跟諮詢人太像，
@@ -1094,11 +1475,15 @@ def ask_rows(blocks: Dict[Tuple[str, int], List[Slot]], fields: Dict[str, str],
         picks = [k for root, words in OTHER_PEOPLE.items()
                  if any(w in _squash(section) for w in words)
                  for k in choices if k.startswith(root)]
-        lines.append(f"表{bi}" + (f"（這一區印著「{_squash(section)[:40]}」）" if section else "") + "：")
-        for c, head in sorted({(_col(x), x.cell.col_head) for x in group}):
+        keys = list(dict.fromkeys(_squash(x.cell.key) for x in group if x.cell.key))
+        lines.append(f"表{bi}" + (f"（這一區印著「{_squash(section)[:40]}」）" if section else "")
+                     + (f"（每一列的列首：{'、'.join(keys)}）" if keys else "") + "：")
+        for c, head, parent in sorted({(_col(x), x.cell.col_head, x.cell.col_parent)
+                                       for x in group}):
             ids.append(f"b{bi}c{c}")
             allowed[f"b{bi}c{c}"] = picks or choices
-            lines.append(f"  b{bi}c{c}｜欄名：{_squash(head)}")
+            lines.append(f"  b{bi}c{c}｜欄名：" + (f"{_squash(parent)}／" if parent else "")
+                         + _squash(head))
     schema = {
         "type": "object",
         "properties": {i: {"type": "string", "enum": allowed[i] + [NONE]} for i in ids},
@@ -1119,14 +1504,35 @@ def ask_rows(blocks: Dict[Tuple[str, int], List[Slot]], fields: Dict[str, str],
                    label=f"一列一筆:{len(blocks)}表")
 
     out: Dict[str, str] = {}
+    marks: Dict[str, bool] = {}
     for bi, group in enumerate(blocks.values(), 1):
         mapping = {_col(x): data.get(f"b{bi}c{_col(x)}") for x in group}
         mapping = {c: k for c, k in mapping.items() if k in choices}
         # 一張表就是一份清單。欄位分屬兩份清單時，少數派的那幾欄是模型串了行——
         # 工作經歷表的「直屬主管姓名」問的是這一列的主管，不是諮詢人那一份名單
+        main = ""
         if mapping:
             main = Counter(k.split("[")[0] for k in mapping.values()).most_common(1)[0][0]
             mapping = {c: k for c, k in mapping.items() if k.split("[")[0] == main}
+        # 同一層表頭底下好幾個欄對到同一個子欄位（區部底下的日間｜夜間｜假日都是
+        # 日夜間部）：那幾欄是選項，值對得上欄名的那一欄打記號，其他欄空著。
+        # 要有共同的上層表頭才算——模型把「服務機關」「職位」都對到職業時，那是對錯了，
+        # 不是選項
+        heads_of = {_col(x): x.cell.col_head for x in group}
+        parent_of = {_col(x): x.cell.col_parent for x in group}
+        # 模型常只把其中一欄（畢業）對到子欄位，另外兩欄（肄業、在學）答無。同一層表頭
+        # 底下的兄弟欄都沒對到別的東西、而且資料的值就是其中一欄的欄名時，整組都算
+        for c, k in list(mapping.items()):
+            siblings = [o for o in heads_of if parent_of[o] and parent_of[o] == parent_of[c]]
+            values = [v for f, v in fields.items() if re.sub(r"\[\d+\]", "[]", f) == k]
+            if (len(siblings) > 1 and all(mapping.get(o) in (None, k) for o in siblings)
+                    and any(_option_hit(v, heads_of[o]) for v in values for o in siblings)):
+                mapping.update({o: k for o in siblings})
+        options = {c for c, k in mapping.items() if parent_of[c] and len(
+            {_squash(heads_of[o]) for o, k2 in mapping.items()
+             if k2 == k and parent_of[o] == parent_of[c]}) > 1}
+        placed = _row_records(group, main, fields) if main else {}
+        numbered = all(x.cell.seq for x in group)
         # 一列放幾筆，看表格自己印了幾組同樣的欄名（家庭成員左右各一組「姓名 稱謂
         # 年齡 職業」），由左而右、由上而下編號。不能看模型的答案——模型只要把兩欄
         # 對到同一個子欄位，整張表就被當成一列兩筆，第二列拿到第三筆
@@ -1137,14 +1543,29 @@ def ask_rows(blocks: Dict[Tuple[str, int], List[Slot]], fields: Dict[str, str],
         for c in sorted(heads):
             nth[c] = seen[heads[c]]
             seen[heads[c]] += 1
-        log.info("一列一筆 表%d：%s", bi, {c: mapping[c] for c in sorted(mapping)})
+        log.info("一列一筆 表%d：%s%s", bi, {c: mapping[c] for c in sorted(mapping)},
+                 f"（列首對應：{placed}）" if placed else "")
         for x in group:
             c = _col(x)
-            if c in mapping:
-                key = mapping[c].replace("[]", f"[{(x.cell.depth - 1) * per_row + nth[c]}]")
-                if key in fields:
-                    out[x.id] = key
-    return out
+            if c not in mapping:
+                continue
+            if placed:
+                if x.cell.depth not in placed:
+                    continue
+                index = placed[x.cell.depth]
+            elif numbered:
+                index = x.cell.seq - 1
+            else:
+                index = (x.cell.depth - 1) * per_row + nth[c]
+            key = mapping[c].replace("[]", f"[{index}]")
+            if key not in fields:
+                continue
+            if c in options:
+                if x.kind == "blank" and _option_hit(fields[key], heads_of[c]):
+                    out[x.id], marks[x.id] = key, True
+                continue
+            out[x.id] = key
+    return out, marks
 
 
 RECALL_SYSTEM = """表格上還有幾個位置空著，個人資料裡也還有沒填進去的項目。
@@ -1253,12 +1674,28 @@ BOXES_SYSTEM = """表格上的勾選題。每一題給你題目印的字和它�
 
 
 def box_groups(slots: List[Slot]) -> Dict[Tuple[str, int, int], List[Slot]]:
-    """勾選題分組：同一格、同一段、同一行的框算一題（宣告事項一格印七題）。"""
+    """勾選題分組：同一格、同一段、同一行的框算一題（宣告事項一格印七題）。
+
+    選項太多換到下一行的（「資訊來源：□公司詢問 □人力網站 □員工介紹↵□其他」）還是同一題：
+    一行一開頭就是框、上一行也有框，就併進上一行那一題。不併的話「□其他」自己成了
+    只有一個選項的題目，模型看得出在問資訊來源，就把它勾起來。
+    """
     out: Dict[Tuple[str, int, int], List[Slot]] = {}
+    alias: Dict[Tuple[str, int, int], Tuple[str, int, int]] = {}
+    last: Dict[str, Tuple[int, Tuple[str, int, int]]] = {}   # 格子 -> (上一個有框的行, 那一題)
     for x in slots:
-        if x.kind == "box":
-            line = x.cell.paras[x.para].text.count("\n", 0, x.start)
-            out.setdefault((x.addr, x.para, line), []).append(x)
+        if x.kind != "box":
+            continue
+        text = x.cell.paras[x.para].text
+        line = text.count("\n", 0, x.start)
+        own = (x.addr, x.para, line)
+        if own not in alias:
+            at = sum(p.text.count("\n") + 1 for p in x.cell.paras[:x.para]) + line
+            prev = last.get(x.addr)
+            leading = re.match(f"[ 　]*[{CHECKBOX_CHARS}]", text.split("\n")[line])
+            alias[own] = prev[1] if prev and prev[0] == at - 1 and leading else own
+            last[x.addr] = (at, alias[own])
+        out.setdefault(alias[own], []).append(x)
     return out
 
 
@@ -1290,6 +1727,19 @@ def ask_boxes(groups: Dict[Tuple[str, int, int], List[Slot]], fields: Dict[str, 
     options, lines, picks = [], [], []
     for qid, ((_addr, pi, line), boxes) in zip(ids, groups.items()):
         printed = boxes[0].cell.paras[pi].text.split("\n")[line]
+        # 這一行一開頭就是框（「是否有配偶…任職？↵ □否 ↵□是，請說明：」）：題目印在
+        # 前面那一行，只給「□否」模型不知道在問什麼
+        if re.match(f"[ 　]*[{CHECKBOX_CHARS}]", printed):
+            cell_lines = "\n".join(p.text for p in boxes[0].cell.paras).split("\n")
+            at = sum(p.text.count("\n") + 1 for p in boxes[0].cell.paras[:pi]) + line
+            question = next((t for t in reversed(cell_lines[:at]) if t.strip()
+                             and not re.match(f"[ 　]*[{CHECKBOX_CHARS}]", t)), "")
+            printed = _squash(question)[-36:] + " " + printed
+        # 併進來的下一行選項（「↵□其他」）也印出來
+        for b in boxes:
+            more = b.cell.paras[b.para].text.split("\n")[b.cell.paras[b.para].text.count("\n", 0, b.start)]
+            if more not in printed:
+                printed += " " + more
         opts = list(dict.fromkeys(b.option for b in boxes if b.option))
         options.append(opts)
         ctx = _squash(boxes[0].cell.row_head + boxes[0].cell.col_head)[:20]
@@ -1347,13 +1797,53 @@ def ask_boxes(groups: Dict[Tuple[str, int, int], List[Slot]], fields: Dict[str, 
         if not value:
             continue
         pick = ans.get("pick")
+        if not _names_question(boxes[0], key, fields):
+            log.info("勾選題不採用 %s %s（列首印的是別的東西）", boxes[0].addr, key)
+            continue
+        # 選項裡沒有「否／無」的題目（「□領有身心障礙手冊 □原住民」），框印的都是肯定的
+        # 那一面：資料是「無／否」就一個都不勾，模型說勾也不勾
+        lone_no = (not any(re.fullmatch(NEGATIVE, b.option) for b in boxes)
+                   and re.fullmatch(NEGATIVE, value.strip()))
+        # 同義詞對得上的選項（「中華民國」對「台灣」）就是答案，模型挑了別的也不算
+        literal = [b for b in boxes if _synonym_hit(b.option, value)]
         for b in boxes:
             picked[b.id] = key
             # 字面對得上的都勾（複選題「Windows、Word、Excel」一次勾三個），
             # 加上模型判斷意思相同的那一個
-            ticks[b.id] = _ticked(b.option, value) or (bool(b.option) and b.option == pick)
-        log.info("勾選題 %s %s＝%s → 勾 %s", boxes[0].addr, key, value[:20], pick)
+            ticks[b.id] = not lone_no and (b in literal or (
+                not literal and bool(b.option) and b.option == pick))
+        log.info("勾選題 %s %s＝%s → 勾 %s", boxes[0].addr, key, value[:20],
+                 "、".join(b.option for b in boxes if ticks[b.id]) or "（不勾）")
     return picked, ticks
+
+
+def _synonym_hit(option: str, value: str) -> bool:
+    """選項跟值字面相同，或是產品同義詞表裡的同一組（「中華民國」「台灣」）。"""
+    if _ticked(option, value):
+        return True
+    return any(_squash(option) in words and _squash(value) in words
+               for words in ({_squash(w) for w in group} for group in OPTION_SYNONYMS))
+
+
+def _names_question(box: Slot, key: str, fields: Dict[str, str]) -> bool:
+    """列首印的是「這一題在問哪一個東西」時，挑的資料要跟那個東西有關。
+
+    語言表一列一種語言：「閩南語｜□優 □普通 □略懂」「其他｜□優 □普通 □略懂」。
+    語文程度只屬於資料裡那一種語言（英文）的那一列，放到閩南語、其他那一列就錯了；
+    模型還會因為「普通重型機車」裡有「普通」兩個字，把駕照勾進「其他」的程度。
+    所以列首是個兩三個字、又不是任何欄位名稱的詞時，同一組資料（skills.*）裡要有
+    一項的值跟列首有共同的字（「英文」對「英 語」）才採用。列首是欄位名稱
+    （「婚姻」「交通工具」）的照舊。
+    """
+    row = _squash(box.cell.row_head)
+    if not box.addr.startswith("t") or not re.fullmatch(r"[一-鿿]{2,4}", row):
+        return True
+    names = set(LABEL_ALIASES) | {f.label for f in BY_KEY.values()}
+    if any(n.startswith(row) or row.startswith(n) for n in names):
+        return True
+    group = key.rsplit(".", 1)[0]
+    return any(set(value) & set(row) for k, value in fields.items()
+               if k.rsplit(".", 1)[0] == group and k != key)
 
 
 def obvious_boxes(groups: Dict[Tuple[str, int, int], List[Slot]], fields: Dict[str, str],
@@ -1385,7 +1875,7 @@ def obvious_boxes(groups: Dict[Tuple[str, int, int], List[Slot]], fields: Dict[s
         if not named or (len(named) > 1 and named[0][0] == named[1][0]):
             continue
         key = named[0][1]
-        hit = {b.id: _ticked(b.option, fields[key])
+        hit = {b.id: _synonym_hit(b.option, fields[key])
                or bool(_bigrams(b.option) & _bigrams(fields[key])) for b in boxes}
         if not any(hit.values()):
             continue
@@ -1455,13 +1945,18 @@ def analyze(blank: Path, profile: Dict[str, Any],
              blank.name, len(slots), len(fields), len(images))
 
     chosen: Dict[str, str] = {}
+    ticks: Dict[str, bool] = {}
+    # 一格一個字的那一排只問第一格，其餘跟著它寫
+    followers = frozenset(x.id for run in char_runs(slots).values() for x in run[1:])
     # 一列一筆的表先整張問「每一欄是什麼」，那些格子就不再逐格問、也不參與補漏
     blocks = row_blocks(slots)
     block_cells = {x.addr for group in blocks.values() for x in group}
     in_blocks = frozenset(x.id for x in slots if x.addr in block_cells)
     if blocks:
         try:
-            chosen.update(ask_rows(blocks, fields, images, host, model))
+            rows, marks = ask_rows(blocks, fields, images, host, model)
+            chosen.update(rows)
+            ticks.update(marks)
         except llm.LlmError as e:
             log.warning("一列一筆的表判讀失敗，改回逐格問：%s", e)
             in_blocks = frozenset()
@@ -1469,17 +1964,17 @@ def analyze(blank: Path, profile: Dict[str, Any],
     groups = box_groups([x for x in slots if x.id not in in_blocks])
     in_boxes = frozenset(x.id for g in groups.values() for x in g)
     for n, batch in enumerate(_batches([x for x in slots
-                                        if x.id not in in_blocks | in_boxes]), 1):
+                                        if x.id not in in_blocks | in_boxes | followers]), 1):
         try:
             chosen.update(ask(batch, fields, images, chosen, host, model))
         except llm.LlmError as e:      # 一批失敗不該讓整份表格陪葬，其餘照跑、照評分
             log.warning("第 %d 批問失敗：%s", n, e)
 
-    ticks: Dict[str, bool] = {}
     if groups:
         try:
-            picked, ticks = ask_boxes(groups, fields, images, chosen,
-                                      host=host, model=model)
+            picked, tk = ask_boxes(groups, fields, images, chosen,
+                                   host=host, model=model)
+            ticks.update(tk)
             # 沒答出來的再問一次，而且只列那一題的候選。十幾題一起問時模型會跳過
             # 幾題（同一題換一批問又答得出來），選項縮到四個以內就是小得多的一道題
             again = {g: bs for g, bs in groups.items() if not any(b.id in picked for b in bs)}
@@ -1492,7 +1987,7 @@ def analyze(blank: Path, profile: Dict[str, Any],
             chosen.update(picked)
         except llm.LlmError as e:
             log.warning("勾選題判讀失敗：%s", e)
-    skip = in_blocks | in_boxes
+    skip = in_blocks | in_boxes | followers
 
     # 補漏看去重之後的結果：第一輪被丟掉的配對（住家電話欄填了已經用過的行動電話）
     # 讓出來的位置，也要能再問一次

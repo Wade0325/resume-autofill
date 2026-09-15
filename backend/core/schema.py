@@ -24,6 +24,8 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("basic.name_zh", "中文姓名", hint="申請人的中文全名"),
     FieldSpec("basic.name_en", "英文姓名"),
     FieldSpec("basic.name_passport", "護照全名", hint="與護照相同的英文全名"),
+    # 表格要「英文名＋羅馬拼音姓氏」時用。值由護照全名取出，不必另外填
+    FieldSpec("basic.surname_en", "英文姓氏", derived=True),
     FieldSpec("basic.national_id", "身分證字號"),
     FieldSpec("basic.gender", "性別", kind="choice", choices=["男", "女"]),
     FieldSpec("basic.birthday", "出生年月日", kind="date",
@@ -81,6 +83,8 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("experience[].start", "到職年月", kind="date", hint="西元年月，例如 2019年03月"),
     FieldSpec("experience[].end", "離職年月", kind="date", hint="西元年月，例如 2023年08月"),
     FieldSpec("experience[].period", "任職期間", kind="list", derived=True),
+    # 由到職與離職年月算出來，頭尾兩個月都算（2023年7月～2026年4月＝2年10個月）
+    FieldSpec("experience[].tenure", "年資", kind="list", derived=True),
     FieldSpec("experience[].description", "工作內容", kind="list"),
     # 只存固定月薪的金額：表單絕大多數只印一格「月薪」，
     # 津貼獎金那些拆項刻意不收，整坨照抄會把單格表單填得一塌糊塗
@@ -219,6 +223,9 @@ LABEL_ALIASES = {
     "可上班日期": "job.available_date",
     "資訊來源": "job.recruit_channel",
     "手機": "contact.mobile",
+    # 「是否有配偶或二親等以內之血親或姻親於本公司任職」——法規寫法，一個「親友」都沒印
+    "血親": "declaration.relatives_in_company",
+    "姻親": "declaration.relatives_in_company",
     # 學歷表的列首（大學/研究所…）右邊第一格就是學校名稱，
     # 列首挑第幾筆學歷由列指派處理，這裡只負責錨定欄位
     "大學": "education[].school",
@@ -241,6 +248,8 @@ BLOCKED_LABELS = (
     "年制",
     # 每間公司不一樣的值，填了必錯，一律留白讓使用者手寫
     "應徵職務", "應徵職位", "應徵職缺",
+    # 應徵的這份工作在哪裡上班（希望工作地點）——跟應徵職務一樣看職缺，個人資料不收
+    "工作地點",
 )
 
 # 勾選題是拿個人資料的值去比對表單上印出來的選項字串，同義不同字就整格填不進去：
@@ -253,4 +262,5 @@ OPTION_SYNONYMS = (
     ("役畢", "退伍"),
     ("普通小型車", "汽車"),
     ("普通重型機車", "機車"),
+    ("中華民國", "台灣", "臺灣"),
 )

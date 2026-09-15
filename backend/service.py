@@ -160,17 +160,21 @@ def _vlm_render(job_id: str, filename: str, cached: bool, slots: List[Any],
     西元換民國、勾選框寫的是打勾），所以這裡顯示原始值就好。
     """
     profile = db.get_kv("profile") or {}
+    # filler 自己算出來的值（年資、英文姓氏）planner 不認得，先查 filler 那一份
+    values = filler.fields_of(profile)
     items, by_source = [], {}
     for slot in slots:
         d = decisions.get(slot.id)
         value = ""
         if d and d.field_key and d.field_key not in _NOT_FILLED:
-            value = str(planner.get_value(profile, d.field_key, d.ordinal) or "")
+            value = (values.get(_join_key(d.field_key, d.ordinal))
+                     or str(planner.get_value(profile, d.field_key, d.ordinal) or ""))
         fill = bool(value)
         if fill:
             by_source[d.source] = by_source.get(d.source, 0) + 1
         note = ""
-        if slot.kind == "box":
+        # 勾選框，以及欄名是選項的空格子（學歷表「日間」底下那格打記號）
+        if slot.kind == "box" or slot.id in ticks:
             note = "打勾" if ticks.get(slot.id) else ("不勾" if fill else "")
         items.append(PlanItem(
             slot_id=slot.id, label=_vlm_label(slot),
