@@ -831,7 +831,7 @@ def _pad(slot: Slot, value: str) -> str:
     留白是給人手寫的空間，字打上去就不需要了。原本把剩下的空白全留著（值靠左或置中），
     「□ 隨時　□　8　月　24　日後」這種本來就排滿的一行會變長、被擠到下一行
     （使用者親自修答案卷時指出的）。所以只在「值＋前後各一個空白」不超過原本寬度時
-    才留空白，放不下就一個都不留。行首、左括號與破折號後面不留前面那個（「－2021年」），
+    才留空白，放不下就一個都不留。行首、冒號、左括號與破折號後面不留前面那個（「－2021年」），
     逗號、斜線、右括號前面不留後面那個（「75,000/月」）。
     """
     if not slot.filler.isspace():
@@ -843,7 +843,7 @@ def _pad(slot: Slot, value: str) -> str:
     text = slot.cell.paras[slot.para].text
     before, after = text[:slot.start].split("\n")[-1], text[slot.end:]
     padded = sp + value + sp
-    if not before.strip() or re.search(r"[(（「［\[－—–~～\-]$", before):
+    if not before.strip() or re.search(r"[(（「［\[－—–~～\-：:]$", before):
         padded = padded.lstrip(" 　")
     if re.match(r"[,，、。：:/／)）」］\]]", after):
         padded = padded.rstrip(" 　")
@@ -874,9 +874,10 @@ def _replacement(slot: Slot, value: str) -> str:
         return "\n" + value
     if slot.kind == "gap":
         return _pad(slot, value)
-    # 接在沒有冒號的字後面（「手機」「(請註明里、鄰)」）隔一格，不然號碼黏著欄名
+    # 接在沒有冒號的字後面（「手機」「(請註明里、鄰)」）隔一格，不然號碼黏著欄名；
+    # 冒號與編號的點後面不隔（「語言:1.英文」）
     before = slot.cell.paras[slot.para].text[:slot.start] if slot.cell else ""
-    if slot.kind == "append" and before and not re.search(r"[\s　：:]$", before):
+    if slot.kind == "append" and before and not re.search(r"[\s　：:.．、]$", before):
         return " " + value
     return value
 
