@@ -644,12 +644,15 @@ def _wrap(draw, text: str, font, width: float) -> List[str]:
 
 
 def _layout(doc, draw, font) -> tuple:
-    """算出每一格畫在哪裡。回傳 ([(方框, 地址, 文字行)], 總高度)。
+    """算出每一格畫在哪裡。回傳 ([(方框, 地址, 文字行)], [(y, 地址)], 總高度)。
 
     欄寬照 docx 自己的 tblGrid（表格真正的欄位寬度），橫向合併用 gridSpan 併欄，
     所以畫出來的相對位置與寬窄跟原檔一致。
+
+    第二份清單是空白段落：它們畫不出東西，但仍然是可寫位置，得知道排在哪一頁——
+    不記的話，凡是分到這種位置的批次都查不到頁碼，只好整份圖附上。
     """
-    items, y = [], 10
+    items, ghosts, y = [], [], 10
     table_no = para_no = 0
     for block in iter_block_items(doc):
         if isinstance(block, Table):
@@ -680,11 +683,47 @@ def _layout(doc, draw, font) -> tuple:
                 height = len(lines) * LINE_H + ADDR_H + 6
                 items.append(((10, y, PAGE_W - 10, y + height), f"p{para_no}", lines))
                 y += height
+            else:
+                ghosts.append((y, f"p{para_no}"))
             para_no += 1
-    return items, y + 10
+    return items, ghosts, y + 10
 
 
-def render_pages(doc) -> List[bytes]:
+@dataclass
+class Pages:
+    """版面示意圖，外加「每一格畫在第幾張上」。
+
+    圖片是提示快取的分界線：實測同一份提示重送只重算 4 個 token，但只要換掉結尾
+    那一段，4431 個 token 裡就有 4026 個要重算——能重用的只有第一張圖前面那段文字。
+    加 `--cache-reuse` 也一樣。所以每一次呼叫附幾張圖，就是實實在在的時間。
+
+    配對、一列一筆、補漏三輪只附這一批位置所在的那幾張（`for_addrs`）——那幾輪要的
+    是「找得到位置」。勾選題整份附上：那一輪要判斷「這題在問哪一項資料」，少看一張
+    會改判（連跑兩輪都一樣），見 `ask_boxes` 的註解。
+    """
+
+    urls: List[str]                        # 已經編成 data URI，省掉每一次呼叫重編
+    page_of: Dict[str, Tuple[int, int]]    # 地址 -> (起頁, 迄頁)，跨頁的格子佔兩張
+
+    def __len__(self) -> int:
+        return len(self.urls)
+
+    def for_addrs(self, addrs) -> List[str]:
+        """這一批位置所在的那幾張。
+
+        地址查不到就整份附上：寧可慢一次，也不要讓模型對著沒有那一格的圖硬猜
+        （`_layout` 畫的地址是 `cells()` 的超集，正常情況下不會查不到）。
+        """
+        want: set = set()
+        for addr in addrs:
+            span = self.page_of.get(addr)
+            if span is None:
+                return list(self.urls)
+            want.update(range(span[0], span[1] + 1))
+        return [self.urls[i] for i in sorted(want)] or list(self.urls)
+
+
+def render_pages(doc) -> Pages:
     """把版面畫成示意圖，一張圖一頁。
 
     不做像素級還原（那需要排版引擎，而 LibreOffice、Word 都不能用——產品是可攜
@@ -692,10 +731,11 @@ def render_pages(doc) -> List[bytes]:
     這些從 docx 的表格骨架就畫得出來。
 
     每一格的地址直接印在格子左上角：模型看得到位置，才對得回它要回答的地址。
+    順便記下每一格落在第幾張，讓每一批只附自己看得到的那幾張。
     """
     font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
     small = ImageFont.truetype(FONT_PATH, ADDR_SIZE)
-    items, height = _layout(doc, ImageDraw.Draw(Image.new("RGB", (1, 1))), font)
+    items, ghosts, height = _layout(doc, ImageDraw.Draw(Image.new("RGB", (1, 1))), font)
 
     canvas = Image.new("RGB", (PAGE_W, height), "white")
     draw = ImageDraw.Draw(canvas)
@@ -705,16 +745,30 @@ def render_pages(doc) -> List[bytes]:
         for i, line in enumerate(lines):
             draw.text((x0 + 5, y0 + ADDR_H + i * LINE_H), line, font=font, fill=(0, 0, 0))
 
+    scale = 1.0
     if height > MAX_PAGES * PAGE_H:      # 太長的表格整張縮小，不然圖多到塞爆上下文
+        scale = MAX_PAGES * PAGE_H / height
         canvas = canvas.resize((PAGE_W, MAX_PAGES * PAGE_H))
         height = MAX_PAGES * PAGE_H
 
-    out = []
+    urls = []
     for top in range(0, height, PAGE_H):
         buf = io.BytesIO()
         canvas.crop((0, top, canvas.width, min(top + PAGE_H, height))).save(buf, "PNG")
-        out.append(buf.getvalue())
-    return out
+        urls.append("data:image/png;base64,"
+                    + base64.b64encode(buf.getvalue()).decode("ascii"))
+
+    # 縮過的話座標要跟著縮。格子底邊剛好壓在切線上算前一張（1500 是第 0 張的最後一列）
+    last = len(urls) - 1
+    page_of = {}
+    for (_x0, y0, _x1, y1), addr, _lines in items:
+        lo = min(int(y0 * scale) // PAGE_H, last)
+        hi = min(max(int(y1 * scale - 1) // PAGE_H, lo), last)
+        page_of[addr] = (lo, hi)
+    for y, addr in ghosts:
+        page = min(int(y * scale) // PAGE_H, last)
+        page_of[addr] = (page, page)
+    return Pages(urls, page_of)
 
 
 # ---------------------------------------------------------------------------
@@ -735,7 +789,7 @@ def _describe(slot: Slot) -> str:
     return f"{slot.preview}{kind}" + "".join(f"｜{x}" for x in parts)
 
 
-def ask(batch: List[Slot], fields: Dict[str, str], images: List[bytes],
+def ask(batch: List[Slot], fields: Dict[str, str], pages: Pages,
         used: Dict[str, str], host: str = LLM_HOST, model: str = LLM_MODEL) -> Dict[str, str]:
     """問模型這一批位置各自要填哪一項資料。回傳 {位置編號: 項目代碼}。"""
     # 位置編號當成 JSON 的鍵：文法會自己把編號一個一個吐出來，模型只填「哪一項資料」。
@@ -757,9 +811,10 @@ def ask(batch: List[Slot], fields: Dict[str, str], images: List[bytes],
     user: List[Dict[str, Any]] = [{"type": "text", "text": (
         "個人資料（項目代碼：值）：\n"
         + "\n".join(f"- {k}{_label(k)}：{v[:60]}" for k, v in fields.items()))}]
-    for img in images:
-        user.append({"type": "image_url", "image_url": {
-            "url": "data:image/png;base64," + base64.b64encode(img).decode("ascii")}})
+    # 示意圖只附這一批位置所在的那幾張：分批本來就照文件順序切，一批十六個位置
+    # 幾乎都落在同一張上（見 Pages）
+    for url in pages.for_addrs({s.addr for s in batch}):
+        user.append({"type": "image_url", "image_url": {"url": url}})
     # 已經用掉的資料排在最後（放前面會把提示快取的共同前綴打斷）。沒有這一段的話，
     # 模型看不到別批的決定：五個問答題配七項回答，每一批都從頭挑一次就會互相搶
     done = ("\n\n已經填在別的位置的資料項（不要再挑，除非這一格真的也要填同一項）：\n"
@@ -1482,7 +1537,7 @@ def _row_records(group: List[Slot], root: str, fields: Dict[str, str]) -> Dict[i
 
 
 def ask_rows(blocks: Dict[Tuple[str, int], List[Slot]], fields: Dict[str, str],
-             images: List[bytes], host: str = LLM_HOST,
+             pages: Pages, host: str = LLM_HOST,
              model: str = LLM_MODEL) -> Tuple[Dict[str, str], Dict[str, bool]]:
     """一列一筆的表：問模型「每一欄是什麼」，再由程式照「往下第 N 列＝第 N 筆」排進去。
 
@@ -1530,9 +1585,12 @@ def ask_rows(blocks: Dict[Tuple[str, int], List[Slot]], fields: Dict[str, str],
                        if k.replace("[]", "[0]") in fields else "")
                     for k in choices)
         + "\n\n各表的欄名：\n" + "\n".join(lines))}]
-    for img in images:
-        user.append({"type": "image_url", "image_url": {
-            "url": "data:image/png;base64," + base64.b64encode(img).decode("ascii")}})
+    # 欄名印在資料列上面那一列，那一列也要看得到——表格跨頁時欄名與資料會分在兩張上
+    addrs = {x.addr for group in blocks.values() for x in group}
+    addrs |= {a for table, head_row in blocks
+              for a in pages.page_of if a.startswith(f"{table}.r{head_row}.c")}
+    for url in pages.for_addrs(addrs):
+        user.append({"type": "image_url", "image_url": {"url": url}})
     data = llm.ask(host, ROWS_SYSTEM, user, schema, model=model,
                    label=f"一列一筆:{len(blocks)}表")
 
@@ -1629,7 +1687,7 @@ def _placed(slots: List[Slot], chosen: Dict[str, str],
 
 
 def recall(slots: List[Slot], chosen: Dict[str, str], fields: Dict[str, str],
-           images: List[bytes], skip: frozenset = frozenset(),
+           pages: Pages, skip: frozenset = frozenset(),
            host: str = LLM_HOST, model: str = LLM_MODEL) -> Dict[str, str]:
     """補漏：還空著的位置，只拿「名稱相近、還沒用到」的資料再問一次。
 
@@ -1675,9 +1733,8 @@ def recall(slots: List[Slot], chosen: Dict[str, str], fields: Dict[str, str],
     lines = [f"  {i}｜{_describe(s)}\n      可選：" + "、".join(
         f"{k}{_label(k)}＝{fields[k][:20]}" for k in cands) for i, (s, cands) in zip(ids, todo)]
     user: List[Dict[str, Any]] = [{"type": "text", "text": "空著的位置與可選的資料：\n" + "\n".join(lines)}]
-    for img in images:
-        user.append({"type": "image_url", "image_url": {
-            "url": "data:image/png;base64," + base64.b64encode(img).decode("ascii")}})
+    for url in pages.for_addrs({s.addr for s, _cands in todo}):
+        user.append({"type": "image_url", "image_url": {"url": url}})
     data = llm.ask(host, RECALL_SYSTEM, user, schema, model=model,
                    label=f"補漏:{len(ids)}處")
     out = {}
@@ -1733,7 +1790,7 @@ def box_groups(slots: List[Slot]) -> Dict[Tuple[str, int, int], List[Slot]]:
 
 
 def ask_boxes(groups: Dict[Tuple[str, int, int], List[Slot]], fields: Dict[str, str],
-              images: List[bytes], chosen: Dict[str, str], narrow: bool = False,
+              pages: Pages, chosen: Dict[str, str], narrow: bool = False,
               host: str = LLM_HOST,
               model: str = LLM_MODEL) -> Tuple[Dict[str, str], Dict[str, bool]]:
     """勾選題自己問一輪：這一題在問哪一項資料、該勾哪一個選項。
@@ -1751,7 +1808,7 @@ def ask_boxes(groups: Dict[Tuple[str, int, int], List[Slot]], fields: Dict[str, 
         picked, ticks = {}, {}
         for i in range(0, len(items), size):
             part = dict(items[i:i + size])
-            got, tk = ask_boxes(part, fields, images, {**chosen, **picked}, narrow,
+            got, tk = ask_boxes(part, fields, pages, {**chosen, **picked}, narrow,
                                 host, model)
             picked.update(got)
             ticks.update(tk)
@@ -1781,21 +1838,28 @@ def ask_boxes(groups: Dict[Tuple[str, int, int], List[Slot]], fields: Dict[str, 
         # 一百多個項目裡要模型自己撈，實測駕照、負債狀況這種明明對得上的都會漏掉
         row = boxes[0].addr.rsplit(".", 1)[0]
         near = {chosen[k].split(".")[0] for k in chosen if k.rsplit(".", 1)[0].startswith(row)}
+        # 排序分三層，不相加：名稱與值對得上是實證，另外兩個只在實證平手時才作數。
+        # 相加的話「已經填在別處、名字又剛好沾得上」的項目會靠同列加分擠掉正解——
+        # 真建築「您是否有親友在本公司服務？」後面印著「姓名及部門」，basic.name_zh
+        # 跟 basic.name_en 就是這樣佔掉兩個名額，declaration.relatives_in_company 掉出前四
         ranked = sorted(((_support(boxes[0], k, fields)
                           + (2 if any(_ticked(b.option, v) or _bigrams(v) & _bigrams(b.option)
-                                      for b in boxes) else 0)
-                          + (1 if k.split(".")[0] in near else 0), k)
+                                      for b in boxes) else 0),
+                          0 if k in chosen.values() else 1,
+                          1 if k.split(".")[0] in near else 0, k)
                          for k, v in fields.items()), reverse=True)
         # 同一個欄位只列一次：三筆工作經歷的「擔任主管＝否」長得一模一樣，
         # 不去掉就把四個名額佔滿，真正對得上的那一項擠不進來
         best, seen = [], set()
-        for score, k in ranked:
+        for evidence, _fresh, near_hit, k in ranked:
             template = re.sub(r"\[\d+\]", "[]", k)
-            if score > 0 and template not in seen and len(best) < 4:
+            if evidence + near_hit > 0 and template not in seen and len(best) < 4:
                 seen.add(template)
                 best.append(k)
         hint = "、".join(f"{k}{_label(k)}＝{fields[k][:14]}" for k in best)
         picks.append(best)
+        log.debug("勾選候選 %s#%s.%s 題「%s」→ %s", boxes[0].addr, pi, line,
+                  _squash(printed)[:24], best)
         lines.append(f"  {qid}｜{_squash(printed)[:70]}" + (f"｜欄名:{ctx}" if ctx else "")
                      + (f"\n      可能相關：{hint}" if hint else ""))
     schema = {
@@ -1814,9 +1878,14 @@ def ask_boxes(groups: Dict[Tuple[str, int, int], List[Slot]], fields: Dict[str, 
     user: List[Dict[str, Any]] = [{"type": "text", "text": (
         "個人資料（項目代碼：值）：\n"
         + "\n".join(f"- {k}{_label(k)}：{v[:60]}" for k, v in fields.items()))}]
-    for img in images:
-        user.append({"type": "image_url", "image_url": {
-            "url": "data:image/png;base64," + base64.b64encode(img).decode("ascii")}})
+    # 勾選題整份附上，不照批次挑頁。這一輪問的是「這題在問哪一項資料」，要看得到
+    # 整份表格是誰發的：真建築「您是否有親友在本公司服務？」的本公司印在第一頁抬頭，
+    # 只附題目所在那一頁時，這一題會被跳過（連跑兩輪都一樣）。
+    # 填寫的那幾輪只要找得到位置，才照批次挑頁
+    # 勾選題也整份附上：這一輪要判斷「這題在問哪一項資料」，跟配對那一輪一樣禁不起
+    # 少看一張（兩輪都驗過）
+    for url in pages.urls:
+        user.append({"type": "image_url", "image_url": {"url": url}})
     user.append({"type": "text", "text": "要判斷的勾選題：\n" + "\n".join(lines)})
     data = llm.ask(host, BOXES_SYSTEM, user, schema, model=model,
                    label=f"勾選題{'再問' if narrow else ''}:{len(ids)}題")
@@ -2000,9 +2069,9 @@ def analyze(blank: Path, profile: Dict[str, Any],
     中間留給使用者修正。"""
     doc, form, slots = parse(blank)
     fields = usable_fields(form, profile)
-    images = render_pages(doc)
+    pages = render_pages(doc)
     log.info("%s：可寫位置 %d 處、資料 %d 項、示意圖 %d 張",
-             blank.name, len(slots), len(fields), len(images))
+             blank.name, len(slots), len(fields), len(pages))
 
     chosen: Dict[str, str] = {}
     ticks: Dict[str, bool] = {}
@@ -2014,7 +2083,7 @@ def analyze(blank: Path, profile: Dict[str, Any],
     in_blocks = frozenset(x.id for x in slots if x.addr in block_cells)
     if blocks:
         try:
-            rows, marks = ask_rows(blocks, fields, images, host, model)
+            rows, marks = ask_rows(blocks, fields, pages, host, model)
             chosen.update(rows)
             ticks.update(marks)
         except llm.LlmError as e:
@@ -2026,20 +2095,20 @@ def analyze(blank: Path, profile: Dict[str, Any],
     for n, batch in enumerate(_batches([x for x in slots
                                         if x.id not in in_blocks | in_boxes | followers]), 1):
         try:
-            chosen.update(ask(batch, fields, images, chosen, host, model))
+            chosen.update(ask(batch, fields, pages, chosen, host, model))
         except llm.LlmError as e:      # 一批失敗不該讓整份表格陪葬，其餘照跑、照評分
             log.warning("第 %d 批問失敗：%s", n, e)
 
     if groups:
         try:
-            picked, tk = ask_boxes(groups, fields, images, chosen,
+            picked, tk = ask_boxes(groups, fields, pages, chosen,
                                    host=host, model=model)
             ticks.update(tk)
             # 沒答出來的再問一次，而且只列那一題的候選。十幾題一起問時模型會跳過
             # 幾題（同一題換一批問又答得出來），選項縮到四個以內就是小得多的一道題
             again = {g: bs for g, bs in groups.items() if not any(b.id in picked for b in bs)}
             if again and len(again) < len(groups):
-                more, tk = ask_boxes(again, fields, images, {**chosen, **picked},
+                more, tk = ask_boxes(again, fields, pages, {**chosen, **picked},
                                      narrow=True, host=host, model=model)
                 picked.update(more)
                 ticks.update(tk)
@@ -2054,7 +2123,7 @@ def analyze(blank: Path, profile: Dict[str, Any],
     # 讓出來的位置，也要能再問一次
     kept = dedupe(slots, chosen, fields, trusted=in_blocks)
     try:
-        kept = dedupe(slots, {**kept, **recall(slots, kept, fields, images, skip,
+        kept = dedupe(slots, {**kept, **recall(slots, kept, fields, pages, skip,
                                                host, model)},
                       fields, trusted=in_blocks)
     except llm.LlmError as e:
