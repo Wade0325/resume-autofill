@@ -13,7 +13,7 @@ import secrets
 import time
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import requests
 
@@ -133,12 +133,17 @@ def _traceable(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def ask(host: str, system: str, user: UserContent, schema: Dict[str, Any],
         model: str = "local", label: str = "") -> Dict[str, Any]:
+    """問一次就結束。連著問好幾批的用 Chat，那樣快取才吃得到。"""
+    return _call(host, [{"role": "system", "content": system},
+                        {"role": "user", "content": user}],
+                 schema, model, label)[0]
+
+
+def _call(host: str, messages: List[Dict[str, Any]], schema: Dict[str, Any],
+          model: str, label: str) -> Tuple[Dict[str, Any], str]:
     payload = {
         "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
+        "messages": messages,
         "temperature": 0,
         # Qwen3.5 預設開 thinking，會把輸出預算燒在推理上，
         # 常常還沒吐出 JSON 就撞到長度上限
@@ -149,10 +154,12 @@ def ask(host: str, system: str, user: UserContent, schema: Dict[str, Any],
         },
     }
 
-    prompt_chars = len(user) if isinstance(user, str) else sum(
-        len(p.get("text", "")) for p in user if isinstance(p, dict))
-    images = 0 if isinstance(user, str) else sum(
-        1 for p in user if isinstance(p, dict) and p.get("type") == "image_url")
+    last = messages[-1]["content"]
+    prompt_chars = len(last) if isinstance(last, str) else sum(
+        len(p.get("text", "")) for p in last if isinstance(p, dict))
+    images = 0 if isinstance(last, str) else sum(
+        1 for p in last if isinstance(p, dict) and p.get("type") == "image_url")
+    turns = sum(1 for m in messages if m["role"] == "user")
 
     tracer = _tracer()
     traced = (tracer.start_as_current_generation(
@@ -193,9 +200,9 @@ def ask(host: str, system: str, user: UserContent, schema: Dict[str, Any],
                 "input": usage.get("prompt_tokens", 0),
                 "output": usage.get("completion_tokens", 0)})
 
-    log.info("模型呼叫 %s 提示=%d字 圖片=%d finish=%s 回應=%d字 耗時=%dms",
-             label or "-", prompt_chars, images, choice.get("finish_reason"), len(content),
-             int((time.perf_counter() - t0) * 1000))
+    log.info("模型呼叫 %s 提示=%d字 圖片=%d 第%d輪 finish=%s 回應=%d字 耗時=%dms",
+             label or "-", prompt_chars, images, turns, choice.get("finish_reason"),
+             len(content), int((time.perf_counter() - t0) * 1000))
 
     if choice.get("finish_reason") == "length":
         raise LlmCallFailed(
@@ -204,8 +211,9 @@ def ask(host: str, system: str, user: UserContent, schema: Dict[str, Any],
             "加大上下文後重新啟動模型")
     if not content:
         raise LlmCallFailed("模型沒有回傳任何內容")
+    # 原文一併回傳：接著問的那幾批要把它當成 assistant 訊息接回對話裡
     try:
-        return json.loads(content)
+        return json.loads(content), content
     except ValueError as e:
         raise LlmCallFailed(f"模型回傳的內容不完整，不是合法的 JSON：{e}") from e
 
@@ -224,3 +232,66 @@ def _http_problem(r: requests.Response) -> str:
     if r.status_code >= 500:
         return f"模型服務出錯（HTTP {r.status_code}）：{detail}"
     return f"模型拒絕了這次請求（HTTP {r.status_code}）：{detail}"
+
+
+class Chat:
+    """同一輪裡連著問的好幾批，接在同一串對話後面問。
+
+    llama-server 的提示快取只有在「新的提示完整包含上一次的提示」時才重用；一旦中途
+    分岔，就退回第一張圖之前整份重算。實測同一段前綴（個人資料＋兩張示意圖）：
+    每一批各開一份新提示要重算 4013 個 token（4.6 秒），接在後面問只重算新接上的
+    那一段（32 個 token、0.39 秒）。
+
+    所以個人資料與示意圖只在第一次附上，後面幾批只接新的問題——既是省事，也是
+    「不分岔」這件事本身的要求。
+    """
+
+    def __init__(self, host: str, system: str, model: str = "local") -> None:
+        self.host, self.model = host, model
+        self.messages: List[Dict[str, Any]] = [{"role": "system", "content": system}]
+        self._sent: set = set()
+
+    def first_time(self, key: str) -> bool:
+        """這串對話裡還沒附過這個東西（個人資料、某一張示意圖）。"""
+        if key in self._sent:
+            return False
+        self._sent.add(key)
+        return True
+
+    def tokens(self) -> int:
+        """粗估這串對話有多少 token。文字算半個字一個 token，圖片按實測抓 1300。"""
+        n = 0
+        for m in self.messages:
+            c = m["content"]
+            if isinstance(c, str):
+                n += len(c) // 2
+            else:
+                for part in c:
+                    n += 1300 if part.get("type") == "image_url" else len(part.get("text", "")) // 2
+        return n
+
+    def start_over_if_long(self, limit: int = 11000) -> None:
+        """對話長到快撞上下文就重開一串。
+
+        接著問省的是提示快取，但代價是提示會一直長。撞到上限的後果（輸出被截斷）
+        比多花一次冷啟動嚴重得多，所以寧可重來。重開之後 `first_time` 會全部重新
+        成立，個人資料與示意圖會再附一次。
+        """
+        if self.tokens() > limit:
+            log.info("對話已累積約 %d tokens，重開一串", self.tokens())
+            del self.messages[1:]
+            self._sent.clear()
+
+    def ask(self, user: UserContent, schema: Dict[str, Any], label: str = "") -> Dict[str, Any]:
+        keep = set(self._sent)
+        self.messages.append({"role": "user", "content": user})
+        try:
+            data, raw = _call(self.host, self.messages, schema, self.model, label)
+        except Exception:
+            # 這一次沒問成：把半截的 user 收回，附過什麼也一併還原，
+            # 不然下一批會接在一個沒有回答的問題後面，而且再也不會附上示意圖
+            self.messages.pop()
+            self._sent = keep
+            raise
+        self.messages.append({"role": "assistant", "content": raw})
+        return data

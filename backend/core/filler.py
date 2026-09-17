@@ -869,8 +869,11 @@ class Pages:
     def __len__(self) -> int:
         return len(self.urls)
 
-    def for_addrs(self, addrs) -> List[str]:
-        """這一批位置所在的那幾張。
+    def all(self) -> List[int]:
+        return list(range(len(self.urls)))
+
+    def for_addrs(self, addrs) -> List[int]:
+        """這一批位置所在的那幾張，回傳張數編號。
 
         地址查不到就整份附上：寧可慢一次，也不要讓模型對著沒有那一格的圖硬猜
         （`_layout` 畫的地址是 `cells()` 的超集，正常情況下不會查不到）。
@@ -879,9 +882,13 @@ class Pages:
         for addr in addrs:
             span = self.page_of.get(addr)
             if span is None:
-                return list(self.urls)
+                return self.all()
             want.update(range(span[0], span[1] + 1))
-        return [self.urls[i] for i in sorted(want)] or list(self.urls)
+        return sorted(want) or self.all()
+
+    def parts(self, wanted: List[int]) -> List[Dict[str, Any]]:
+        """這幾張的訊息內容。"""
+        return [{"type": "image_url", "image_url": {"url": self.urls[i]}} for i in wanted]
 
 
 def render_pages(doc) -> Pages:
@@ -951,7 +958,7 @@ def _describe(slot: Slot) -> str:
 
 
 def ask(batch: List[Slot], fields: Dict[str, str], pages: Pages,
-        used: Dict[str, str], host: str = LLM_HOST, model: str = LLM_MODEL) -> Dict[str, str]:
+        used: Dict[str, str], chat: llm.Chat) -> Dict[str, str]:
     """問模型這一批位置各自要填哪一項資料。回傳 {位置編號: 項目代碼}。"""
     # 位置編號當成 JSON 的鍵：文法會自己把編號一個一個吐出來，模型只填「哪一項資料」。
     # 之前讓模型自己配 {slot, field} 一對一對地寫，它會整批位移一格
@@ -969,13 +976,17 @@ def ask(batch: List[Slot], fields: Dict[str, str], pages: Pages,
     # 每一批只有最後一句不同：個人資料與示意圖都排在前面，llama-server 的提示快取
     # 才吃得到。不再重貼整份位置清單——整張表格的長相示意圖已經畫給模型看了，
     # 再貼一份 180 行的清單只是讓每一批的提示多五千個 token
-    user: List[Dict[str, Any]] = [{"type": "text", "text": (
-        "個人資料（項目代碼：值）：\n"
-        + "\n".join(f"- {k}{_label(k)}：{v[:60]}" for k, v in fields.items()))}]
-    # 示意圖只附這一批位置所在的那幾張：分批本來就照文件順序切，一批十六個位置
-    # 幾乎都落在同一張上（見 Pages）
-    for url in pages.for_addrs({s.addr for s in batch}):
-        user.append({"type": "image_url", "image_url": {"url": url}})
+    # 這一輪的幾批接在同一串對話上問：個人資料與示意圖只有第一批附上，後面幾批
+    # 只接新的問題。示意圖也只附這一批位置所在的那幾張——分批本來就照文件順序切，
+    # 一批十六個位置幾乎都落在同一張上（見 Pages）
+    chat.start_over_if_long()
+    user: List[Dict[str, Any]] = []
+    if chat.first_time("fields"):
+        user.append({"type": "text", "text": (
+            "個人資料（項目代碼：值）：\n"
+            + "\n".join(f"- {k}{_label(k)}：{v[:60]}" for k, v in fields.items()))})
+    user += pages.parts([i for i in pages.for_addrs({s.addr for s in batch})
+                         if chat.first_time(f"page{i}")])
     # 已經用掉的資料排在最後（放前面會把提示快取的共同前綴打斷）。沒有這一段的話，
     # 模型看不到別批的決定：五個問答題配七項回答，每一批都從頭挑一次就會互相搶
     done = ("\n\n已經填在別的位置的資料項（不要再挑，除非這一格真的也要填同一項）：\n"
@@ -983,8 +994,7 @@ def ask(batch: List[Slot], fields: Dict[str, str], pages: Pages,
     user.append({"type": "text", "text": "這一批要判斷的位置：\n" + "\n".join(
         f"  {sid}｜{_describe(s)}" for sid, s in zip(ids, batch)) + done})
 
-    data = llm.ask(host, SYSTEM, user, schema, model=model,
-                   label=f"配對:{len(ids)}處")
+    data = chat.ask(user, schema, label=f"配對:{len(ids)}處")
     back = dict(zip(ids, batch))
     return {back[sid].id: key for sid, key in data.items()
             if sid in back and key in fields}
@@ -1799,8 +1809,7 @@ def ask_rows(blocks: Dict[Tuple[str, int], List[Slot]], fields: Dict[str, str],
     addrs = {x.addr for group in blocks.values() for x in group}
     addrs |= {a for table, head_row in blocks
               for a in pages.page_of if a.startswith(f"{table}.r{head_row}.c")}
-    for url in pages.for_addrs(addrs):
-        user.append({"type": "image_url", "image_url": {"url": url}})
+    user += pages.parts(pages.for_addrs(addrs))
     data = llm.ask(host, ROWS_SYSTEM, user, schema, model=model,
                    label=f"一列一筆:{len(blocks)}表")
 
@@ -1944,8 +1953,7 @@ def recall(slots: List[Slot], chosen: Dict[str, str], fields: Dict[str, str],
         f"{k}{_label(k)}＝{fields[k][:20]}" for k in cands) for i, (s, cands) in zip(ids, todo)]
     user: List[Dict[str, Any]] = [
         {"type": "text", "text": "空著的位置與可選的資料：\n" + "\n".join(lines)}]
-    for url in pages.for_addrs({s.addr for s, _cands in todo}):
-        user.append({"type": "image_url", "image_url": {"url": url}})
+    user += pages.parts(pages.for_addrs({s.addr for s, _cands in todo}))
     data = llm.ask(host, RECALL_SYSTEM, user, schema, model=model,
                    label=f"補漏:{len(ids)}處")
     out = {}
@@ -2090,14 +2098,11 @@ def ask_boxes(groups: Dict[Tuple[str, int, int], List[Slot]], fields: Dict[str, 
     user: List[Dict[str, Any]] = [{"type": "text", "text": (
         "個人資料（項目代碼：值）：\n"
         + "\n".join(f"- {k}{_label(k)}：{v[:60]}" for k, v in fields.items()))}]
-    # 勾選題整份附上，不照批次挑頁。這一輪問的是「這題在問哪一項資料」，要看得到
-    # 整份表格是誰發的：真建築「您是否有親友在本公司服務？」的本公司印在第一頁抬頭，
-    # 只附題目所在那一頁時，這一題會被跳過（連跑兩輪都一樣）。
-    # 填寫的那幾輪只要找得到位置，才照批次挑頁
-    # 勾選題也整份附上：這一輪要判斷「這題在問哪一項資料」，跟配對那一輪一樣禁不起
-    # 少看一張（兩輪都驗過）
-    for url in pages.urls:
-        user.append({"type": "image_url", "image_url": {"url": url}})
+    # 這一輪每一批各問各的，不接續、也不照批次挑頁：問的是「這題在問哪一項資料」，
+    # 兩種省法都會讓模型跳題。只附題目所在那一頁時真建築少一題；接在前一批後面問
+    # 時換成另外兩題被跳過（十幾題擺在同一串對話裡，跟一次問十幾題是同一個毛病）。
+    # 填寫的那幾輪只要找得到位置，才省得下來
+    user += pages.parts(pages.all())
     user.append({"type": "text", "text": "要判斷的勾選題：\n" + "\n".join(lines)})
     data = llm.ask(host, BOXES_SYSTEM, user, schema, model=model,
                    label=f"勾選題{'再問' if narrow else ''}:{len(ids)}題")
@@ -2353,12 +2358,15 @@ def analyze(blank: Path, profile: Dict[str, Any],
     # 勾選題自己問一輪。排在逐格問之後，才看得到同一列已經填了哪些資料
     groups = box_groups([x for x in slots if x.id not in in_blocks])
     in_boxes = frozenset(x.id for g in groups.values() for x in g)
+    # 這幾批共用一串對話：提示快取只有「新提示完整包含舊提示」才重用，各開一份
+    # 就每一批都要把示意圖重算一次（見 llm.Chat）
+    pairing = llm.Chat(host, SYSTEM, model)
     batches = list(_batches([x for x in slots
                              if x.id not in in_blocks | in_boxes | followers]))
     for n, batch in enumerate(batches, 1):
         step(f"逐格判讀 第 {n}／{len(batches)} 批")
         try:
-            chosen.update(ask(batch, fields, pages, chosen, host, model))
+            chosen.update(ask(batch, fields, pages, chosen, pairing))
         except llm.LlmError as e:      # 一批失敗不該讓整份表格陪葬，其餘照跑、照評分
             log.warning("第 %d 批問失敗：%s", n, e)
 
