@@ -24,10 +24,13 @@ from typing import Any, Dict, List
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 for stream in (sys.stdout, sys.stderr):
     stream.reconfigure(encoding="utf-8", errors="replace")
 
 from playwright.sync_api import sync_playwright        # noqa: E402
+
+import cake_web                                        # noqa: E402
 
 PROFILE_URL = "https://www.cake.me/dashboard/profile"
 # 專用的瀏覽器設定檔（不是你平常那個 Chrome 設定檔）。登入一次就一直有效：
@@ -57,7 +60,10 @@ def profile_fields() -> Dict[str, str]:
 
 # ── 瀏覽器 ──────────────────────────────────────────────────────────────────
 
-AUTH_WORDS = ("login", "signin", "signup", "sign_up", "sign_in")
+# Cake 未登入時導去 https://www.cake.me/users/sign-in ——注意是連字號。
+# 只列 signin/sign_in 會漏掉它，然後把登入頁誤判成已登入（踩過一次）
+AUTH_WORDS = ("login", "signin", "sign-in", "sign_in",
+              "signup", "sign-up", "sign_up", "users/sign")
 
 
 def open_browser(pw, headed: bool = True):
@@ -73,15 +79,32 @@ def open_browser(pw, headed: bool = True):
         args=["--disable-blink-features=AutomationControlled"])
 
 
-def logged_in(page) -> bool:
-    """現在這一頁是不是已經在個人檔案頁（而不是被踢回登入頁）。"""
-    if any(w in page.url for w in AUTH_WORDS):
+VISIBLE_PASSWORD_JS = """() => Array.from(document.querySelectorAll('input[type=password]'))
+    .some(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; })"""
+
+
+def logged_in(page, navigate: bool = False) -> bool:
+    """是不是真的登入了。
+
+    三個條件都要成立：人在 /dashboard、網址不是登入頁、畫面上看不到密碼欄。
+    最後一條才是關鍵——光看網址會被 /users/sign-in 騙過去。
+    """
+    if navigate and "/dashboard" not in page.url:
+        try:
+            page.goto(PROFILE_URL, wait_until="domcontentloaded", timeout=30000)
+        except Exception:
+            return False
+    url = page.url.lower()
+    if "/dashboard" not in url or any(w in url for w in AUTH_WORDS):
         return False
+    # 不要等 <main>：Cake 的個人檔案頁根本沒有那個元素（也踩過一次）。
+    # 等網路靜下來就好，真正的判準是密碼欄
     try:
-        page.wait_for_selector("main, [role='main']", timeout=8000)
-        return True
+        page.wait_for_load_state("networkidle", timeout=20000)
     except Exception:
-        return False
+        pass
+    page.wait_for_timeout(1500)
+    return not page.evaluate(VISIBLE_PASSWORD_JS)
 
 
 def cmd_login() -> int:
@@ -97,19 +120,18 @@ def cmd_login() -> int:
             ctx.close()
             return 0
         print(f"瀏覽器已開啟，請在那個視窗登入 Cake（最多等 {minutes} 分鐘）。")
-        print("（密碼不會經過這支程式，我也看不到）")
+        print("（密碼不會經過這支程式，我也看不到；用 Google／Facebook 登入也可以）")
         deadline = time.time() + minutes * 60
         while time.time() < deadline:
             time.sleep(4)
-            # 還停在登入頁就繼續等。不在登入頁時才回個人檔案頁確認，
-            # 免得你正在打字就被我換頁
-            if any(w in page.url for w in AUTH_WORDS):
+            url = page.url.lower()
+            # 人在第三方登入頁（Google、Facebook…）時絕對不能動他的頁面，
+            # 一 goto 就把登入流程打斷了
+            if "cake.me" not in url:
                 continue
-            try:
-                page.goto(PROFILE_URL, wait_until="domcontentloaded", timeout=30000)
-            except Exception:
+            if any(w in url for w in AUTH_WORDS):
                 continue
-            if logged_in(page):
+            if logged_in(page, navigate=True):
                 print(f"登入完成，狀態留在 {USER_DIR}")
                 ctx.close()
                 return 0
@@ -207,6 +229,46 @@ SURVEY_JS = r"""
 }
 """
 
+# 個人檔案頁本身只是「檢視」——整頁只有一個可見輸入欄。真正的表單在點「編輯」
+# 或「新增」之後的對話框裡，所以盤點欄位一定要先把那些對話框打開。
+ENTRIES_JS = r"""
+() => {
+  const vis = el => { const r = el.getBoundingClientRect();
+    const s = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden'; };
+  const clean = t => (t || '').replace(/\s+/g, ' ').trim();
+  const path = el => {
+    const parts = [];
+    let n = el;
+    while (n && n.nodeType === 1 && parts.length < 8) {
+      let p = n.tagName.toLowerCase();
+      if (n.id) { parts.unshift(`#${CSS.escape(n.id)}`); break; }
+      if (n.parentElement) {
+        const sibs = Array.from(n.parentElement.children).filter(c => c.tagName === n.tagName);
+        if (sibs.length > 1) p += `:nth-of-type(${sibs.indexOf(n) + 1})`;
+      }
+      parts.unshift(p);
+      n = n.parentElement;
+    }
+    return parts.join(' > ');
+  };
+  const out = [];
+  document.querySelectorAll('button,[role="button"]').forEach(el => {
+    if (!vis(el)) return;
+    const t = clean(el.innerText) || clean(el.getAttribute('aria-label'));
+    if (!t || t.length > 12) return;
+    if (!/^(編輯|新增)/.test(t)) return;
+    let sec = '', n = el;
+    for (let i = 0; i < 8 && n; i++, n = n.parentElement) {
+      const h = n.querySelector?.('h1,h2,h3,h4');
+      if (h && vis(h)) { sec = clean(h.innerText).slice(0, 24); break; }
+    }
+    out.push({text: t, section: sec, selector: path(el)});
+  });
+  return out;
+}
+"""
+
 
 def survey(page) -> Dict[str, Any]:
     """列出這一頁的可寫位置與「新增區塊」的按鈕。相當於 docx 那邊的 cells()。"""
@@ -229,25 +291,196 @@ def cmd_recon() -> int:
             pass
         time.sleep(3)                     # SPA 還在渲染
 
-        data = survey(page)
         page.screenshot(path=str(OUT / "profile.png"), full_page=True)
-        (OUT / "survey.json").write_text(
-            json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        entries = page.evaluate(ENTRIES_JS)
+        print(f"網址：{page.url}")
+        print(f"入口（編輯／新增）共 {len(entries)} 個：")
+        for e in entries:
+            print(f"  「{e['text']}」 區塊={e['section']}")
 
-        print(f"網址：{data['url']}")
-        print(f"標題：{data['title']}")
-        print(f"\n頁面標題（{len(data['headings'])}）：")
-        for h in data["headings"]:
-            print(f"  {h}")
-        print(f"\n可寫欄位（{len(data['fields'])}）：")
-        for f in data["fields"]:
-            print(f"  [{f['type']:<10}] 區塊={f['section'][:16]:<16} "
-                  f"label={f['label'][:24]:<24} ph={f['placeholder'][:18]:<18} "
-                  f"已有值={f['value'][:16]}")
-        print(f"\n可加開的區塊（{len(data['adders'])}）：")
-        for a in data["adders"]:
-            print(f"  「{a['text']}」 區塊={a['section'][:20]}")
-        print(f"\n截圖：{OUT / 'profile.png'}\n明細：{OUT / 'survey.json'}")
+        report: Dict[str, Any] = {"url": page.url, "entries": entries, "dialogs": []}
+        for i, e in enumerate(entries, 1):
+            name = f"{e['section']}｜{e['text']}"
+            print(f"\n── {i}/{len(entries)} 打開「{name}」 ──")
+            try:
+                d = open_and_survey(page, e, OUT / f"dialog{i:02d}.png")
+            except Exception as ex:
+                print(f"   打不開或關不掉：{type(ex).__name__} {str(ex)[:80]}")
+                close_dialog(page)
+                continue
+            report["dialogs"].append({"entry": e, **d})
+            print(f"   欄位 {len(d['fields'])} 個")
+            for f in d["fields"]:
+                print(f"     [{f['type']:<9}] label={f['label'][:22]:<22} "
+                      f"ph={f['placeholder'][:20]:<20} 值={f['value'][:18]}")
+
+        (OUT / "survey.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"\n截圖：{OUT}\\dialogNN.png\n明細：{OUT / 'survey.json'}")
+        ctx.close()
+    return 0
+
+
+def close_dialog(page) -> None:
+    """把對話框關掉，而且絕不按儲存。先試 Esc，再找取消／關閉。"""
+    for _ in range(2):
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(600)
+    for name in ("取消", "關閉", "Cancel", "Close"):
+        try:
+            btn = page.get_by_role("button", name=name)
+            if btn.count() and btn.first.is_visible():
+                btn.first.click(timeout=3000)
+                page.wait_for_timeout(600)
+                return
+        except Exception:
+            pass
+
+
+def open_and_survey(page, entry: Dict[str, Any], shot: Path) -> Dict[str, Any]:
+    """點開一個「編輯／新增」入口，盤點裡面的欄位，再關掉。全程不按儲存。"""
+    before = len(survey(page)["fields"])
+    page.click(entry["selector"], timeout=10000)
+    page.wait_for_timeout(2500)
+    data = survey(page)
+    # 對話框開了才有意義：欄位變多的那些就是這個對話框帶進來的
+    data["fields"] = data["fields"][before:] if len(data["fields"]) > before else data["fields"]
+    page.screenshot(path=str(shot))
+    close_dialog(page)
+    return {"fields": data["fields"], "shot": shot.name}
+
+
+# Cake 的「學歷」下拉是西式學位名稱（副學士學位／文學士（BA）／工學學士（BEng）…），
+# app.db 存的是台灣的說法。只對映沒有第二種答案的那幾個：專科系統就是 associate degree。
+# 「大學」要看主修才知道是 BA 還是 BEng，會變成猜的，所以不對映——留白讓使用者自己選。
+DEGREE = {"專科": "副學士學位", "二專": "副學士學位", "五專": "副學士學位",
+          "副學士": "副學士學位"}
+
+
+def build_plan(profile: Dict[str, Any], already: str) -> List[Dict[str, Any]]:
+    """依手上的資料排出「要加開哪些區塊、各填什麼」。
+
+    `already` 是個人檔案頁目前印出來的全部文字——名稱已經在上面的就不再加開，
+    免得重複（Cake 上已經有奇偶科技、宜果國際與勤益科技大學）。
+    """
+    plan: List[Dict[str, Any]] = []
+
+    for exp in profile.get("experience", []):
+        name = (exp.get("company") or "").strip()
+        if not name or name in already:
+            continue
+        plan.append({"section": "工作經驗", "entry": "新增", "title": f"{name}／{exp.get('title')}",
+                     "fields": [("公司名稱", name, "text"),
+                                ("職稱", exp.get("title"), "text"),
+                                ("開始日期", exp.get("start"), "ym"),
+                                ("結束日期", exp.get("end"), "ym"),
+                                ("工作內容", exp.get("description"), "text")]})
+
+    for edu in profile.get("education", []):
+        name = (edu.get("school") or "").strip()
+        if not name or name in already:
+            continue
+        fields = [("學校", name, "text"),
+                  ("學歷", DEGREE.get((edu.get("degree") or "").strip()), "select"),
+                  ("主修", edu.get("department"), "text"),
+                  ("開始日期", edu.get("start"), "y"),
+                  ("結束日期（或預期）", edu.get("end"), "y")]
+        plan.append({"section": "學歷", "entry": "新增", "title": f"{name}／{edu.get('degree')}",
+                     "fields": [f for f in fields if f[1]]})
+
+    for cert in profile.get("certificate", []):
+        name = (cert.get("name") or "").strip()
+        if not name or name in already:
+            continue
+        plan.append({"section": "資格認證", "entry": "新增", "title": name,
+                     "fields": [("名稱", name, "text"),
+                                ("發照機構", cert.get("issuer"), "text")]})
+
+    year_salary = (profile.get("job", {}) or {}).get("expected_salary_year", "")
+    if year_salary:
+        plan.append({"section": "求職偏好", "entry": "編輯", "title": f"期望年薪 {year_salary}",
+                     "fields": [("最低期望年薪", str(year_salary).replace(",", ""), "text")]})
+    return plan
+
+
+def cmd_plan() -> int:
+    """只看計畫，不開瀏覽器（把「已經在 Cake 上」那一關當成全都不在）。"""
+    import sqlite3
+    raw = sqlite3.connect(ROOT / "data" / "app.db").execute(
+        "select value from kv where key='profile'").fetchone()
+    for step in build_plan(json.loads(raw[0]), ""):
+        print(f"[{step['section']}／{step['entry']}] {step['title']}")
+        for label, value, kind in step["fields"]:
+            print(f"    {label:<16} <- {str(value)[:40]}  ({kind})")
+    return 0
+
+
+def cmd_fill() -> int:
+    """只填不存：把該加開的區塊打開、填進去、截圖，然後取消。"""
+    import sqlite3
+    OUT.mkdir(parents=True, exist_ok=True)
+    raw = sqlite3.connect(ROOT / "data" / "app.db").execute(
+        "select value from kv where key='profile'").fetchone()
+    profile = json.loads(raw[0])
+
+    with sync_playwright() as pw:
+        ctx = open_browser(pw, headed=True)
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        page.goto(PROFILE_URL, wait_until="domcontentloaded", timeout=60000)
+        if not logged_in(page):
+            print("還沒登入。請先跑：.venv\\Scripts\\python.exe tools\\cake_fill.py login")
+            ctx.close()
+            return 1
+        page.wait_for_timeout(2000)
+
+        already = page.evaluate("() => document.body.innerText")
+        plan = build_plan(profile, already)
+        print(f"要處理 {len(plan)} 項（已經在 Cake 上的自動略過）\n")
+
+        for i, step in enumerate(plan, 1):
+            print(f"── {i}/{len(plan)} [{step['section']}／{step['entry']}] {step['title']}")
+            # 取消上一筆之後那顆「新增」要重新畫出來，找不到就捲到那一區再試一次
+            hit = None
+            for attempt in range(3):
+                entries = page.evaluate(cake_web.ENTRIES_JS)
+                hit = next((e for e in entries
+                            if e["section"].startswith(step["section"])
+                            and e["text"] == step["entry"]), None)
+                if hit:
+                    break
+                try:
+                    page.get_by_role("heading", name=step["section"]).first \
+                        .scroll_into_view_if_needed(timeout=5000)
+                except Exception:
+                    pass
+                page.wait_for_timeout(1500)
+            if not hit:
+                print(f"   × 找不到「{step['section']}」的「{step['entry']}」入口")
+                continue
+            try:
+                page.click(hit["selector"], timeout=10000)
+            except Exception as e:                       # noqa: BLE001
+                print(f"   × 點不開：{type(e).__name__}")
+                continue
+            page.wait_for_timeout(2000)
+
+            for label, value, kind in step["fields"]:
+                if kind == "ym":
+                    for line in cake_web.put_ym(page, label, str(value or "")):
+                        print(line)
+                elif kind == "y":
+                    for line in cake_web.put_ym(page, label, str(value or ""), with_month=False):
+                        print(line)
+                else:
+                    print(cake_web.put(page, label, value))
+
+            shot = OUT / f"fill{i:02d}.png"
+            page.screenshot(path=str(shot))
+            print(f"   截圖：{shot.name}（沒有按建立／儲存）")
+            cake_web.cancel(page)
+            page.wait_for_timeout(1200)
+
+        print("\n全部只填不存，Cake 上的資料完全沒有變動。")
         ctx.close()
     return 0
 
@@ -261,7 +494,8 @@ def cmd_fields() -> int:
     return 0
 
 
-COMMANDS = {"login": cmd_login, "recon": cmd_recon, "fields": cmd_fields}
+COMMANDS = {"login": cmd_login, "recon": cmd_recon, "fields": cmd_fields,
+            "plan": cmd_plan, "fill": cmd_fill}
 
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
