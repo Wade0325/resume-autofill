@@ -417,6 +417,15 @@ def cmd_plan() -> int:
 
 def cmd_fill() -> int:
     """只填不存：把該加開的區塊打開、填進去、截圖，然後取消。"""
+    return run_plan(save=False)
+
+
+def cmd_apply() -> int:
+    """真的寫進去：填完按「建立／儲存」，每一筆存完馬上回頭確認它出現在頁面上。"""
+    return run_plan(save=True)
+
+
+def run_plan(save: bool) -> int:
     import sqlite3
     OUT.mkdir(parents=True, exist_ok=True)
     raw = sqlite3.connect(ROOT / "data" / "app.db").execute(
@@ -435,7 +444,10 @@ def cmd_fill() -> int:
 
         already = page.evaluate("() => document.body.innerText")
         plan = build_plan(profile, already)
-        print(f"要處理 {len(plan)} 項（已經在 Cake 上的自動略過）\n")
+        saved: List[str] = []
+        failed: List[Any] = []
+        print(f"要處理 {len(plan)} 項（已經在 Cake 上的自動略過）"
+              + ("　※ 這一輪會真的寫入" if save else "　※ 只填不存") + "\n")
 
         for i, step in enumerate(plan, 1):
             print(f"── {i}/{len(plan)} [{step['section']}／{step['entry']}] {step['title']}")
@@ -476,13 +488,38 @@ def cmd_fill() -> int:
 
             # 整頁截圖。只拍可視範圍的話，填完最後一欄時頁面已經捲到表單下半部，
             # 最上面那幾欄（公司名稱）會被切在畫面外，看起來像沒填
-            shot = OUT / f"fill{i:02d}.png"
+            shot = OUT / f"{'save' if save else 'fill'}{i:02d}.png"
             page.screenshot(path=str(shot), full_page=True)
-            print(f"   截圖：{shot.name}（整頁；沒有按建立／儲存）")
-            cake_web.cancel(page)
-            page.wait_for_timeout(1200)
 
-        print("\n全部只填不存，Cake 上的資料完全沒有變動。")
+            if not save:
+                print(f"   截圖：{shot.name}（整頁；沒有按建立／儲存）")
+                cake_web.cancel(page)
+                page.wait_for_timeout(1200)
+                continue
+
+            ok, why = cake_web.submit(page)
+            if not ok:
+                errs = cake_web.errors_on_page(page)
+                print(f"   ✗ 沒存成：{why}" + (f"；畫面上的訊息：{errs}" if errs else ""))
+                failed.append((step["title"], why, errs))
+                cake_web.cancel(page)
+                page.wait_for_timeout(1200)
+                continue
+            # 存完回頭確認它真的出現在頁面上，不只是表單收起來
+            page.wait_for_timeout(1500)
+            key = step["title"].split("／")[0]
+            shown = key in page.evaluate("() => document.body.innerText")
+            print(f"   {'✓ 已存入' if shown else '？表單收了但頁面上還沒看到'}（{why}）")
+            (saved if shown else failed).append(step["title"] if shown
+                                                else (step["title"], "存了但頁面沒出現", []))
+            page.wait_for_timeout(800)
+
+        if not save:
+            print("\n全部只填不存，Cake 上的資料完全沒有變動。")
+        else:
+            print(f"\n存進去 {len(saved)} 筆：" + "、".join(saved) if saved else "\n一筆都沒存成")
+            for title, why, errs in failed:
+                print(f"  ✗ {title}：{why}" + (f"｜{errs}" if errs else ""))
         ctx.close()
     return 0
 
@@ -497,7 +534,7 @@ def cmd_fields() -> int:
 
 
 COMMANDS = {"login": cmd_login, "recon": cmd_recon, "fields": cmd_fields,
-            "plan": cmd_plan, "fill": cmd_fill}
+            "plan": cmd_plan, "fill": cmd_fill, "apply": cmd_apply}
 
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""

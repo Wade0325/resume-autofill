@@ -185,6 +185,57 @@ def put_ym(page, label: str, text: str, with_month: bool = True) -> List[str]:
     return out
 
 
+def submit(page) -> Tuple[bool, str]:
+    """真的按下送出。回傳（成功與否, 說明）。
+
+    新增的按鈕寫「建立」，編輯的寫「儲存」。按完要確認表單真的收起來了——
+    必填欄沒填時 Cake 會把表單留在原地並標紅，那不算成功。
+    """
+    for name in ("建立", "儲存", "Create", "Save"):
+        try:
+            btn = page.get_by_role("button", name=name, exact=True)
+        except Exception:
+            continue
+        for i in range(btn.count()):
+            try:
+                one = btn.nth(i)
+                if not (one.is_visible() and one.is_enabled()):
+                    continue
+                one.click(timeout=5000)
+                page.wait_for_timeout(3000)
+                if one.is_visible():        # 還在原地＝沒送出去
+                    return False, f"按了「{name}」但表單沒收起來（多半是必填欄沒填）"
+                return True, f"按了「{name}」"
+            except Exception as e:          # noqa: BLE001
+                return False, f"按「{name}」失敗：{type(e).__name__} {str(e)[:60]}"
+    return False, "找不到建立／儲存按鈕"
+
+
+def errors_on_page(page) -> List[str]:
+    """把畫面上紅色的錯誤訊息撈出來，送不出去時要知道卡在哪。"""
+    return page.evaluate(r"""() => {
+      const vis = el => { const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0; };
+      const clean = t => (t || '').replace(/\s+/g, ' ').trim();
+      const out = new Set();
+      document.querySelectorAll('[class*="error"],[class*="Error"],[class*="text-red"],[role=alert]')
+        .forEach(el => { if (vis(el)) { const t = clean(el.innerText); if (t && t.length < 60) out.add(t); } });
+      return [...out].slice(0, 8);
+    }""")
+
+
+def tick(page, label: str) -> str:
+    """勾一個核取方塊（「永久有效」「現任職位」這種）。"""
+    got = locate(page, label)
+    if not got:
+        return f"  {label}：× 找不到這個勾選框"
+    try:
+        page.check(got["selector"], timeout=5000)
+        return f"  {label}：已勾選"
+    except Exception as e:                  # noqa: BLE001
+        return f"  {label}：× 勾不起來 {type(e).__name__}"
+
+
 def cancel(page) -> None:
     """關掉目前開著的表單，絕不按建立／儲存。"""
     for name in ("取消", "Cancel"):
