@@ -225,7 +225,11 @@ def errors_on_page(page) -> List[str]:
 
 
 def tick(page, label: str) -> str:
-    """勾一個核取方塊（「永久有效」「現任職位」這種）。"""
+    """勾一個核取方塊（「永久有效」「現任職位」這種）。
+
+    注意 Cake 的「永久有效」不是真的 <input type=checkbox>，是樣式化的元件，
+    page.check() 會失敗。要勾它得改點外層那個可點擊的元素——還沒做。
+    """
     got = locate(page, label)
     if not got:
         return f"  {label}：× 找不到這個勾選框"
