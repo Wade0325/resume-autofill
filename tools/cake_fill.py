@@ -474,9 +474,11 @@ def cmd_fill() -> int:
                 else:
                     print(cake_web.put(page, label, value))
 
+            # 整頁截圖。只拍可視範圍的話，填完最後一欄時頁面已經捲到表單下半部，
+            # 最上面那幾欄（公司名稱）會被切在畫面外，看起來像沒填
             shot = OUT / f"fill{i:02d}.png"
-            page.screenshot(path=str(shot))
-            print(f"   截圖：{shot.name}（沒有按建立／儲存）")
+            page.screenshot(path=str(shot), full_page=True)
+            print(f"   截圖：{shot.name}（整頁；沒有按建立／儲存）")
             cake_web.cancel(page)
             page.wait_for_timeout(1200)
 
