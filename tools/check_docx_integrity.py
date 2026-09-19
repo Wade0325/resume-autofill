@@ -8,8 +8,9 @@
 
 - 結構元素（圖片、文字方塊、w:sym、功能變數、內容控制項、超連結…）只能多不能少
 - 有底線文字的段落數只能多不能少——寫回時把底線抹掉，數字就會掉
-- 「段落標記有字型、run 卻沒有字型設定」的 run 不能變多——新增的 run 沒帶格式，
-  字就退回預設字型（原本標楷體的表格填出新細明體）
+- 「段落標記有設字型（w:rFonts）、run 自己卻沒有」的 run 不能變多——新增的 run 沒帶格式，
+  字就退回預設字型（原本標楷體的表格填出新細明體）。只看有沒有 rPr 不夠：
+  預覽的黃底 run 有 rPr，裡面卻可能只有黃底
 - 方框符號（□■☐☑…）總數只列出來參考：勾選是 □ 換 ■，總數本來就該不變
 
 任何一項變少或變多 → 結束碼 1。
@@ -59,9 +60,16 @@ def _text(run) -> str:
     return "".join(t.text or "" for t in run.findall("w:t", NS))
 
 
+def _no_font(run) -> bool:
+    """run 自己沒設字型，也沒套字元樣式（樣式裡可能有字型）。"""
+    return (run.find("w:rPr/w:rFonts", NS) is None
+            and run.find("w:rPr/w:rStyle", NS) is None)
+
+
 def measure(path: Path) -> Dict[str, int]:
     counts = {name: 0 for name in STRUCTURE}
     counts.update({"有底線文字的段落": 0, "段落有字型、run 沒字型": 0, "方框符號": 0})
+    mark_fonts = "w:pPr/w:rPr/w:rFonts"
     with zipfile.ZipFile(path) as zf:
         for part in sorted(n for n in zf.namelist() if PART_RE.search(n)):
             root = etree.fromstring(zf.read(part))
@@ -71,9 +79,9 @@ def measure(path: Path) -> Dict[str, int]:
                 runs = p.xpath("./w:r | ./w:hyperlink/w:r", namespaces=NS)
                 if any(_underlined(r) and _text(r) for r in runs):
                     counts["有底線文字的段落"] += 1
-                if p.find("w:pPr/w:rPr", NS) is not None:
+                if p.find(mark_fonts, NS) is not None:
                     counts["段落有字型、run 沒字型"] += sum(
-                        1 for r in runs if _text(r).strip() and r.find("w:rPr", NS) is None)
+                        1 for r in runs if _text(r).strip() and _no_font(r))
                 counts["方框符號"] += sum(_text(r).count(ch) for r in runs for ch in BOXES)
     return counts
 
