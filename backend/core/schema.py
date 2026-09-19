@@ -4,8 +4,14 @@
 要加欄位就在 FIELDS 加一筆，前端表單與模型提示都會自動跟上。
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import Collection, List, Optional
+
+# 還在職的「訖」：我的資料的離職日選「至今」，匯入的 104 履歷寫「仍在職」。
+# 填寫（期間拆格、年資算到今天）與匯入（不當成「不像日期」丟掉）都認這一份
+PRESENT_WORDS = r"至今|迄今|現在|現職|仍在職|在職中?|present|now"
+PRESENT_RE = re.compile(rf"^\s*(?:{PRESENT_WORDS})\s*$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)

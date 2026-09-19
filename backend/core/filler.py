@@ -41,6 +41,7 @@ import os
 import re
 import unicodedata
 from collections import Counter
+from datetime import date
 from dataclasses import dataclass, field
 from itertools import groupby, permutations
 from pathlib import Path
@@ -54,7 +55,8 @@ from PIL import Image, ImageDraw, ImageFont
 from . import llm
 from .document import iter_block_items
 from .runs import write_changes
-from .schema import BLOCKED_LABELS, BY_KEY, LABEL_ALIASES, OPTION_SYNONYMS
+from .schema import (BLOCKED_LABELS, BY_KEY, LABEL_ALIASES, OPTION_SYNONYMS, PRESENT_RE,
+                     PRESENT_WORDS)
 
 log = logging.getLogger(__name__)
 
@@ -602,13 +604,26 @@ def fields_of(profile: Dict[str, Any]) -> Dict[str, str]:
     return out
 
 
+def _today() -> date:
+    return date.today()
+
+
 def _tenure(start: str, end: str) -> str:
     """年資：頭尾兩個月都算，跟 104、LinkedIn 的算法一樣（2023年7月～2026年4月＝2年10個月）。
+    還在職（訖是「至今」）就算到這個月。
     認不出日期、或起訖顛倒就不算——寧可空著，不寫一個錯的年資。"""
-    a, b = DATE_RE.search(start or ""), DATE_RE.search(end or "")
-    if not a or not b:
+    a = DATE_RE.search(start or "")
+    if PRESENT_RE.match(end or ""):
+        today = _today()
+        end_year, end_month = today.year, today.month
+    else:
+        b = DATE_RE.search(end or "")
+        if not b:
+            return ""
+        end_year, end_month = int(b.group(1)), int(b.group(2))
+    if not a:
         return ""
-    months = (int(b.group(1)) * 12 + int(b.group(2))) - (int(a.group(1)) * 12 + int(a.group(2))) + 1
+    months = (end_year * 12 + end_month) - (int(a.group(1)) * 12 + int(a.group(2))) + 1
     if months <= 0:
         return ""
     years, rest = divmod(months, 12)
@@ -991,15 +1006,22 @@ def _date_parts(value: str, markers: List[str]) -> List[str]:
     """
     if not markers or any(m not in DATE_UNITS for m in markers):
         return []
-    dates = [m.groups() for m in DATE_RE.finditer(value)]
-    if not dates:
+    found = list(DATE_RE.finditer(value))
+    if not found:
         return []
+    dates = [m.groups() for m in found]
+    # 「2023年7月~至今」：訖那一組的第一格寫「至今」，同組其他格留白（空字串＝不寫）
+    ongoing = re.search(PRESENT_WORDS, value[found[-1].end():], re.IGNORECASE)
     out, i, seen = [], 0, set()
     for marker in markers:
         if marker in seen:
             i, seen = i + 1, set()
         if i >= len(dates):
-            return []
+            if not (ongoing and i == len(dates)):
+                return []
+            out.append("" if seen else ongoing.group())
+            seen.add(marker)
+            continue
         part = dict(zip(("年", "月", "日"), dates[i])).get(marker)
         if not part:
             return []
@@ -1029,11 +1051,13 @@ def _spread(run: List[Slot], value: str, texts: Dict[str, str]) -> Dict[str, str
                     break
     if not parts:
         return {run[0].id: _pad(run[0], value)}
+    # 空字串的那幾格不寫（「至今」只寫在訖那一組的第一格）——連空白都不能補，
+    # 不然留給人手寫的底線會被兩個空白蓋掉
     out = {x.id: _pad(x, _roc(texts[x.id], x, part, marker))
-           for x, part, marker in zip(run, parts, markers)}
+           for x, part, marker in zip(run, parts, markers) if part}
     # 月、日這種一兩位數的幾格要一致：「2021年10月－2023年 2 月」「■ 8 月24日」一格有空白
     # 一格沒有，看起來像打錯。有一格放不下空白就全部不留；四位數的年份本來就常貼著寫，不算
-    short = [x.id for x, part in zip(run, parts) if len(part) <= 2]
+    short = [x.id for x, part in zip(run, parts) if part and len(part) <= 2]
     if len({out[i] != out[i].strip(" 　") for i in short}) > 1:
         out.update({i: out[i].strip(" 　") for i in short})
     return out
@@ -1360,7 +1384,8 @@ def apply_fills(slots: List[Slot], chosen: Dict[str, str], fields: Dict[str, str
         # 日期單位前面的空格只收數字：「自＿年＿月」塞進一個公司名一定是配錯了
         for gap in gaps:
             if (gap.option in DATE_UNITS and reps.get(gap.id)
-                    and not re.fullmatch(r"[\d.,]+", reps[gap.id].strip())):
+                    and not re.fullmatch(r"[\d.,]+", reps[gap.id].strip())
+                    and not PRESENT_RE.match(reps[gap.id])):     # 「至＿年」寫「至今」可以
                 del reps[gap.id]
 
     # 一格一個字的格子（身分證字號底下十格）：字數剛好對上才一格一個寫進去。

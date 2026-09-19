@@ -22,7 +22,10 @@ export default function Field({ spec, value, onChange }: Props) {
 
 function renderInput(spec: FieldSpec, value: string, onChange: (v: string) => void) {
   if (spec.kind === 'date') {
-    return <DateSelect value={value} onChange={onChange} />
+    // 離職日可以是「至今」（還在這家公司）：任職期間照填、年資算到今天
+    return (
+      <DateSelect value={value} onChange={onChange} allowPresent={spec.key === 'experience[].end'} />
+    )
   }
 
   if (spec.kind === 'choice') {

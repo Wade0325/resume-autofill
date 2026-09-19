@@ -10,14 +10,19 @@ const selectClass = (bad = false) =>
 
 type Parts = { y: string; m: string; d: string }
 
+// 還在職的「訖」，跟後端 schema.PRESENT_WORDS 同一份（匯入的 104 履歷寫「仍在職」）
+const PRESENT_RE = /^\s*(至今|迄今|現在|現職|仍在職|在職中?|present|now)\s*$/i
+
 type Props = {
   value: string
   onChange: (value: string) => void
+  allowPresent?: boolean // 離職日：多一個「至今」可勾
 }
 
 /** 年／月／日三個下拉，存成「1996年04月15日」。月與日可以不選，值就只到年或到月。 */
-export default function DateSelect({ value, onChange }: Props) {
-  const parts = parseDate(value)
+export default function DateSelect({ value, onChange, allowPresent = false }: Props) {
+  const present = allowPresent && PRESENT_RE.test(value)
+  const parts = present ? { y: '', m: '', d: '' } : parseDate(value)
 
   // 認不得的舊寫法（例如「84年3月起」）硬塞進下拉會把原本的字吃掉，
   // 改成文字框讓使用者自己看著改；清空後就會回到下拉
@@ -51,6 +56,7 @@ export default function DateSelect({ value, onChange }: Props) {
       <select
         className={`${selectClass()} w-24`}
         value={parts.y}
+        disabled={present}
         onChange={(e) => set(e.target.value ? { y: e.target.value } : { y: '', m: '', d: '' })}
       >
         <option value="">----</option>
@@ -91,6 +97,18 @@ export default function DateSelect({ value, onChange }: Props) {
         ))}
       </select>
       <span className="text-sm text-slate-600">日</span>
+      {allowPresent && (
+        // 外層 Field 已經是 <label>，這裡不能再包一層 label
+        <span className="ml-3 flex items-center gap-1 text-sm text-slate-600">
+          <input
+            type="checkbox"
+            aria-label="至今"
+            checked={present}
+            onChange={(e) => onChange(e.target.checked ? '至今' : '')}
+          />
+          至今
+        </span>
+      )}
     </div>
   )
 }

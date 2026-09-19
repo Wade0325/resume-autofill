@@ -15,7 +15,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from . import document, llm
-from .schema import BY_KEY, FIELDS, describe_fields
+from .schema import BY_KEY, FIELDS, PRESENT_RE, describe_fields
 
 log = logging.getLogger(__name__)
 
@@ -214,7 +214,9 @@ def _drop_reason(key: str, value: str, hay: str, whole: str) -> Optional[str]:
         return "not_in_section" if (hay is not whole and sq in whole) else "not_in_source"
     spec = BY_KEY.get(key)
     if spec and spec.kind == "date" and not DATE_ONLY_RE.match(value.strip()):
-        return "not_a_date"
+        # 離職日寫「仍在職」「至今」是還在職，不是日期寫錯
+        if not (key == "experience[].end" and PRESENT_RE.match(value)):
+            return "not_a_date"
     return None
 
 
