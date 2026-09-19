@@ -22,8 +22,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from docx import Document
 from docx.oxml.ns import qn
 
-from .document import (BLANK_RUN_RE, CHECKBOX_CHARS, CHECKED_CHARS, GAP_RE,
-                       TRAILING_COLON_RE, _grid)
+from .document import (BLANK_RUN_RE, CHECKBOX_CHARS, CHECKED_CHARS, GAP_RE, ROC_BEFORE_RE,
+                       TRAILING_COLON_RE, _grid, to_roc)
 from .runs import write_changes
 
 log = logging.getLogger(__name__)
@@ -93,6 +93,10 @@ def _fill_print(para, value: str, highlight: bool) -> bool:
     if not gaps:
         return _replace_span(para, len(text), len(text), f" {value}", highlight)
 
+    # 「民國　年　月　日」：值存的是西元，第一格前面印著民國就換成民國年
+    # （以前寫出「民國 1996 年」）
+    if ROC_BEFORE_RE.search(text[:gaps[0][0]]):
+        value = to_roc(value)
     spans = _overlay(text, gaps, value) or _spread(text, gaps, value)
     done = False
     for start, end, new in reversed(spans):

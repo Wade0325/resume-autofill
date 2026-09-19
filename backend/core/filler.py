@@ -53,7 +53,7 @@ from docx.table import Table, _Cell
 from PIL import Image, ImageDraw, ImageFont
 
 from . import llm
-from .document import iter_block_items
+from .document import ROC_BEFORE_RE, ROC_WORD_RE, iter_block_items, to_roc
 from .runs import write_changes
 from .schema import (BLOCKED_LABELS, BY_KEY, LABEL_ALIASES, OPTION_SYNONYMS, PRESENT_RE,
                      PRESENT_WORDS)
@@ -555,9 +555,9 @@ def _kind(path: str) -> str:
     return spec.kind if spec else ""
 
 
-# 整個值就是一個日期：2016/9、2013年09月、2023 年 7 月、1998年03月25日 都算
+# 整個值就是一個日期：2016/9、2013年09月、2023 年 7 月、1998年03月25日、民國85年3月 都算
 _DATE_ONLY_RE = re.compile(
-    r"^\s*(\d{2,4})\s*[年/.\-]\s*(\d{1,2})\s*[月/.\-]?\s*(?:(\d{1,2})\s*日?)?\s*$")
+    r"^\s*(民國)?\s*(\d{2,4})\s*[年/.\-]\s*(\d{1,2})\s*[月/.\-]?\s*(?:(\d{1,2})\s*日?)?\s*$")
 
 
 def _canon_date(value: str) -> str:
@@ -569,13 +569,15 @@ def _canon_date(value: str) -> str:
     印著「＿年＿月」的格子不受影響：那種格子是照印好的單位一格一格填，年月由
     表格提供，這裡補上的年月反而會被格子的單位重複。認不出是日期就原樣保留，
     不替使用者猜——「民國87年」「2020」這種留給它原本的樣子。
+    明寫民國的（「民國85年3月」，多半是匯入的）換成西元：內部一律西元，表格要民國時
+    寫的那一端再換回去（_roc）。沒寫民國的兩三位數年份不猜——「85/3」也可能是西元 1985。
     """
     m = _DATE_ONLY_RE.match(value or "")
     if not m:
         return value
-    year, month, day = m.groups()
-    return (f"{int(year)}年{int(month)}月"
-            + (f"{int(day)}日" if day else ""))
+    roc, year, month, day = m.groups()
+    year = int(year) + (1911 if roc and int(year) < 1911 else 0)
+    return f"{year}年{int(month)}月" + (f"{int(day)}日" if day else "")
 
 
 def fields_of(profile: Dict[str, Any]) -> Dict[str, str]:
@@ -598,6 +600,10 @@ def fields_of(profile: Dict[str, Any]) -> Dict[str, str]:
                 if root == "experience" and _tenure(row["start"], row["end"]):
                     out[f"{root}[{i}].tenure"] = _tenure(row["start"], row["end"])
     basic = profile.get("basic") or {}
+    # 生日曆制＝民國：存的「85年04月15日」是民國年，換成西元（見 _canon_date）
+    birthday = str(basic.get("birthday") or "").strip()
+    if basic.get("birthday_era") == "民國" and birthday and not birthday.startswith("民國"):
+        out["basic.birthday"] = _canon_date("民國" + birthday)
     surname = _surname_en(str(basic.get("name_passport") or ""), str(basic.get("name_zh") or ""))
     if surname:
         out["basic.surname_en"] = surname
@@ -975,25 +981,39 @@ def _area_code(slot: Slot, value: str) -> str:
 def _replacement(slot: Slot, value: str) -> str:
     if slot.kind == "box":
         return CHECKED if _ticked(slot.option, value) else ""
+    text = slot.cell.paras[slot.para].text if slot.cell else ""
+    value = _roc_value(slot, text, value)
     if slot.kind == "line":
         return "\n" + value
     if slot.kind == "gap":
         return _pad(slot, value)
     # 接在沒有冒號的字後面（「手機」「(請註明里、鄰)」）隔一格，不然號碼黏著欄名；
     # 冒號與編號的點後面不隔（「語言:1.英文」）
-    before = slot.cell.paras[slot.para].text[:slot.start] if slot.cell else ""
+    before = text[:slot.start]
     if slot.kind == "append" and before and not re.search(r"[\s　：:.．、]$", before):
         return " " + value
     return value
 
 
+def _roc_wanted(slot: Slot, text: str) -> bool:
+    """表格要民國年嗎：這個位置前面緊接著「民國」（「民國＿＿年」「出生日期（民國）：＿」），
+    或這一格的欄名、表頭印著民國。「中華民國」是國籍，不算。"""
+    if ROC_BEFORE_RE.search(text[:slot.start]):
+        return True
+    return bool(slot.cell and ROC_WORD_RE.search(f"{slot.cell.row_head}{slot.cell.col_head}"))
+
+
 def _roc(text: str, slot: Slot, part: str, marker: str) -> str:
-    """表格印「民國＿＿年」而資料存西元年時，換成民國年。資料存西元是對的——
+    """表格要民國年而資料存西元年時，換成民國年。資料存西元是對的——
     表格有的印民國、有的印西元，換算是填寫這一端的事。"""
-    if (marker == "年" and part.isdigit() and int(part) > 1911
-            and re.search(r"民國\s*\Z", text[:slot.start])):
+    if marker == "年" and part.isdigit() and int(part) > 1911 and _roc_wanted(slot, text):
         return str(int(part) - 1911)
     return part
+
+
+def _roc_value(slot: Slot, text: str, value: str) -> str:
+    """整個日期寫進一格時（「出生年月日(民國)」底下那格），表格要民國就整串換。"""
+    return to_roc(value) if DATE_RE.search(value) and _roc_wanted(slot, text) else value
 
 
 def _date_parts(value: str, markers: List[str]) -> List[str]:
@@ -1050,7 +1070,7 @@ def _spread(run: List[Slot], value: str, texts: Dict[str, str]) -> Dict[str, str
                 if parts:
                     break
     if not parts:
-        return {run[0].id: _pad(run[0], value)}
+        return {run[0].id: _pad(run[0], _roc_value(run[0], texts[run[0].id], value))}
     # 空字串的那幾格不寫（「至今」只寫在訖那一組的第一格）——連空白都不能補，
     # 不然留給人手寫的底線會被兩個空白蓋掉
     out = {x.id: _pad(x, _roc(texts[x.id], x, part, marker))
@@ -1163,6 +1183,37 @@ def _field_period(key: str) -> str:
     return "年" if "年薪" in text else "月" if "月薪" in text else ""
 
 
+# 選項型與長文的資料寫成字時，那一格附近要印著它的名稱（見 _plausible）。表格常用別的
+# 說法，只比名稱會擋掉對的配對：「自我介紹」就是自傳、「婚姻：」就是婚姻狀況。
+# 只給這道篩選用，不放進 schema.LABEL_ALIASES——那份是讀文字路線的確定性對照，
+# 放太鬆會錨錯格。也不改成「有兩個字相同就算」：「狀況」會讓健康狀況放行婚姻狀況
+NAME_SYNONYMS = {
+    "autobiography": ("自我介紹", "自我簡介", "自述", "個人簡介"),
+    "skills.languages": ("語言能力", "外語能力", "語言", "外語"),
+    "skills.certificates": ("證照", "證書", "檢定"),
+    "skills.computer": ("電腦能力", "電腦專長", "電腦程度", "電腦"),
+    "skills.driver_license": ("駕駛執照", "駕駛"),
+    "basic.health": ("健康",),
+    "basic.marital_status": ("婚姻", "婚否"),
+    "basic.military": ("兵役", "役別"),
+    "basic.transport": ("交通",),
+    "basic.identity_category": ("身分", "身份"),
+    "experience[].is_supervisor": ("主管",),
+    "declaration.relatives_in_company": ("親友", "親屬"),
+    "declaration.other_positions": ("負責人", "董監事"),
+    "declaration.china_investment": ("大陸",),
+    "declaration.non_compete": ("競業",),
+    "declaration.ip_ownership": ("智慧財產", "專門技術"),
+    "declaration.criminal_record": ("刑事", "犯罪", "前科"),
+    "declaration.wanted": ("通緝",),
+    "declaration.infectious_disease": ("傳染病",),
+    "declaration.drug_use": ("毒品",),
+    "declaration.dismissed": ("免職", "開除", "解僱"),
+    "declaration.forged_documents": ("不實",),
+    "declaration.debt": ("負債",),
+}
+
+
 def _plausible(slot: Slot, key: str, fields: Dict[str, str]) -> bool:
     """擋掉明顯放錯地方的配對。
 
@@ -1191,7 +1242,8 @@ def _plausible(slot: Slot, key: str, fields: Dict[str, str]) -> bool:
                 or re.search(r"(號碼|字號|編號)[.．]?[：:]?[ 　]*$", text[:slot.start])):
             return False
     if slot.kind != "box" and spec and spec.kind in ("choice", "longtext"):
-        return _squash(spec.label) in around
+        names = (spec.label, *NAME_SYNONYMS.get(re.sub(r"\[\d+\]", "[]", key), ()))
+        return any(_squash(n) in around for n in names)
     if re.match(r"\w+\[\d+\]\.", key):
         return _support(slot, key, fields) > 0
     if slot.kind == "box":

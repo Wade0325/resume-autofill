@@ -34,6 +34,18 @@ TRAILING_COLON_RE = re.compile(r"[:：□][ 　]*$")
 # 是字距排版，不是留白。
 GAP_RE = re.compile(r"[ ]{2,}|　+")
 
+# 表格要民國年：這個位置前面緊接著「民國」（「民國＿＿年」「出生日期（民國）：＿」）。
+# 「中華民國」是國籍，不算——「國籍：中華民國　出生日期：＿年」要的是西元
+ROC_BEFORE_RE = re.compile(r"(?<!中華)民國[\s)）\]］:：]*\Z")
+ROC_WORD_RE = re.compile(r"(?<!中華)民國")
+
+
+def to_roc(value: str) -> str:
+    """值裡的西元年換成民國年：1996年3月15日 → 85年3月15日、
+    2016年9月~2020年6月 → 105年9月~109年6月。只換後面接著年月分隔的四位數年份。"""
+    return re.sub(r"(?<!\d)(19[1-9]\d|20\d\d)(?=\s*[年/.\-])",
+                  lambda m: str(int(m.group(1)) - 1911), value)
+
 
 @dataclass
 class Slot:
