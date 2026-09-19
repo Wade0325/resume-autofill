@@ -51,7 +51,8 @@ function shortName(name: string) {
 
 function ModelMenu() {
   const [info, setInfo] = useState<ModelsOut | null>(null)
-  const [offline, setOffline] = useState(true)
+  // 第一次回應前不算斷線：模型沒開時這支要半秒，以前每次開頁面都先閃一下「後端未連線」
+  const [offline, setOffline] = useState(false)
   const [open, setOpen] = useState(false)
   const [err, setErr] = useState('')
   const [customUrl, setCustomUrl] = useState('')
@@ -142,7 +143,9 @@ function ModelMenu() {
             )}
           </div>
           {offline || !info ? (
-            <p className="text-sm text-slate-400 text-center py-6">後端未連線</p>
+            <p className="text-sm text-slate-400 text-center py-6">
+              {offline ? '後端未連線' : '連線中…'}
+            </p>
           ) : (
             <ul className="divide-y divide-slate-100">
               {info.models.map((m) => (
@@ -269,11 +272,17 @@ function ModelAction({
 }
 
 function pillState(info: ModelsOut | null, offline: boolean) {
-  if (offline || !info)
+  if (offline)
     return {
       style: 'bg-rose-50 text-rose-700 border-rose-200',
       text: '後端未連線',
       title: '請確認 uvicorn 已啟動',
+    }
+  if (!info)
+    return {
+      style: 'bg-slate-50 text-slate-500 border-slate-200',
+      text: '連線中…',
+      title: '正在確認模型狀態',
     }
   if (info.starting)
     return {
