@@ -36,8 +36,29 @@ CHECK_MAP = {"□": "■", "☐": "☑", "▢": "■", "◻": "◼"}
 UNCHECK_MAP = {"■": "□", "☑": "☐", "◼": "◻"}
 
 
+# 合併靠 a.text = a.text + b.text 重建 run 的內容，寫得回去的只有文字、Tab 與一般換行。
+# Wingdings 勾選框（w:sym）、圖片、功能變數的起訖標記都會被清掉——以前只檢查後面那個 run，
+# 富邦「□同上」的框、功能變數的結束標記就這樣不見了。lastRenderedPageBreak 只是排版快取，丟了無妨
+_PLAIN_CHILDREN = {qn("w:rPr"), qn("w:t"), qn("w:lastRenderedPageBreak")}
+
+
+def _is_plain(run, allow_breaks: bool) -> bool:
+    for child in run._element:
+        if child.tag in _PLAIN_CHILDREN:
+            continue
+        if allow_breaks and (child.tag == qn("w:tab") or (
+                child.tag == qn("w:br")
+                and child.get(qn("w:type")) in (None, "textWrapping"))):
+            continue
+        return False
+    return True
+
+
 def coalesce_runs(paragraph) -> None:
-    """合併相鄰且格式相同的 run，讓文字變成連續可搜尋（不改變外觀）。"""
+    """合併相鄰且格式相同的 run，讓文字變成連續可搜尋（不改變外觀）。
+
+    兩個 run 都只有文字才合併；後面那個連 Tab、換行都不能有（沿用原本的規則）。
+    """
     runs = list(paragraph.runs)
     i = 0
     while i < len(runs) - 1:
@@ -47,9 +68,7 @@ def coalesce_runs(paragraph) -> None:
         same = (rpr_a is None and rpr_b is None) or (
             rpr_a is not None and rpr_b is not None
             and rpr_a.xml == rpr_b.xml)
-        has_special = any(b._element.find(qn(t)) is not None
-                          for t in ("w:drawing", "w:fldChar", "w:instrText", "w:br", "w:tab"))
-        if same and not has_special:
+        if same and _is_plain(a, allow_breaks=True) and _is_plain(b, allow_breaks=False):
             a.text = a.text + b.text
             b._element.getparent().remove(b._element)
             del runs[i + 1]
