@@ -47,6 +47,8 @@ export type ImportRow = {
   current: string
   incoming: string
   default_checked: boolean
+  entry: '' | 'merge' | 'new' // 學經歷這種多筆資料：補進名稱對得上的那一筆，或新增一筆
+  entry_name: string // 對上的那一筆的名稱（學校、公司…）
 }
 
 export type ImportPreview = {
@@ -211,7 +213,9 @@ export const api = {
       '/imports', file, onProgress),
   getImport: (importId: string) => request<ImportState>(`/imports/${importId}`),
   applyImport: (importId: string, rowIds: string[]) =>
-    postJson<{ applied: number }>(`/imports/${importId}/apply`, { row_ids: rowIds }),
+    postJson<{ applied: number; changed: string[] }>(`/imports/${importId}/apply`, {
+      row_ids: rowIds,
+    }),
 
   logs: ({ level }: { level?: string }) =>
     request<LogEntry[]>(`/logs${level ? `?level=${level}` : ''}`),

@@ -83,6 +83,9 @@ class ImportRow(BaseModel):
     current: str                      # 我的資料現在的值
     incoming: str                     # 從履歷讀到的值
     default_checked: bool             # current 為空才預設勾選
+    # 多筆資料（學經歷…）這一筆怎麼放：merge＝補進名稱對得上的那一筆，new＝新增一筆
+    entry: Literal["", "merge", "new"] = ""
+    entry_name: str = ""              # 對上的那一筆的名稱（學校、公司…）
 
 
 class ImportPreviewOut(BaseModel):
@@ -97,6 +100,7 @@ class ImportApplyIn(BaseModel):
 
 class ImportApplyOut(BaseModel):
     applied: int
+    changed: List[str] = []           # 實際寫到的「欄位代碼#第幾筆」，我的資料頁拿來標示
 
 
 class LogEntry(BaseModel):

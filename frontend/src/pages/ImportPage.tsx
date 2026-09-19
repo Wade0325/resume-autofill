@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, errorText, type FieldSpec, type ImportPreview, type ImportRow } from '../api'
 import { useBackgroundUpload } from '../useBackgroundUpload'
@@ -73,16 +73,14 @@ export default function ImportPage() {
     setApplying(true)
     setError('')
     try {
-      const changed = preview.rows
-        .filter((r) => picked.has(r.row_id))
-        .map((r) => `${r.field_key}#${r.ordinal}`)
+      // 寫到第幾筆以後端回報為準：新增的幾筆會往前補，不一定是清單上的序號
       const result = await api.applyImport(preview.import_id, [...picked])
       // 留在原頁繼續:重拉一次預覽,「現有值」欄立刻反映剛寫入的資料;
       // 勾選歸零,漏掉的項目可以再勾再匯,不必重傳重跑一次分析
       const st = await api.getImport(preview.import_id)
       if (st.status === 'ready') setPreview(st.preview)
       remember(new Set())
-      setApplied({ count: result.applied, changed })
+      setApplied({ count: result.applied, changed: result.changed })
     } catch (e: any) {
       setError(errorText(e))
     } finally {
@@ -206,15 +204,21 @@ export default function ImportPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {shown.map((row) => (
-                  <Row
-                    key={row.row_id}
-                    row={row}
-                    label={labelOf(row.field_key)}
-                    checked={picked.has(row.row_id)}
-                    onToggle={() => toggle(row.row_id)}
-                    onHover={setHovered}
-                  />
+                {shown.map((row, i) => (
+                  <Fragment key={row.row_id}>
+                    {/* 多筆資料每一筆開頭標出它會補進哪一筆、還是新增一筆 */}
+                    {row.entry &&
+                      (i === 0 ||
+                        shown[i - 1].entry !== row.entry ||
+                        shown[i - 1].ordinal !== row.ordinal) && <EntryHeader row={row} />}
+                    <Row
+                      row={row}
+                      label={labelOf(row.field_key)}
+                      checked={picked.has(row.row_id)}
+                      onToggle={() => toggle(row.row_id)}
+                      onHover={setHovered}
+                    />
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -266,9 +270,6 @@ function Row({
       </td>
       <td className="px-4 py-2.5 align-top">
         <span className="text-slate-800">{label}</span>
-        {row.ordinal > 0 && (
-          <span className="ml-1 text-xs text-slate-400">第 {row.ordinal + 1} 筆</span>
-        )}
       </td>
       {/* 值可能是整段自傳或多行工作內容:完整顯示、保留換行,不截斷 */}
       <td className="px-4 py-2.5 align-top whitespace-pre-wrap break-words">
@@ -283,6 +284,25 @@ function Row({
       <td className="px-4 py-2.5 align-top whitespace-pre-wrap break-words text-slate-900">
         {row.incoming}
         {willOverwrite && <OverwriteBadge>將覆蓋</OverwriteBadge>}
+      </td>
+    </tr>
+  )
+}
+
+// 依名稱（學校、公司…）對上我的資料裡的那一筆就補進去，對不上的新增一筆
+function EntryHeader({ row }: { row: ImportRow }) {
+  const isNew = row.entry === 'new'
+  return (
+    <tr className="bg-slate-50/70">
+      <td colSpan={4} className="px-4 py-2 text-xs">
+        <span
+          className={`inline-block rounded px-1.5 py-0.5 font-medium ${
+            isNew ? 'bg-emerald-100 text-emerald-800' : 'bg-sky-100 text-sky-800'
+          }`}
+        >
+          {isNew ? '新增一筆' : `補進我的資料第 ${row.ordinal + 1} 筆`}
+        </span>
+        {row.entry_name && <span className="ml-2 text-slate-600">{row.entry_name}</span>}
       </td>
     </tr>
   )

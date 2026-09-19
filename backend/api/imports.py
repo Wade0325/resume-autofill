@@ -37,7 +37,7 @@ def source(import_id: WorkId) -> Response:
 
 @router.post("/{import_id}/apply", response_model=ImportApplyOut)
 def apply_import(import_id: WorkId, body: ImportApplyIn) -> ImportApplyOut:
-    applied = service.apply_import(import_id, body.row_ids)
-    if applied is None:
+    changed = service.apply_import(import_id, body.row_ids)
+    if changed is None:
         raise HTTPException(404, "找不到這次匯入")
-    return ImportApplyOut(applied=applied)
+    return ImportApplyOut(applied=len(changed), changed=changed)

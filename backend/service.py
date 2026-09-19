@@ -10,6 +10,7 @@ import re
 import tempfile
 import threading
 import time
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -627,48 +628,137 @@ def get_import(import_id: str) -> Optional[Dict[str, Any]]:
     return {"status": "ready", "preview": preview.model_dump()}
 
 
-def apply_import(import_id: str, row_ids: List[str]) -> Optional[int]:
+def apply_import(import_id: str, row_ids: List[str]) -> Optional[List[str]]:
+    """把勾選的列寫進我的資料，回傳實際寫到的「欄位代碼#第幾筆」。"""
     record = db.get_import(import_id)
     if not record or record["status"] != "ready":
         return None
     rows = {r.row_id: r for r in _import_rows(record["extracted"])}
+    selected = [rows[i] for i in row_ids if i in rows]
 
     profile = db.get_kv("profile") or {}
-    applied = []
-    for row_id in row_ids:
-        row = rows.get(row_id)
-        if row is None:
-            continue
-        planner.set_value(profile, row.field_key, row.incoming, row.ordinal)
-        applied.append(row.field_key)
+    # 新增的那幾筆只建有勾到欄位的，照順序往前補——一欄都沒勾的不留一筆空白的
+    remap: Dict[Tuple[str, int], int] = {}
+    for root in {_list_root(r.field_key) for r in selected if r.entry == "new"}:
+        used = sorted({r.ordinal for r in selected
+                       if r.entry == "new" and _list_root(r.field_key) == root})
+        base = len(profile.get(root) or [])
+        remap.update({(root, o): base + i for i, o in enumerate(used)})
+    changed = []
+    for row in selected:
+        ordinal = remap.get((_list_root(row.field_key), row.ordinal), row.ordinal)
+        planner.set_value(profile, row.field_key, row.incoming, ordinal)
+        changed.append(f"{row.field_key}#{ordinal}")
     db.put_kv("profile", profile)
 
     # 只記欄位代碼——incoming 全是個資
-    log.info("匯入寫入 選取=%d 欄位=%s", len(applied), ",".join(sorted(set(applied))))
+    log.info("匯入寫入 選取=%d 欄位=%s", len(changed),
+             ",".join(sorted({c.split("#")[0] for c in changed})))
     actions.record("匯入履歷「%s」成功", record["filename"])
-    return len(applied)
+    return changed
+
+
+def _list_root(field_key: str) -> str:
+    return field_key.split("[].")[0] if "[]." in field_key else ""
+
+
+# 匯入的一筆學經歷是「我的資料」裡的哪一筆：看名稱（學校、公司…）——以前看順序，
+# 履歷第一筆是別家公司時，它的薪資、離職原因會補進你現有那一筆的空欄位。
+# 名稱一樣還要次要欄位不衝突：同一所學校的學士與碩士是兩筆，同一家公司離職又回鍋也是兩筆
+_IDENTITY = {"education": ("school", ("degree", "start")),
+             "experience": ("company", ("start",)),
+             "certificate": ("name", ()),
+             "family": ("name", ()),
+             "reference": ("name", ())}
+_PEOPLE = {"family", "reference"}     # 人名要整個一樣：「王明」不是「王明德」
+_NAME_NOISE_RE = re.compile(r"股份有限公司|有限公司|\(股\)|[\s,.。、・·()\-]")
+# 學位只比程度：「學士」「大學」是同一級，「碩士」「研究所」也是
+_DEGREE_LEVELS = (("博士", "phd", "doctor"), ("碩士", "研究所", "master", "mba"),
+                  ("大學", "學士", "二技", "四技", "bachelor"), ("專科", "五專", "二專", "三專"),
+                  ("高中", "高職", "high school"), ("國中",))
+
+
+def _name_key(text: str) -> str:
+    """比對名稱用：全半形、大小寫、臺／台、公司後綴與標點都不算差別。"""
+    text = unicodedata.normalize("NFKC", text or "").lower().replace("臺", "台")
+    return _NAME_NOISE_RE.sub("", text)
+
+
+def _same_name(a: str, b: str, whole: bool = False) -> bool:
+    """公司、學校的簡稱算同一個（「台灣大學」「國立臺灣大學」）；人名 whole 要整個一樣。"""
+    x, y = _name_key(a), _name_key(b)
+    if len(x) < 2 or len(y) < 2:
+        return False
+    return x == y if whole else (x in y or y in x)
+
+
+def _degree_level(text: str) -> Optional[int]:
+    text = unicodedata.normalize("NFKC", text).lower()
+    return next((i for i, words in enumerate(_DEGREE_LEVELS)
+                 if any(w in text for w in words)), None)
+
+
+def _no_conflict(field: str, a: Any, b: Any) -> bool:
+    """兩邊都有值的次要欄位要一致；認不出來的寫法不算衝突。
+    日期只比西元年（「2016/9」「2016年09月」是同一年），學位只比程度。"""
+    a, b = str(a or "").strip(), str(b or "").strip()
+    if not a or not b:
+        return True
+    if field == "start":
+        ya, yb = re.search(r"\d{4}", a), re.search(r"\d{4}", b)
+        return not (ya and yb) or ya.group() == yb.group()
+    if field == "degree":
+        la, lb = _degree_level(a), _degree_level(b)
+        return la is None or lb is None or la == lb
+    return document.squash(a) == document.squash(b)
+
+
+def _entry_targets(root: str, incoming: List[Any],
+                   existing: List[Any]) -> List[Tuple[int, str, str]]:
+    """每一筆匯入的資料寫進第幾筆：(第幾筆, merge／new, 對上的那一筆的名稱)。
+    對不上、或沒有名稱的就新增一筆——寧可多一筆讓使用者刪，不把別家的資料補進來。"""
+    name_field, secondary = _IDENTITY.get(root, ("", ()))
+    taken, out, new = set(), [], 0
+    for item in incoming:
+        item = item if isinstance(item, dict) else {}
+        name = str(item.get(name_field) or "") if name_field else ""
+        hit = next((i for i, row in enumerate(existing)
+                    if i not in taken and isinstance(row, dict)
+                    and _same_name(name, str(row.get(name_field) or ""), root in _PEOPLE)
+                    and all(_no_conflict(f, item.get(f), row.get(f)) for f in secondary)),
+                   None) if name else None
+        if hit is not None:
+            taken.add(hit)
+            out.append((hit, "merge", str(existing[hit].get(name_field) or "")))
+        else:
+            out.append((len(existing) + new, "new", name))
+            new += 1
+    return out
 
 
 def _import_rows(extracted: Dict[str, Any]) -> List[ImportRow]:
     profile = db.get_kv("profile") or {}
     rows: List[ImportRow] = []
 
-    def add(field_key: str, ordinal: int, value: Any) -> None:
+    def add(field_key: str, ordinal: int, value: Any, entry: str = "",
+            entry_name: str = "") -> None:
         # 舊紀錄的值可能混進 {{id}} 位置標記，顯示與寫入前都剝掉
         text = document.MARKER_RE.sub("", str(value)).strip()
         if field_key not in BY_KEY or not text:
             return
-        current = str(planner.get_value(profile, field_key, ordinal) or "")
+        current = "" if entry == "new" else str(planner.get_value(profile, field_key, ordinal) or "")
         rows.append(ImportRow(
             row_id=f"{field_key}#{ordinal}", field_key=field_key, ordinal=ordinal,
-            current=current, incoming=text, default_checked=not current))
+            current=current, incoming=text, default_checked=not current,
+            entry=entry, entry_name=entry_name))
 
     for key, value in extracted.items():
         if isinstance(value, list):
-            for index, item in enumerate(value):
+            targets = _entry_targets(key, value, profile.get(key) or [])
+            for item, (ordinal, entry, entry_name) in zip(value, targets):
                 if isinstance(item, dict):
                     for sub, sub_value in item.items():
-                        add(f"{key}[].{sub}", index, sub_value)
+                        add(f"{key}[].{sub}", ordinal, sub_value, entry, entry_name)
         else:
             add(key, 0, value)
 
