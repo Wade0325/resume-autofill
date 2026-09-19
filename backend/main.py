@@ -121,6 +121,14 @@ app.include_router(models.router, prefix="/api")
 # 開發時 dist 不存在，走 Vite dev server 的 proxy，這裡就跳過。
 # 打包版的目錄佈局刻意跟 repo 相同（app/backend + app/frontend/dist），這行兩邊通用
 _DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+# 預覽把公司給的 .docx 渲染在介面本身的網頁裡，文件裡夾帶的東西等於跟介面同源。
+# 前端已經拿掉 javascript: 連結；這是第二道：只准跑自己的腳本，行內腳本、javascript:
+# 網址一律擋。style 要 'unsafe-inline'（docx-preview 插 <style>、React 的 style 屬性），
+# blob:／data: 是 docx-preview 的圖片與字型、pdf.js 的 worker
+_CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; "
+        "connect-src 'self' blob:; object-src 'none'; base-uri 'none'; "
+        "form-action 'self'; frame-ancestors 'none'")
 if _DIST.is_dir():
     app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="assets")
 
@@ -139,7 +147,7 @@ if _DIST.is_dir():
             except (OSError, ValueError):     # 網址裡夾著 NUL 之類組不成路徑的字元
                 inside = False
             if inside:
-                return FileResponse(candidate)
-        return FileResponse(_DIST / "index.html")
+                return FileResponse(candidate, headers={"Content-Security-Policy": _CSP})
+        return FileResponse(_DIST / "index.html", headers={"Content-Security-Policy": _CSP})
 
     log.info("前端靜態檔已掛載 path=%s", _DIST)
