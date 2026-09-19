@@ -110,6 +110,10 @@ OTHER_PEOPLE = {
 COMPANY_WORDS_RE = re.compile(r"面談|初試|複試|任用|建議薪資|主管簽章|(?<!可)到職日期")
 # 親筆簽名留給本人手寫；同一行的「日期＿年＿月＿日」是簽名的日期，個人資料也不會有
 SIGN_WORDS = ("簽名", "簽章")
+# 被擋的詞怎麼擋：簽名、公司欄位、「年制」（「□二年制 □四年制」整排都是選項）一出現，
+# 整行都不是應徵者要填的；應徵職務、工作地點這種每間公司不一樣的欄位只擋自己那一段，
+# 同一行的「希望待遇：＿＿」照填
+JOB_SPECIFIC = tuple(b for b in BLOCKED_LABELS if b != "年制")
 # 兩邊都常出現、卻不代表相關的詞：履歷表的問答題幾乎都有「工作」；
 # 「期間」則是服役期間、就學期間、任職期間都有，光靠它會把學歷填進服役欄
 GENERIC_WORDS = {"工作", "期間"}
@@ -359,9 +363,9 @@ def _line_slots(line: str) -> List[Tuple[str, int, int, str]]:
     if not line.strip():
         return []
     squashed = _squash(line)
-    if (any(b in squashed for b in BLOCKED_LABELS + SIGN_WORDS)
+    if (any(b in squashed for b in SIGN_WORDS + ("年制",))
             or COMPANY_WORDS_RE.search(squashed)):
-        return []    # 應徵職務（每間公司不一樣，產品刻意留白）、公司自己填的欄位、親筆簽名
+        return []    # 公司自己填的欄位、親筆簽名、年制
     out: List[Tuple[str, int, int, str]] = []
     boxes = [m.start() for m in re.finditer(f"[{CHECKBOX_CHARS}]", line)]
     for i, pos in enumerate(boxes):
@@ -410,7 +414,30 @@ def _line_slots(line: str) -> List[Tuple[str, int, int, str]]:
         out.append(("append", len(line.rstrip()), len(line.rstrip()), ""))
     elif not out and line.rstrip().endswith(("？", "?")):
         out.append(("line", len(line), len(line), ""))   # 整格是一個問句，答案寫下一行
+    if any(b in squashed for b in JOB_SPECIFIC):
+        out = _drop_job_specific(line, out)
     return out
+
+
+def _drop_job_specific(line: str, slots: List[Tuple[str, int, int, str]]
+                       ) -> List[Tuple[str, int, int, str]]:
+    """應徵職務、工作地點（每間公司不一樣，產品刻意留白）只擋它自己那一段：
+    「應徵職務：＿＿　希望待遇：＿＿」的希望待遇照填——以前整行都丟掉。
+
+    一個位置歸哪個欄名，看它前面到上一個位置之間印的字；勾選框、以及框後面的填空
+    （「□其他＿＿」）沿用同一題第一個框的歸屬，直到出現新的欄名（冒號）。
+    回傳照原本的順序：位置的代碼跟順序有關，順序一動，學過的格式就對不上了。
+    """
+    dropped, prev_end, prev_kind, blocked = set(), 0, "", False
+    for slot in sorted(slots, key=lambda s: s[1]):
+        kind, start, end, _option = slot
+        region = line[prev_end:start]
+        if not (prev_kind == "box" and not re.search(r"[：:]", region)):
+            blocked = any(b in _squash(region) for b in JOB_SPECIFIC)
+        if blocked:
+            dropped.add(slot)
+        prev_end, prev_kind = end, kind
+    return [s for s in slots if s not in dropped]
 
 
 def _window(text: str, at: int, span: int = 34) -> str:
