@@ -5,27 +5,25 @@ docx 寫回器 (Format-preserving Writer)
 所以「你看得到的字串」在 XML 裡往往不是連續的。直接用 cell.text = "..." 會把
 儲存格內所有格式（字型、大小、置中）一次清光，出來的履歷會很醜。
 
-這裡的作法：
-  1. 先把同格式的相鄰 run 合併（coalesce），讓字串變成可搜尋
-  2. 只改動目標 run 的 <w:t> 文字，其餘 XML 一律不碰
-  3. 空白格沒有任何 run 可繼承時，從同一列借一個 run 的 <w:rPr> 複製過來
+這裡的作法：位置一律用段落文字（para.text）的字元位置算，寫入交給 runs.write_changes
+（與看版面共用）——只改牽涉到的 <w:t>，run 裡的勾選符號、圖片、功能變數一律不碰；
+新字沿用原本那個 run 的格式，空白格則沿用段落標記的格式、沒設就借同一列的。
 
 highlight 模式會把填入的字加上黃色底色，只給網頁預覽用；下載的成品一律不標。
 """
 
 from __future__ import annotations
 
-import copy
 import logging
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from docx import Document
 from docx.oxml.ns import qn
-from docx.table import Table
 
 from .document import (BLANK_RUN_RE, CHECKBOX_CHARS, CHECKED_CHARS, GAP_RE,
                        TRAILING_COLON_RE, _grid)
+from .runs import write_changes
 
 log = logging.getLogger(__name__)
 
@@ -36,124 +34,23 @@ CHECK_MAP = {"□": "■", "☐": "☑", "▢": "■", "◻": "◼"}
 UNCHECK_MAP = {"■": "□", "☑": "☐", "◼": "◻"}
 
 
-# 合併靠 a.text = a.text + b.text 重建 run 的內容，寫得回去的只有文字、Tab 與一般換行。
-# Wingdings 勾選框（w:sym）、圖片、功能變數的起訖標記都會被清掉——以前只檢查後面那個 run，
-# 富邦「□同上」的框、功能變數的結束標記就這樣不見了。lastRenderedPageBreak 只是排版快取，丟了無妨
-_PLAIN_CHILDREN = {qn("w:rPr"), qn("w:t"), qn("w:lastRenderedPageBreak")}
-
-
-def _is_plain(run, allow_breaks: bool) -> bool:
-    for child in run._element:
-        if child.tag in _PLAIN_CHILDREN:
-            continue
-        if allow_breaks and (child.tag == qn("w:tab") or (
-                child.tag == qn("w:br")
-                and child.get(qn("w:type")) in (None, "textWrapping"))):
-            continue
-        return False
-    return True
-
-
-def coalesce_runs(paragraph) -> None:
-    """合併相鄰且格式相同的 run，讓文字變成連續可搜尋（不改變外觀）。
-
-    兩個 run 都只有文字才合併；後面那個連 Tab、換行都不能有（沿用原本的規則）。
-    """
-    runs = list(paragraph.runs)
-    i = 0
-    while i < len(runs) - 1:
-        a, b = runs[i], runs[i + 1]
-        rpr_a = a._element.find(qn("w:rPr"))
-        rpr_b = b._element.find(qn("w:rPr"))
-        same = (rpr_a is None and rpr_b is None) or (
-            rpr_a is not None and rpr_b is not None
-            and rpr_a.xml == rpr_b.xml)
-        if same and _is_plain(a, allow_breaks=True) and _is_plain(b, allow_breaks=False):
-            a.text = a.text + b.text
-            b._element.getparent().remove(b._element)
-            del runs[i + 1]
-        else:
-            i += 1
-
-
-def _set_run_text(run, text: str, highlight: bool = False) -> None:
-    run.text = text
-    if highlight:
-        rpr = run._element.get_or_add_rPr()
-        for old in rpr.findall(qn("w:highlight")):
-            rpr.remove(old)
-        el = rpr.makeelement(qn("w:highlight"), {qn("w:val"): "yellow"})
-        rpr.append(el)
-
-
-def _clone_rpr(src_run, dst_run) -> None:
-    rpr = src_run._element.find(qn("w:rPr"))
-    if rpr is not None:
-        dst_run._element.insert(0, copy.deepcopy(rpr))
-
-
-def _donor_run(table: Table, row_idx: int):
-    """從同一列找一個有文字的 run，借它的字型設定。"""
-    try:
-        cells = table.rows[row_idx].cells
-    except IndexError:
-        return None
-    for cell in cells:
-        for p in cell.paragraphs:
-            for r in p.runs:
-                if r.text.strip():
-                    return r
-    return None
-
-
-def _write_into_cell(table: Table, grid: List[List[Any]], row: int, col: int,
+def _write_into_cell(grid: List[List[Any]], row: int, col: int,
                      text: str, highlight: bool) -> bool:
+    """整格換成 text（第一段）。格子裡的照片、勾選符號不會被一起清掉。"""
     if row >= len(grid) or col >= len(grid[row]):
         return False
     cell = grid[row][col]
     para = cell.paragraphs[0] if cell.paragraphs else cell.add_paragraph()
-    coalesce_runs(para)
-    if para.runs:
-        _set_run_text(para.runs[0], text, highlight)
-        for r in para.runs[1:]:
-            r.text = ""
-    else:
-        run = para.add_run()
-        donor = _donor_run(table, row)
-        if donor is not None:
-            _clone_rpr(donor, run)
-        _set_run_text(run, text, highlight)
+    write_changes(para, [(0, len(para.text), text)], highlight)
     return True
 
 
 def _replace_span(para, start: int, end: int, text: str, highlight: bool) -> bool:
-    """把段落文字的 [start, end) 區間換成 text，只動到牽涉到的 run。"""
-    coalesce_runs(para)
+    """把段落文字的 [start, end) 區間換成 text，只動到牽涉到的字。
+    start 超過字尾就是純追加：「可到職日：」後面直接接上。"""
     total = len(para.text)
-    if start >= total:                      # 純追加：「可到職日：」後面直接接上
-        new = para.add_run()                # 另開新 run，避免把標籤一起上色
-        if para.runs and len(para.runs) > 1:
-            _clone_rpr(para.runs[-2], new)
-        _set_run_text(new, text, highlight)
-        return True
-
-    pos = 0
-    written = False
-    for run in list(para.runs):
-        rlen = len(run.text)
-        r_start, r_end = pos, pos + rlen
-        pos = r_end
-        if r_end <= start or r_start >= end:
-            continue
-        cut_a = max(0, start - r_start)
-        cut_b = min(rlen, end - r_start)
-        head, tail = run.text[:cut_a], run.text[cut_b:]
-        if not written:
-            _set_run_text(run, head + text + tail, highlight)
-            written = True
-        else:
-            run.text = head + tail
-    return written
+    write_changes(para, [(min(start, total), min(end, total), text)], highlight)
+    return True
 
 
 def _fill_inline(para, text: str, highlight: bool, blank_index: int = 0) -> bool:
@@ -349,11 +246,7 @@ def _kept(before: str, after: str) -> bool:
 
 def _restore(para, text: str) -> None:
     """把整段還原成原本的字（插壞了才會走到這裡）。"""
-    coalesce_runs(para)
-    if para.runs:
-        para.runs[0].text = text
-        for r in para.runs[1:]:
-            r.text = ""
+    write_changes(para, [(0, len(para.text), text)])
 
 
 def _target_paras(doc, grid_of, loc: Dict[str, Any]) -> List[Any]:
@@ -404,8 +297,8 @@ def apply_ops(src_path: str, out_path: str, ops: List[Any],
             elif kind == "formfield":
                 done = _fill_formfield(scan_of("w:ffData"), loc["ff_index"], op.value)
             elif kind == "cell":
-                done = _write_into_cell(doc.tables[loc["table"]], grid_of(loc["table"]),
-                                        loc["row"], loc["col"], op.value, highlight)
+                done = _write_into_cell(grid_of(loc["table"]), loc["row"], loc["col"],
+                                        op.value, highlight)
             elif kind == "inline":
                 if "table" in loc:
                     cell = grid_of(loc["table"])[loc["row"]][loc["col"]]
