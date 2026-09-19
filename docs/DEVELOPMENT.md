@@ -296,6 +296,8 @@ trace／observation 的工具**（54 個工具都是 prompt、dataset、score、
 用 `RESUME_AUTOFILL_HOME` 可另指位置。
 同一請求的所有記錄共用 request_id，回應標頭 `X-Request-Id` 帶著它。
 **log 永遠不寫入 profile 的值**——log 可能被使用者附在問題回報裡送出。
+上傳檔名常帶著本人姓名：只有日誌頁（action 通道）記檔名，讓使用者認得出是哪一份
+（使用者要求保留）；開發者 log 一律記工作代碼。
 輪詢類請求（模型狀態、分析進度）記在 DEBUG，預設不出現。
 
 ---

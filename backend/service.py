@@ -208,19 +208,20 @@ def _save_upload(job_id: str, content: bytes, suffix: str = ".docx") -> Path:
 def _fail(update, work_id: str, filename: str, verb: str, doing: str,
           e: Exception) -> None:
     """兩個背景 worker 共用的失敗收尾：記 log、寫失敗原因、發使用者訊息。
-    verb 用在開發者 log（分析／匯入），doing 用在給使用者的原因。"""
+    verb 用在開發者 log（分析／匯入），doing 用在給使用者的原因。
+    檔名常帶著本人姓名，只出現在日誌頁（使用者要看得出是哪個檔）；開發者 log 記工作代碼。"""
     if isinstance(e, llm.LlmUnavailable):
-        log.warning("%s失敗 %s：%s", verb, filename, e)
+        log.warning("%s失敗 %s：%s", verb, work_id, e)
         update(work_id, status="failed", stage="",
                error=f"模型還沒啟動，無法{doing}。請從右上角啟動模型後重新上傳")
         actions.problem("上傳履歷「%s」失敗：模型還沒啟動", filename)
     elif isinstance(e, llm.LlmCallFailed):
         # 模型活著但這次呼叫失敗（如文件超出上下文），叫使用者重啟模型只會鬼打牆
-        log.warning("%s失敗 %s：%s", verb, filename, e)
+        log.warning("%s失敗 %s：%s", verb, work_id, e)
         update(work_id, status="failed", stage="", error=f"無法{doing}：{e}")
         actions.problem("上傳履歷「%s」失敗：模型讀取失敗", filename)
     else:
-        log.exception("%s失敗 %s", verb, filename)
+        log.exception("%s失敗 %s", verb, work_id)
         update(work_id, status="failed", stage="",
                error=f"無法解析這份文件：{e}")
         actions.problem("上傳履歷「%s」失敗：檔案無法解析", filename)
@@ -239,8 +240,7 @@ def analyze(filename: str, content: bytes) -> str:
         # 視覺版看不到版面就退化成一般文字模型，不如走本來就不看圖的那條路
         log.warning("模型沒掛視覺投影檔，這份改用 classic")
         engine = "classic"
-    log.info("上傳 %s (%.1f KB) job=%s engine=%s",
-             filename, len(content) / 1024, job_id, engine)
+    log.info("上傳 %.1f KB job=%s engine=%s", len(content) / 1024, job_id, engine)
     db.create_job(job_id, filename, status="processing", engine=engine)
     worker = _vlm_worker if engine == "vlm" else _analyze_worker
     threading.Thread(target=worker, args=(job_id, filename), daemon=True).start()
@@ -488,7 +488,7 @@ def analyze_import(filename: str, content: bytes) -> Dict[str, Any]:
     模型讀一份履歷要幾分鐘，同步請求會讓切頁的使用者丟失結果）。"""
     import_id = uuid.uuid4().hex[:12]
     _save_upload(import_id, content, ".pdf" if filename.lower().endswith(".pdf") else ".docx")
-    log.info("匯入上傳 %s (%.1f KB) import=%s", filename, len(content) / 1024, import_id)
+    log.info("匯入上傳 %.1f KB import=%s", len(content) / 1024, import_id)
     db.create_import(import_id, filename)
     threading.Thread(target=_import_worker, args=(import_id, filename),
                      daemon=True).start()
