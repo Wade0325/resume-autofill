@@ -132,6 +132,12 @@ _CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'
         "form-action 'self'; frame-ancestors 'none'")
 if _DIST.is_dir():
     app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="assets")
+    # dist 裡其他檔案（favicon.svg 這類）啟動時列好，網址只拿來查表、不拿來組路徑：
+    # uvicorn 會把 %2f、%5c 解成斜線，「..%2f..%2fdata/app.db」組出來就跑出 dist，
+    # 整份個人資料庫都拿得到；「%5C%5C主機%5C分享」光是查它存不存在，Windows 就會
+    # 連到那台機器（SMB）交出登入雜湊——而任何網頁放一張 <img> 就能叫瀏覽器送這種請求
+    _DIST_FILES = {p.relative_to(_DIST).as_posix(): p for p in _DIST.rglob("*")
+                   if p.is_file() and p.relative_to(_DIST).parts[0] != "assets"}
 
     @app.get("/{path:path}", include_in_schema=False)
     def spa(path: str):
@@ -139,16 +145,7 @@ if _DIST.is_dir():
         交給前端接手，否則直接輸入網址或按重整就會 404。"""
         if path.startswith("api/"):
             raise HTTPException(404, "找不到這個 API 端點")
-        # uvicorn 會把 %2f、%5c 解成斜線，「..%2f..%2fdata/app.db」接在 dist 後面
-        # 就跑出去了——整份個人資料庫都拿得到。只回 dist 裡面的檔案，其餘交給前端
-        if path:
-            try:
-                candidate = (_DIST / path).resolve()
-                inside = candidate.is_relative_to(_DIST) and candidate.is_file()
-            except (OSError, ValueError):     # 網址裡夾著 NUL 之類組不成路徑的字元
-                inside = False
-            if inside:
-                return FileResponse(candidate, headers={"Content-Security-Policy": _CSP})
-        return FileResponse(_DIST / "index.html", headers={"Content-Security-Policy": _CSP})
+        found = _DIST_FILES.get(path, _DIST / "index.html")
+        return FileResponse(found, headers={"Content-Security-Policy": _CSP})
 
     log.info("前端靜態檔已掛載 path=%s", _DIST)
