@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useBlocker, useLocation } from 'react-router-dom'
 import { api, errorText, type FieldSpec, type Profile } from '../api'
 import { SECTIONS, type Section } from '../sections'
 import Field from '../components/Field'
 import RepeatList from '../components/RepeatList'
 import { isImpossibleDate } from '../components/DateSelect'
 import { ErrorBox } from '../components/common'
+import { TABS } from '../components/Layout'
 
 export default function ProfilePage() {
   const [fields, setFields] = useState<FieldSpec[]>([])
@@ -92,13 +93,31 @@ export default function ProfilePage() {
   }
 
   async function discardThenSwitch() {
-    // 從伺服器重讀，否則切回來時還會看到已被放棄的編輯內容
-    const fresh = await api.getProfile().catch(() => profile)
-    setProfile(fresh)
-    setDirty(false)
-    setActive(pending!)
-    setPending(null)
+    // 從伺服器重讀，否則切回來時還會看到已被放棄的編輯內容。
+    // 讀不回來就不能假裝放棄成功：以前會留著剛放棄的內容卻標成已存，下次存檔就寫回去了
+    try {
+      setProfile(await api.getProfile())
+      setDirty(false)
+      setActive(pending!)
+    } catch (e: any) {
+      setError(errorText(e))
+    } finally {
+      setPending(null)
+    }
   }
+
+  // 有未存的變更時攔住離開：換頁（上方分頁、瀏覽器上一頁）跳同一個對話框，
+  // 重新整理或關掉分頁交給瀏覽器問一聲。以前只有切換主題會攔，其他都是默默丟掉
+  const blocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      dirty && currentLocation.pathname !== nextLocation.pathname,
+  )
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault()
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
 
   const section = SECTIONS.find((s) => s.id === active)!
   const total = useMemo(() => countFilled(fields, profile), [fields, profile])
@@ -190,6 +209,20 @@ export default function ProfilePage() {
           onSave={saveThenSwitch}
           onDiscard={discardThenSwitch}
           onCancel={() => setPending(null)}
+        />
+      )}
+
+      {blocker.state === 'blocked' && (
+        <UnsavedDialog
+          from={section.title}
+          to={TABS.find((t) => t.to === blocker.location.pathname)?.label ?? '其他頁面'}
+          saving={saving}
+          canSave={!badDate}
+          onSave={async () => {
+            if (await save()) blocker.proceed()
+          }}
+          onDiscard={() => blocker.proceed()}
+          onCancel={() => blocker.reset()}
         />
       )}
     </div>

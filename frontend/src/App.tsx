@@ -1,20 +1,23 @@
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, createBrowserRouter } from 'react-router-dom'
 import Layout from './components/Layout'
 import ProfilePage from './pages/ProfilePage'
 import FillPage from './pages/FillPage'
 import ImportPage from './pages/ImportPage'
 import LogPage from './pages/LogPage'
 
-export default function App() {
-  return (
-    <Routes>
-      <Route element={<Layout />}>
-        <Route path="/" element={<Navigate to="/profile" replace />} />
-        <Route path="/profile" element={<ProfilePage />} />
-        <Route path="/fill" element={<FillPage />} />
-        <Route path="/import" element={<ImportPage />} />
-        <Route path="/logs" element={<LogPage />} />
-      </Route>
-    </Routes>
-  )
-}
+// 用 data router（不是 <BrowserRouter>）：「我的資料」有未存的變更時，
+// 要靠 useBlocker 攔住換頁——點上方分頁、按瀏覽器上一頁都算
+export const router = createBrowserRouter([
+  {
+    element: <Layout />,
+    children: [
+      { path: '/', element: <Navigate to="/profile" replace /> },
+      { path: '/profile', element: <ProfilePage /> },
+      { path: '/fill', element: <FillPage /> },
+      { path: '/import', element: <ImportPage /> },
+      { path: '/logs', element: <LogPage /> },
+      // 打錯的網址回到首頁，不要掉進 React Router 內建的錯誤畫面
+      { path: '*', element: <Navigate to="/profile" replace /> },
+    ],
+  },
+])
