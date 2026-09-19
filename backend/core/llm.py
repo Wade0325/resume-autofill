@@ -9,9 +9,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 import time
 from contextlib import nullcontext
-from typing import Any, Dict, List, Union
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
 import requests
 
@@ -19,6 +21,34 @@ log = logging.getLogger(__name__)
 
 HEALTH_TIMEOUT = 0.5   # localhost 服務活著就是毫秒級回應
 CALL_TIMEOUT = 600
+
+# llama-server 預設對所有網站開放 CORS、又不驗身分：任何網頁都能叫它讀 /slots、借 GPU
+# 跑推論。後端啟動它時帶 --api-key-file（model_manager），這裡的呼叫帶上同一把金鑰。
+# /health 是公開的不必帶；手動啟動、沒設金鑰的 server 收到金鑰標頭也照常回應
+_KEY: Optional[str] = None
+
+
+def key_file() -> Path:
+    """金鑰檔的位置，跟 config.HOME 同一套規則（core 不引用 config）——
+    研究迴圈直接呼叫 filler，也要找得到產品後端啟動的那個 server 的金鑰。"""
+    root = Path(os.environ.get("RESUME_AUTOFILL_ROOT", Path(__file__).resolve().parents[2]))
+    return Path(os.environ.get("RESUME_AUTOFILL_HOME", root / "data")) / "llm.key"
+
+
+def ensure_key() -> Path:
+    """啟動 llama-server 前呼叫：金鑰檔不在就產生一把，回傳檔案位置。"""
+    path = key_file()
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(secrets.token_urlsafe(32) + "\n", encoding="ascii")
+    return path
+
+
+def _auth() -> Dict[str, str]:
+    global _KEY
+    if _KEY is None and key_file().exists():
+        _KEY = key_file().read_text(encoding="ascii").strip()
+    return {"Authorization": f"Bearer {_KEY}"} if _KEY else {}
 
 
 _LANGFUSE: Any = False    # False＝還沒初始化，None＝確定不啟用
@@ -75,7 +105,7 @@ def supports_vision(host: str) -> bool:
     也不要把圖片丟給一個看不懂的服務。
     """
     try:
-        props = requests.get(f"{host}/props", timeout=HEALTH_TIMEOUT).json()
+        props = requests.get(f"{host}/props", headers=_auth(), timeout=HEALTH_TIMEOUT).json()
         return bool(props.get("modalities", {}).get("vision"))
     except Exception:
         return False
@@ -130,7 +160,10 @@ def ask(host: str, system: str, user: UserContent, schema: Dict[str, Any],
     t0 = time.perf_counter()
     with traced as generation:
         try:
-            r = requests.post(f"{host}/v1/chat/completions", json=payload, timeout=CALL_TIMEOUT)
+            r = requests.post(f"{host}/v1/chat/completions", json=payload, headers=_auth(),
+                              timeout=CALL_TIMEOUT)
+            if r.status_code == 401:
+                raise LlmUnavailable("模型服務的金鑰對不上，請從右上角的模型選單重新啟動模型")
             r.raise_for_status()
         except requests.RequestException as e:
             raise LlmUnavailable(f"模型服務無法連線（{host}）：{e}") from e

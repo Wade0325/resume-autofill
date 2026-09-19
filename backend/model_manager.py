@@ -137,6 +137,8 @@ def _switch(name: str, gguf: Path) -> None:
         mmproj = _mmproj_path(name)
         if mmproj.exists():
             args += ["--mmproj", str(mmproj)]
+        # 金鑰從檔案讀（不放命令列）：沒有它，瀏覽器裡的任何網頁都能呼叫這個推論服務
+        args += ["--api-key-file", str(llm.ensure_key())]
         # log 導到獨立檔案：llama-server 的輸出量大且格式不同，混進 app.log 會淹掉一切
         out = (config.LOG_DIR / "llama-server.log").open("w", encoding="utf-8", errors="replace")
         subprocess.Popen(
