@@ -19,6 +19,26 @@ BACKUP_COUNT = 5
 
 request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
 
+# str.splitlines() 認得的所有換行字元。日誌頁一行當一筆紀錄解析，訊息裡夾著任何一種，
+# 後半段就能假裝成另一筆——任何網頁叫瀏覽器 GET http://127.0.0.1:8090/%0A<偽造的一行>，
+# 請求 log 裡的路徑就帶著換行，日誌頁上多出一筆「請到某網址下載更新」
+_LINE_BREAKS = {"\n": "\\n", "\r": "\\r", "\v": "\\v", "\f": "\\f", "\x1c": "\\x1c",
+                "\x1d": "\\x1d", "\x1e": "\\x1e", "\x85": "\\x85", " ": "\\u2028",
+                " ": "\\u2029"}
+_ESCAPE = str.maketrans(_LINE_BREAKS)
+
+
+class OneRecordPerLine(logging.Formatter):
+    """一筆紀錄的開頭永遠只佔一行：訊息裡的換行換成看得見的跳脫字。
+    例外的 traceback 照舊多行，但後續行一律縮排，不可能被當成新的一筆。"""
+
+    def formatMessage(self, record: logging.LogRecord) -> str:
+        record.message = record.message.translate(_ESCAPE)
+        return super().formatMessage(record)
+
+    def format(self, record: logging.LogRecord) -> str:
+        return "\n  ".join(super().format(record).splitlines())
+
 
 class RequestIdFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
@@ -28,7 +48,7 @@ class RequestIdFilter(logging.Filter):
 
 def setup_logging(log_dir: Path, level: str = "INFO") -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
-    formatter = logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT)
+    formatter = OneRecordPerLine(LOG_FORMAT, datefmt=DATE_FORMAT)
     id_filter = RequestIdFilter()
 
     # Windows 主控台預設 cp950，中文會變亂碼。檔案 handler 另外指定 utf-8。
