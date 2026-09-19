@@ -861,9 +861,10 @@ def _marker_after(text: str, end: int) -> str:
 def _split_by_markers(value: str, markers: List[str]) -> List[str]:
     """把一個值照單位切開：「1998年03月25日」＋［年,月,日］→［1998, 3, 25］。
 
-    每一段取單位前面最後一組數字：「2026 年 8 月 24日」只照［月,日］切時，
+    每一段取單位前面最後一個數：「2026 年 8 月 24日」只照［月,日］切時，
     月那一段是「2026 年 8」，要的是 8——表格沒印年，年份就不寫。
-    前導零拿掉，人寫「3 月」不寫「03 月」。
+    數要取完整的：「75,000元」是 75,000、「170.5公分」是 170.5（以前只取最後一組
+    數字，分別剩下 0 與 5）。整數的前導零拿掉，人寫「3 月」不寫「03 月」。
 
     切完必須剛好用完整個值，剩下尾巴就算失敗——「1998年03月25日」只照［年,月］
     切得出 1998、3，但 25 日沒地方去，那就不是這個值該去的地方。
@@ -873,8 +874,11 @@ def _split_by_markers(value: str, markers: List[str]) -> List[str]:
         idx = value.find(marker, cursor)
         if idx < 0:
             return []
-        nums = re.findall(r"\d+", value[cursor:idx])
-        parts.append((nums[-1].lstrip("0") or "0") if nums else value[cursor:idx].strip())
+        nums = re.findall(r"\d[\d,]*(?:\.\d+)?", value[cursor:idx])
+        num = nums[-1].rstrip(",") if nums else ""
+        if num.isdigit():
+            num = num.lstrip("0") or "0"
+        parts.append(num or value[cursor:idx].strip())
         cursor = idx + len(marker)
     return parts if all(parts) and not value[cursor:].strip() else []
 
