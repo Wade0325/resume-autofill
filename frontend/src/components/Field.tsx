@@ -58,10 +58,14 @@ function renderInput(spec: FieldSpec, value: string, onChange: (v: string) => vo
         <input
           className={`${INPUT_CLASS} pl-11`}
           type="text"
-          inputMode="numeric"
           value={value}
           placeholder="60,000"
-          onChange={(e) => onChange(formatMoney(e.target.value))}
+          onChange={(e) => onChange(e.target.value)}
+          // 離開欄位才整理千分位：邊打邊改，游標會一直跳到最後
+          onBlur={(e) => {
+            const tidy = formatMoney(e.target.value)
+            if (tidy !== e.target.value) onChange(tidy)
+          }}
         />
       </div>
     )
@@ -77,9 +81,17 @@ function renderInput(spec: FieldSpec, value: string, onChange: (v: string) => vo
   )
 }
 
-/** 只留數字並加上千分位。存進 profile 的就是這個字串，會原樣填進履歷。 */
+/**
+ * 金額裡的數字加上千分位，其他字原樣：「40000~50000」→「40,000~50,000」，
+ * 「依公司規定」「面議」不動。存進 profile 的就是這個字串，會原樣填進履歷。
+ * 以前是把非數字全部剝掉：「40,000~50,000」變成「4,000,050,000」、「依公司規定」變成空白。
+ * 四位以上、不是 0 開頭的整數才整理——小數點後面、「0912」這種不動。
+ */
 function formatMoney(raw: string): string {
-  const digits = raw.replace(/\D/g, '')
-  if (!digits) return ''
-  return Number(digits).toLocaleString('en-US')
+  return raw.replace(/(?<![\d.])\d+(?:,\d+)*/g, (m) => {
+    const digits = m.replace(/,/g, '')
+    return digits.length >= 4 && !digits.startsWith('0')
+      ? Number(digits).toLocaleString('en-US')
+      : m
+  })
 }
