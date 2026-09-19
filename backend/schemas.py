@@ -103,6 +103,13 @@ class ImportApplyOut(BaseModel):
     changed: List[str] = []           # 實際寫到的「欄位代碼#第幾筆」，我的資料頁拿來標示
 
 
+class ProfileVersionOut(BaseModel):
+    id: int
+    reason: str                       # 被什麼換掉：save | import | restore | file
+    created_at: str
+    changed: int                      # 跟現在的我的資料相比有幾個欄位不一樣
+
+
 class LogEntry(BaseModel):
     time: str                         # 年月日時分秒
     level: str

@@ -7,6 +7,7 @@ import RepeatList from '../components/RepeatList'
 import { isImpossibleDate } from '../components/DateSelect'
 import { ErrorBox } from '../components/common'
 import { TABS } from '../components/Layout'
+import ProfileBackup from '../components/ProfileBackup'
 
 export default function ProfilePage() {
   const [fields, setFields] = useState<FieldSpec[]>([])
@@ -16,6 +17,7 @@ export default function ProfilePage() {
   const [pending, setPending] = useState<string | null>(null) // 想切去、但被未儲存變更擋住的主題
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('') // 還原成功之類的提示，開始編輯就收掉
   const location = useLocation()
 
   // 剛從匯入頁跳過來時要高亮被改動的欄位。格式是「欄位代碼#序號」，
@@ -59,6 +61,16 @@ export default function ProfilePage() {
     setDirty(true)
     // 開始編輯就代表使用者看到了，提示可以收掉
     if (highlighted.size > 0) setHighlighted(new Set())
+    setNotice('')
+  }
+
+  // 還原是後端直接換掉整份資料，畫面照回傳的內容重來；沒存的修改在確認時已講明會捨棄
+  function restored(next: Profile, message: string) {
+    setProfile(next)
+    setDirty(false)
+    setError('')
+    setHighlighted(new Set())
+    setNotice(message)
   }
 
   async function save() {
@@ -136,6 +148,15 @@ export default function ProfilePage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <ProfileBackup
+            dirty={dirty}
+            onRestored={restored}
+            onError={(message) => {
+              setNotice('')
+              setError(message)
+            }}
+          />
+          <span className="w-px h-6 bg-slate-200" />
           {dirty && <span className="text-sm text-amber-600">有未儲存的變更</span>}
           <button
             onClick={save}
@@ -149,6 +170,11 @@ export default function ProfilePage() {
       </div>
 
       {error && <ErrorBox message={error} />}
+      {notice && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-md px-4 py-3 text-sm">
+          {notice}。改錯了可以從「版本紀錄」還原回去。
+        </div>
+      )}
 
       <div className="grid grid-cols-[13rem_1fr] gap-8 items-start">
         <nav className="sticky top-6 space-y-1">

@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import actions, config, db
+from . import actions, config, db, profiles
 from .core import convert, document, filler, llm, planner, reader, writer
 from .core.document import Slot
 from .core.schema import BY_KEY
@@ -651,7 +651,7 @@ def apply_import(import_id: str, row_ids: List[str]) -> Optional[List[str]]:
         ordinal = remap.get((_list_root(row.field_key), row.ordinal), row.ordinal)
         planner.set_value(profile, row.field_key, row.incoming, ordinal)
         changed.append(f"{row.field_key}#{ordinal}")
-    db.put_kv("profile", profile)
+    profiles.save(profile, "import")
 
     # 只記欄位代碼——incoming 全是個資
     log.info("匯入寫入 選取=%d 欄位=%s", len(changed),

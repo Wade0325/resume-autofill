@@ -56,7 +56,16 @@ CREATE TABLE IF NOT EXISTS import_job (
     error      TEXT NOT NULL DEFAULT '',        -- failed 時給使用者看的原因
     created_at TEXT NOT NULL
 );
+-- 我的資料被換掉之前的樣子：存檔、匯入、還原前各留一份，只留最近 KEEP_VERSIONS 份
+CREATE TABLE IF NOT EXISTS profile_version (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    value      TEXT NOT NULL,
+    reason     TEXT NOT NULL,   -- 被什麼換掉：save | import | restore | file
+    created_at TEXT NOT NULL
+);
 """
+
+KEEP_VERSIONS = 30
 
 
 def _now() -> str:
@@ -74,24 +83,43 @@ def connect() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def _add_column(conn: sqlite3.Connection, table: str, column: str) -> None:
+    """已經有這一欄就不動。以前是加了再吞掉錯誤，連「資料庫被鎖住」都一起吞了。"""
+    name = column.split()[0]
+    if name not in {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
+
+
+def _v1(conn: sqlite3.Connection) -> None:
+    # 舊資料庫補欄位（SCHEMA 的 IF NOT EXISTS 不會改舊表）。
+    # import_job 的 status 預設 ready：舊資料列都是同步時代分析完才寫入的
+    for table, column in (("job", "stage TEXT NOT NULL DEFAULT ''"),
+                          ("job", "error TEXT NOT NULL DEFAULT ''"),
+                          ("job", "form_fields TEXT NOT NULL DEFAULT '[]'"),
+                          ("job", "engine TEXT NOT NULL DEFAULT 'classic'"),
+                          ("import_job", "status TEXT NOT NULL DEFAULT 'ready'"),
+                          ("import_job", "stage TEXT NOT NULL DEFAULT ''"),
+                          ("import_job", "error TEXT NOT NULL DEFAULT ''")):
+        _add_column(conn, table, column)
+
+
+# 資料庫版本記在 PRAGMA user_version：第 n 步做完就記成 n，下次從沒做過的那步接著做。
+# 新表寫在 SCHEMA 就好；改舊表（加欄位、搬資料）才要在這裡加一步，已經發出去的步驟不要改
+MIGRATIONS = [_v1]
+
+
 def init() -> None:
     config.ensure_dirs()
     with connect() as conn:
         conn.executescript(SCHEMA)
         conn.execute("PRAGMA journal_mode=WAL")
-        # 既有資料庫補欄位（SQLite 的 IF NOT EXISTS 不會改舊表）。
-        # import_job 的 status 預設 ready：舊資料列都是同步時代分析完才寫入的
-        for ddl in ("ALTER TABLE job ADD COLUMN stage TEXT NOT NULL DEFAULT ''",
-                    "ALTER TABLE job ADD COLUMN error TEXT NOT NULL DEFAULT ''",
-                    "ALTER TABLE job ADD COLUMN form_fields TEXT NOT NULL DEFAULT '[]'",
-                    "ALTER TABLE job ADD COLUMN engine TEXT NOT NULL DEFAULT 'classic'",
-                    "ALTER TABLE import_job ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'",
-                    "ALTER TABLE import_job ADD COLUMN stage TEXT NOT NULL DEFAULT ''",
-                    "ALTER TABLE import_job ADD COLUMN error TEXT NOT NULL DEFAULT ''"):
-            try:
-                conn.execute(ddl)
-            except sqlite3.OperationalError:
-                pass   # 欄位已存在
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version > len(MIGRATIONS):
+            log.warning("資料庫版本 %d 比程式認得的 %d 新，可能是新版程式建的", version, len(MIGRATIONS))
+        for n, step in enumerate(MIGRATIONS[version:], start=version + 1):
+            step(conn)
+            conn.execute(f"PRAGMA user_version = {n}")
+            log.info("資料庫升級到第 %d 版", n)
     log.info("資料庫就緒 path=%s", config.DB_PATH)
 
 
@@ -108,6 +136,47 @@ def put_kv(key: str, value: Any) -> None:
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
             "updated_at = excluded.updated_at",
             (key, json.dumps(value, ensure_ascii=False), _now()))
+
+
+def put_profile(value: Dict[str, Any], reason: str) -> bool:
+    """寫入我的資料，被換掉的那份先留一個版本；回傳有沒有留。
+    讀舊值、留版本、寫新值在同一個交易裡：兩邊同時存檔時不會漏留或留錯"""
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT value FROM kv WHERE key = 'profile'").fetchone()
+        old = json.loads(row["value"]) if row else None
+        last = conn.execute(
+            "SELECT value FROM profile_version ORDER BY id DESC LIMIT 1").fetchone()
+        # 空的、沒變的、跟最近一版一樣的都不必再留
+        kept = bool(old) and old != value and (not last or json.loads(last["value"]) != old)
+        if kept:
+            conn.execute(
+                "INSERT INTO profile_version (value, reason, created_at) VALUES (?, ?, ?)",
+                (json.dumps(old, ensure_ascii=False), reason, _now()))
+            conn.execute(
+                "DELETE FROM profile_version WHERE id NOT IN "
+                "(SELECT id FROM profile_version ORDER BY id DESC LIMIT ?)", (KEEP_VERSIONS,))
+        conn.execute(
+            "INSERT INTO kv (key, value, updated_at) VALUES ('profile', ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+            "updated_at = excluded.updated_at",
+            (json.dumps(value, ensure_ascii=False), _now()))
+    return kept
+
+
+def list_profile_versions() -> List[Dict[str, Any]]:
+    """新的在前。"""
+    with connect() as conn:
+        rows = conn.execute("SELECT id, value, reason, created_at FROM profile_version "
+                            "ORDER BY id DESC").fetchall()
+    return [{**dict(r), "value": json.loads(r["value"])} for r in rows]
+
+
+def get_profile_version(version_id: int) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute("SELECT value FROM profile_version WHERE id = ?",
+                           (version_id,)).fetchone()
+    return json.loads(row["value"]) if row else None
 
 
 def get_template(fingerprint: str) -> Dict[str, str]:

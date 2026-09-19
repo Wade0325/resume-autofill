@@ -93,6 +93,14 @@ export type ModelsOut = {
 
 export type Profile = Record<string, any>
 
+// 我的資料被換掉之前留的版本。reason 是被什麼換掉：save | import | restore | file
+export type ProfileVersion = {
+  id: number
+  reason: string
+  created_at: string
+  changed: number // 跟現在相比有幾個欄位不一樣
+}
+
 /** 後端錯誤一律帶 X-Request-Id，附在訊息裡才對得到 log。 */
 class ApiError extends Error {
   requestId: string
@@ -191,6 +199,10 @@ export const api = {
 
   getProfile: () => request<Profile>('/profile'),
   saveProfile: (profile: Profile) => putJson<{ ok: boolean }>('/profile', profile),
+  profileVersions: () => request<ProfileVersion[]>('/profile/versions'),
+  restoreVersion: (id: number) => postJson<Profile>(`/profile/versions/${id}/restore`, {}),
+  restoreProfileFile: (data: unknown) => postJson<Profile>('/profile/restore', data),
+  exportProfileUrl: '/api/profile/export',
 
   analyze: (file: File, onProgress?: (pct: number) => void) =>
     upload<{ job_id: string; status: string; filename: string }>('/jobs', file, onProgress),
