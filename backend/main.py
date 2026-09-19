@@ -7,10 +7,12 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import config, db
 from .api import imports, jobs, logs, meta, models, profile
@@ -46,6 +48,28 @@ app = FastAPI(title="Resume AutoFill", version="0.1.0", lifespan=lifespan)
 # GET /api/imports/{id}）也算——上傳與完成事件另有自己的 log，不會因此消失
 POLLED_PATHS = {"/api/models", "/api/logs"}
 POLL_RE = re.compile(r"^/api/(jobs|imports)/[^/]+$")
+
+# 服務只綁 127.0.0.1，但瀏覽器裡的任何網頁都連得到它。以下兩層擋的是「別的網站借你的瀏覽器」：
+# 1. Host 只收本機名稱——DNS rebinding 的網頁把自己的網域解析到 127.0.0.1，
+#    Host 標頭仍是它的網域，擋掉就讀不到 /api/profile
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
+
+
+@app.middleware("http")
+async def same_origin_writes(request: Request, call_next):
+    """2. 會改東西的請求只收本機介面發的。
+
+    multipart 上傳不觸發 CORS 預檢，任何網站都能叫瀏覽器往這裡送檔案、改資料。
+    瀏覽器送這類請求一定帶 Origin，跟 Host 對不上就是別的網站發的。
+    沒帶 Origin 的（curl、測試程式）不是瀏覽器，不會被別的網站借用，照常放行。
+    開發時 Vite proxy 不改 Host，頁面與 Host 都是 localhost:5177，一樣對得上。
+    """
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        origin = request.headers.get("origin")
+        if origin is not None and urlparse(origin).netloc.lower() != request.headers.get(
+                "host", "").lower():
+            return JSONResponse(status_code=403, content={"detail": "只接受本機介面發出的請求"})
+    return await call_next(request)
 
 
 @app.middleware("http")
