@@ -90,6 +90,13 @@ def _join_key(field_key: str, ordinal: int) -> str:
     return field_key.replace("[]", f"[{ordinal}]") if "[]" in field_key else field_key
 
 
+def _slot_order(slot_id: str) -> List[Any]:
+    """對映清單照位置排，數字照大小比：直接比字串的話 tbl0.r10 排在 tbl0.r2 前面、
+    c12 排在 c2 前面，使用者對著表格一格一格看時會找不到。
+    切出來一定是「字、數字、字、數字…」交替，同一個位置型別相同，比較不會出錯。"""
+    return [int(t) if i % 2 else t for i, t in enumerate(re.split(r"(\d+)", slot_id))]
+
+
 def _vlm_label(slot: Any) -> str:
     """表格上印在這個位置旁邊的字。左邊欄名優先，沒有就取上面欄名。"""
     return (document.squash(slot.cell.row_head)
@@ -188,7 +195,7 @@ def _vlm_render(job_id: str, filename: str, cached: bool, slots: List[Any],
             field_key=(d.field_key if d else ""), value=value, existing="",
             source=(d.source if d else ""), status="fill" if fill else "skip",
             note=note))
-    items.sort(key=lambda i: i.slot_id)
+    items.sort(key=lambda i: _slot_order(i.slot_id))
     fill = sum(1 for i in items if i.status == "fill")
     return PlanOut(
         job_id=job_id, filename=filename,
@@ -460,7 +467,7 @@ def _render(job_id: str, filename: str, cached: bool, slots: List[Slot],
     ops, skipped = planner.build_plan(slots, db.get_kv("profile") or {}, decisions)
 
     items = [_item(o, "fill") for o in ops] + [_item(s, "skip") for s in skipped]
-    items.sort(key=lambda i: i.slot_id)
+    items.sort(key=lambda i: _slot_order(i.slot_id))
 
     by_source: Dict[str, int] = {}
     for o in ops:
