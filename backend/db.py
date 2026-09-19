@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,6 +17,8 @@ from typing import Any, Dict, Iterator, List, Optional
 from . import config
 
 log = logging.getLogger(__name__)
+
+ORPHAN_GRACE_SECONDS = 600     # 孤兒資料夾要放超過 10 分鐘才清，見 purge_old_jobs
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS kv (
@@ -213,7 +216,7 @@ def get_import(import_id: str) -> Optional[Dict[str, Any]]:
 
 
 def purge_old_jobs(hours: int = config.JOB_RETENTION_HOURS) -> int:
-    """啟動時清掉過期的上傳檔。履歷是個資，不該無限期留在磁碟上。"""
+    """清掉過期的上傳檔（啟動時一次，之後每小時一次）。履歷是個資，不該無限期留在磁碟上。"""
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(timespec="seconds")
     with connect() as conn:
         ids = [r["id"] for table in ("job", "import_job")
@@ -227,11 +230,13 @@ def purge_old_jobs(hours: int = config.JOB_RETENTION_HOURS) -> int:
         _rmtree(config.JOBS_DIR / jid)
 
     # 資料庫查無此人的孤兒資料夾也要掃：紀錄刪了但當時資料夾沒刪成
-    # （檔案被轉檔鎖住之類），之後就再也不會被看見，會永久殘留
+    # （檔案被轉檔鎖住之類），之後就再也不會被看見，會永久殘留。
+    # 剛建立的不算：上傳是先存檔再寫資料庫，清理剛好落在兩步中間會把新上傳的刪掉
     orphans = 0
+    young = time.time() - ORPHAN_GRACE_SECONDS
     if config.JOBS_DIR.exists():
         for path in config.JOBS_DIR.iterdir():
-            if path.is_dir() and path.name not in alive:
+            if path.is_dir() and path.name not in alive and path.stat().st_mtime < young:
                 _rmtree(path)
                 orphans += not path.exists()
     return len(ids) + orphans

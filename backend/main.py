@@ -1,11 +1,12 @@
 """FastAPI 應用組裝。"""
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -20,6 +21,25 @@ from .logging_setup import request_id_var, setup_logging
 
 log = logging.getLogger(__name__)
 
+PURGE_EVERY = 3600   # 秒
+
+
+def _purge() -> None:
+    purged = db.purge_old_jobs()
+    if purged:
+        log.info("已清除 %d 筆過期上傳檔（超過 %d 小時）", purged, config.JOB_RETENTION_HOURS)
+
+
+async def _purge_periodically() -> None:
+    """程式常駐系統匣好幾天也照樣清——README 答應上傳的履歷 24 小時後就刪，
+    以前只在啟動時清一次。刪檔與資料庫都是同步 I/O，丟到執行緒去跑。"""
+    while True:
+        await asyncio.sleep(PURGE_EVERY)
+        try:
+            await asyncio.to_thread(_purge)
+        except Exception:
+            log.exception("定時清理過期上傳檔失敗")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -29,15 +49,17 @@ async def lifespan(app: FastAPI):
     saved_model = db.get_kv("llm_model")
     if saved_model:
         config.LLM_MODEL = saved_model
-    purged = db.purge_old_jobs()
-    if purged:
-        log.info("已清除 %d 筆過期上傳檔（超過 %d 小時）", purged, config.JOB_RETENTION_HOURS)
+    _purge()
     stale = db.fail_stale_jobs()
     if stale:
         log.info("標記 %d 筆被重啟中斷的分析為失敗", stale)
     log.info("服務啟動 http://%s:%d 　推論引擎 %s",
              config.API_HOST, config.API_PORT, config.LLM_HOST)
+    purger = asyncio.create_task(_purge_periodically())
     yield
+    purger.cancel()
+    with suppress(asyncio.CancelledError):
+        await purger
     log.info("服務關閉")
 
 
