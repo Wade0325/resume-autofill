@@ -48,8 +48,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from docx import Document
+from docx.enum.text import WD_COLOR_INDEX
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.table import Table, _Cell
+from docx.text.run import Run
 from PIL import Image, ImageDraw, ImageFont
 
 from . import llm
@@ -938,35 +941,153 @@ def _replacement(slot: Slot, value: str) -> str:
     return value
 
 
-def _set_para(para, text: str) -> None:
-    """整段換成新內容，沿用原本第一個 run 的字型。
-    python-docx 會把換行字元轉成 <w:br/>，看起來一樣是換行。"""
-    if para.runs:
-        para.runs[0].text = text
-        for extra in para.runs[1:]:
-            extra.text = ""
-    elif text:
-        para.add_run(text)
+# para.text 由這幾種元素組成（python-docx 的 CT_R.text），位置要照同一套算法對回去
+_TEXT_TAGS = {qn("w:t"), qn("w:tab"), qn("w:br"), qn("w:cr"), qn("w:noBreakHyphen"),
+              qn("w:ptab")}
+_W_T = qn("w:t")
+# 段落標記的格式裡有、放到 run 上卻不合法的修訂標記
+_PARA_MARK_ONLY = {qn("w:ins"), qn("w:del"), qn("w:moveFrom"), qn("w:moveTo"),
+                   qn("w:rPrChange")}
 
 
-def _set_para_marked(para, parts: List[Tuple[str, bool]]) -> None:
-    """跟 _set_para 寫的字一樣，但把填進去的那幾段標成黃底。
+def _atoms(p) -> List[Tuple[Any, int, int]]:
+    """段落裡的每個文字元素與它在 para.text 的 [起, 訖)。
+    跟 para.text 同一套組法：段落直屬的 run 與超連結裡的 run，照文件順序。"""
+    out, pos = [], 0
+    for r in p.xpath("./w:r | ./w:hyperlink/w:r"):
+        for el in r:
+            if el.tag in _TEXT_TAGS:
+                n = len(str(el))
+                out.append((el, pos, pos + n))
+                pos += n
+    return out
 
-    只給網頁上的左右對照用——要一眼看出值落在哪一格。下載的成品走 _set_para，
-    一個底色都不加：黃底留在成品裡，使用者還得自己去 Word 清掉。
+
+def _new_t(text: str):
+    t = OxmlElement("w:t")
+    t.text = text
+    t.set(qn("xml:space"), "preserve")      # 前後的空白才不會被 Word 吃掉
+    return t
+
+
+def _pieces(text: str) -> List[Any]:
+    """新字換成 run 的子元素：換行 → w:br、Tab → w:tab，其餘是 w:t。"""
+    out = []
+    for piece in re.split(r"(\n|\t)", text):
+        if piece == "\n":
+            out.append(OxmlElement("w:br"))
+        elif piece == "\t":
+            out.append(OxmlElement("w:tab"))
+        elif piece:
+            out.append(_new_t(piece))
+    return out
+
+
+def _twin(r, para, highlight: bool):
+    """同格式的空 run。highlight 標黃底（走 python-docx，rPr 裡的順序才合規定）。"""
+    twin = OxmlElement("w:r")
+    rpr = r.find(qn("w:rPr"))
+    if rpr is not None:
+        twin.append(copy.deepcopy(rpr))
+    if highlight:
+        Run(twin, para).font.highlight_color = WD_COLOR_INDEX.YELLOW
+    return twin
+
+
+def _blank_rpr(p):
+    """空段落要新開 run 時用的格式：跟 Word 一樣沿用段落標記的格式；
+    段落標記沒設，就借同一列有字的 run 的格式（原本標楷體的表格才不會填出新細明體）。"""
+    mark = p.find(f"{qn('w:pPr')}/{qn('w:rPr')}")
+    if mark is not None:
+        rpr = copy.deepcopy(mark)
+        for el in [el for el in rpr if el.tag in _PARA_MARK_ONLY]:
+            rpr.remove(el)
+        return rpr
+    row = next(p.iterancestors(qn("w:tr")), None)
+    for r in (row.iter(qn("w:r")) if row is not None else ()):
+        rpr = r.find(qn("w:rPr"))
+        if rpr is not None and "".join(t.text or "" for t in r.iter(_W_T)).strip():
+            return copy.deepcopy(rpr)
+    return None
+
+
+def _write_changes(para, changes: List[Tuple[int, int, str]], highlight: bool = False) -> None:
+    """把 (起, 訖, 新字) 寫進段落，只動牽涉到的文字，run 裡其他東西原封不動。
+
+    以前是整段塞進第一個 run、其餘 run 清空（python-docx 的 run.text= 連子元素一起清），
+    Wingdings 勾選框（w:sym）、畫出來的方框、功能變數跟著不見，底線與字型也只剩第一個
+    run 的。現在由右往左一段一段換，新字放進原本那個 run、沿用它的格式——底線上的空格
+    填完還是有底線。highlight（網頁預覽）把新字拆成自己的 run 標黃底，其餘不變。
     """
-    template = para.runs[0]._element.find(qn("w:rPr")) if para.runs else None
-    for run in list(para.runs):
-        run._element.getparent().remove(run._element)
-    for text, added in parts:
-        if not text:
+    p = para._p
+    for start, end, rep in sorted(changes, reverse=True):
+        atoms = _atoms(p)
+        if not atoms:                       # 空段落（空白格）：新開一個 run
+            r = OxmlElement("w:r")
+            rpr = _blank_rpr(p)
+            if rpr is not None:
+                r.append(rpr)
+            r.extend(_pieces(rep))
+            p.append(r)
+            if highlight:
+                Run(r, para).font.highlight_color = WD_COLOR_INDEX.YELLOW
             continue
-        run = para.add_run(text)
-        if template is not None:
-            run._element.insert(0, copy.deepcopy(template))
-        if added:
-            props = run._element.get_or_add_rPr()
-            props.append(props.makeelement(qn("w:highlight"), {qn("w:val"): "yellow"}))
+        texts = [a for a in atoms if a[0].tag == _W_T]
+        if start == end:                    # 純插入：優先接在前面那段字的尾巴
+            target = (next((a for a in reversed(texts) if a[2] == start), None)
+                      or next((a for a in texts if a[1] <= start < a[2]), None))
+        else:
+            # 新字放進佔了這段最多字的那個：「民國 ＿＿年」的留白是一個普通空格加四個
+            # 底線空格，放進前面那個空格的 run，數字就不在底線上了
+            target = max((a for a in texts if a[1] < end and a[2] > start),
+                         key=lambda a: min(end, a[2]) - max(start, a[1]), default=None)
+        if target is None:                  # 附近沒有 w:t（前後只有 Tab 之類）：在該處補一個空的
+            before = [a for a in atoms if a[2] <= start]
+            t = _new_t("")
+            if before:
+                before[-1][0].addnext(t)
+            else:
+                atoms[0][0].addprevious(t)
+            target = (t, start, start)
+        # 範圍內其他元素的字拿掉（被換掉的那段字本來就包含它們）
+        for el, s, e in atoms:
+            if el is target[0] or not (s < end and e > start):
+                continue
+            if el.tag == _W_T:
+                a, b = max(start, s) - s, min(end, e) - s
+                el.text = (el.text or "")[:a] + (el.text or "")[b:]
+                if el.text:
+                    el.set(qn("xml:space"), "preserve")
+                else:
+                    el.getparent().remove(el)
+            else:
+                el.getparent().remove(el)
+
+        el, s, e = target
+        text = el.text or ""
+        a, b = max(start, s) - s, min(end, e) - s
+        head, tail = text[:a], text[b:]
+        r = el.getparent()
+        if not highlight:
+            for piece in ([_new_t(head)] if head else []) + _pieces(rep) + (
+                    [_new_t(tail)] if tail else []):
+                el.addprevious(piece)
+            r.remove(el)
+            continue
+        # 預覽：原本的 run 留前半段，新字一個 run（黃底），後半段與後面的元素另一個 run
+        after = list(r)[list(r).index(el) + 1:]
+        if head:
+            el.addprevious(_new_t(head))
+        r.remove(el)
+        mid = _twin(r, para, highlight=True)
+        mid.extend(_pieces(rep))
+        r.addnext(mid)
+        if tail or after:
+            rest = _twin(r, para, highlight=False)
+            if tail:
+                rest.append(_new_t(tail))
+            rest.extend(after)              # 搬過去，順序不變
+            mid.addnext(rest)
 
 
 def _roc(text: str, slot: Slot, part: str, marker: str) -> str:
@@ -1420,18 +1541,16 @@ def apply_fills(slots: List[Slot], chosen: Dict[str, str], fields: Dict[str, str
                 written += 1
                 log.debug("寫 %-18s %-26s %s", slot.id, chosen.get(slot.id),
                           reps[slot.id].replace("\n", "↵")[:40])
-        # 由左而右串起來：原本的字、填進去的字、原本的字…。位置彼此不重疊，
-        # 所以串出來的結果跟由右往左逐一替換是一樣的，但這樣才分得出哪幾段是新的
-        text, parts, cursor = texts[group[0].id], [], 0
-        for start, end, rep in sorted(changes):
-            parts += [(text[cursor:start], False), (rep, True)]
-            cursor = end
-        parts.append((text[cursor:], False))
         para = group[0].cell.paras[pi]
-        if highlight:
-            _set_para_marked(para, parts)
-        else:
-            _set_para(para, "".join(t for t, _ in parts))
+        _write_changes(para, changes, highlight)
+        # 位置彼此不重疊，寫完的字應該正好是「原本的字依序換掉這幾段」。
+        # 對不上表示位置對回 run 時算錯了——只記格子代碼，不記值
+        text, expect, cursor = texts[group[0].id], [], 0
+        for start, end, rep in sorted(changes):
+            expect += [text[cursor:start], rep]
+            cursor = end
+        if para.text != "".join(expect) + text[cursor:]:
+            log.warning("段落寫完的字跟預期不同 %s", group[0].id)
     return written
 
 
