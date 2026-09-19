@@ -980,7 +980,9 @@ def _area_code(slot: Slot, value: str) -> str:
 
 def _replacement(slot: Slot, value: str) -> str:
     if slot.kind == "box":
-        return CHECKED if _ticked(slot.option, value) else ""
+        # 沒有模型判斷過的勾（或資料改了、舊的勾不算數）時才走到這裡：字面加同義詞表，
+        # 「有」對「□是」、「無」對「□否」——以前只比字面，答案改了就兩個都不勾
+        return CHECKED if _synonym_hit(slot.option, value) else ""
     text = slot.cell.paras[slot.para].text if slot.cell else ""
     value = _roc_value(slot, text, value)
     if slot.kind == "line":

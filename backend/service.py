@@ -4,6 +4,7 @@ API 層只管 HTTP，core 只管演算法，順序寫在這裡。
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import tempfile
@@ -115,14 +116,51 @@ def _vlm_label(slot: Any) -> str:
             or document.squash(slot.cell.col_head))[:40]
 
 
+def _tick_basis(value: str) -> str:
+    """勾選是對著哪個值判斷的：存值的雜湊、不存值本身。"""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16] if value else ""
+
+
+def _values_for(decisions: Dict[str, planner.Decision],
+                profile: Dict[str, Any]) -> Dict[str, str]:
+    """每一格目前對到的值（跟 filler 寫的時候同一份攤平）。"""
+    values = filler.fields_of(profile)
+    return {sid: values.get(_join_key(d.field_key, d.ordinal), "")
+            for sid, d in decisions.items() if d.field_key and d.field_key not in _NOT_FILLED}
+
+
+def _live_ticks(recorded: Dict[str, Tuple[bool, Optional[str]]],
+                decisions: Dict[str, planner.Decision],
+                profile: Dict[str, Any]) -> Dict[str, bool]:
+    """模型判斷過的勾，只留還算數的：當初判斷用的值跟現在一樣。
+
+    勾選題「資料『無』對『□否』」是模型的語意判斷，學過的格式把它存下來重用；可是
+    我的資料改了（未婚改已婚、聲明事項改答案），照舊勾就勾錯了。對不上的交回 filler 照
+    字面與同義詞判斷——勾錯比留白糟。沒記依據的（這個機制之前學的格式）照舊沿用，
+    下次下載時補記。沒對到欄位的格子（手動改成不填）不留勾。
+    """
+    now = _values_for(decisions, profile)
+    return {sid: tick for sid, (tick, basis) in recorded.items()
+            if sid in now and (basis is None or basis == _tick_basis(now[sid]))}
+
+
+def _vlm_anchors(slots: List[Any], decisions: Dict[str, planner.Decision],
+                 ticks: Dict[str, bool], profile: Dict[str, Any]) -> List[Dict[str, Any]]:
+    now = _values_for(decisions, profile)
+    return [{"id": s.id, "kind": s.kind, "label": _vlm_label(s), "tick": ticks.get(s.id),
+             "basis": _tick_basis(now.get(s.id, "")) if s.id in ticks else None}
+            for s in slots]
+
+
 def _vlm_restore(job: Dict[str, Any]) -> Tuple[List[Any], Dict[str, planner.Decision],
                                                Dict[str, bool]]:
     """vlm 的位置牽著 python-docx 的段落物件，存不進資料庫——照原檔重新解析一次。
     解析純粹是程式，同一份文件跑幾次結果都一樣，約 0.2 秒。"""
     _doc, _form, slots = filler.parse(input_path(job["id"]))
     decisions = {k: planner.Decision(*v) for k, v in job["decided"].items()}
-    ticks = {a["id"]: a["tick"] for a in job["anchors"] if a.get("tick") is not None}
-    return slots, decisions, ticks
+    recorded = {a["id"]: (a["tick"], a.get("basis"))
+                for a in job["anchors"] if a.get("tick") is not None}
+    return slots, decisions, _live_ticks(recorded, decisions, db.get_kv("profile") or {})
 
 
 def _vlm_assignment(decisions: Dict[str, planner.Decision]) -> Dict[str, str]:
@@ -142,17 +180,17 @@ def _vlm_worker(job_id: str, filename: str) -> None:
         log.info("解析完成 位置=%d fingerprint=%s 範本快取=%s",
                  len(slots), fp, "命中" if cached else "未命中")
 
+        profile = db.get_kv("profile") or {}
         if cached:
             db.update_job(job_id, stage="套用已學過的格式")
             decisions = {sid: planner.Decision(m["field_key"], m.get("ordinal", 0),
                                                "cache", m.get("label", ""))
                          for sid, m in cached.items()}
-            ticks = {sid: m["tick"] for sid, m in cached.items()
-                     if m.get("tick") is not None}
+            ticks = _live_ticks({sid: (m["tick"], m.get("basis")) for sid, m in cached.items()
+                                 if m.get("tick") is not None}, decisions, profile)
         else:
             db.update_job(job_id, stage="模型看版面判讀每一格")
-            draft = filler.analyze(src, db.get_kv("profile") or {},
-                                   config.LLM_HOST, config.LLM_MODEL)
+            draft = filler.analyze(src, profile, config.LLM_HOST, config.LLM_MODEL)
             by_id = {s.id: s for s in draft.slots}
             decisions = {}
             for sid, key in draft.assignment.items():
@@ -162,8 +200,7 @@ def _vlm_worker(job_id: str, filename: str) -> None:
             ticks = draft.ticks
 
         db.update_job(job_id, fingerprint=fp,
-                      anchors=[{"id": s.id, "kind": s.kind, "label": _vlm_label(s),
-                                "tick": ticks.get(s.id)} for s in slots],
+                      anchors=_vlm_anchors(slots, decisions, ticks, profile),
                       decided={k: list(v) for k, v in decisions.items()},
                       status="analyzed", stage="")
 
@@ -431,6 +468,12 @@ def apply_fixes(job_id: str,
     db.update_job(job_id, decided={k: list(v) for k, v in decisions.items()})
     cached = bool(db.get_template(job["fingerprint"]))
     if vlm:
+        # 使用者改過的格子不沿用模型當初的勾：改成不填就不勾，改成別的欄位就照
+        # 那個欄位的值字面判斷（以前舊的勾照樣套用，改了也勾著）
+        for slot_id, _key, _ordinal in fixes:
+            ticks.pop(slot_id, None)
+        db.update_job(job_id, anchors=_vlm_anchors(slots, decisions, ticks,
+                                                   db.get_kv("profile") or {}))
         return _vlm_render(job_id, job["filename"], cached, slots, decisions, ticks)
     return _render(job_id, job["filename"], cached, slots, decisions,
                    job.get("form_fields"))
@@ -466,10 +509,13 @@ def write_output(job_id: str) -> Optional[Dict[str, Any]]:
 
     # 記住這次的決策，同一份表格下次完全不必問模型。
     # 連略過的位置也要記，否則下次還會為了那些格子再呼叫一次。
-    # 勾選框還要記「勾不勾」：資料「無」對選項「否」是語意判斷，光有欄位代碼補不回來
+    # 勾選框還要記「勾不勾」：資料「無」對選項「否」是語意判斷，光有欄位代碼補不回來；
+    # 連同判斷依據（值的雜湊）一起記，資料改了下次就知道這個勾不算數（見 _live_ticks）
+    now = _values_for(decisions, profile) if vlm else {}
     mapping = dict(db.get_template(job["fingerprint"]))
     mapping.update({sid: {"field_key": key, "ordinal": ordinal, "label": label,
-                          **({"tick": ticks[sid]} if sid in ticks else {})}
+                          **({"tick": ticks[sid], "basis": _tick_basis(now.get(sid, ""))}
+                             if sid in ticks else {})}
                     for sid, (key, ordinal, _src, label) in decisions.items()})
     db.put_template(job["fingerprint"], mapping, source_name=job["filename"])
     log.info("範本已學習 fingerprint=%s 位置=%d", job["fingerprint"], len(mapping))
