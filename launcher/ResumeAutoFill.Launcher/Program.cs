@@ -21,9 +21,10 @@ internal static class Program
                              out var p) ? p : 8090;
         Debug($"start port={_port} isFirst={isFirst}");
 
-        if (IsOurBackendHealthy(_port) || !isFirst)
+        var healthy = IsOurBackendHealthy(_port);
+        if (healthy || !isFirst)
         {
-            Debug($"early-exit healthy={IsOurBackendHealthy(_port)} isFirst={isFirst}");
+            Debug($"early-exit healthy={healthy} isFirst={isFirst}");
             OpenBrowser();
             return;
         }
@@ -119,9 +120,13 @@ internal static class Program
 
     private static bool IsOurBackendHealthy(int port)
     {
+        // Windows 連沒人聽的埠要等將近 2 秒才回「拒絕連線」，先用 300ms 的短探測排除
+        if (!PortInUse(port)) return false;
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromMilliseconds(800) };
+            // /api/health 會順便探一下 llama-server，沒開時那一探就要 0.5 秒；
+            // 原本 800ms 在後端剛起來、還在暖身時常常不夠，健康檢查一直逾時就被當成起不來
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
             var body = http.GetStringAsync($"http://127.0.0.1:{port}/api/health").Result;
             return body.Contains("\"api\":\"ok\"");
         }

@@ -35,7 +35,10 @@ API_HOST = os.environ.get("RESUME_AUTOFILL_API_HOST", "127.0.0.1")
 # 8000/8080 常被開發工具佔走（VS Code 就會），選冷門一點的預設值
 API_PORT = int(os.environ.get("RESUME_AUTOFILL_API_PORT", "8090"))
 
-LLM_HOST = os.environ.get("RESUME_AUTOFILL_LLM_HOST", "http://localhost:8085")
+# 寫 IP 不寫 localhost：Windows 上 localhost 先解析成 ::1，llama-server 只聽 127.0.0.1，
+# 每次探測都要先等 ::1 那次逾時——模型開著時多 0.5 秒，沒開時整整 1 秒，
+# 啟動器的健康檢查因此一直逾時，打包版冷啟動就起不來
+LLM_HOST = os.environ.get("RESUME_AUTOFILL_LLM_HOST", "http://127.0.0.1:8085")
 LLM_MODEL = os.environ.get("RESUME_AUTOFILL_LLM_MODEL", "Qwen3.5-9B-Q4_K_M")
 LLM_CTX_SIZE = int(os.environ.get("RESUME_AUTOFILL_LLM_CTX", "16384"))
 

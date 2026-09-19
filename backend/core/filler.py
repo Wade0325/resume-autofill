@@ -58,8 +58,9 @@ from .schema import BLOCKED_LABELS, BY_KEY, LABEL_ALIASES, OPTION_SYNONYMS
 
 log = logging.getLogger(__name__)
 
-# 預設值只給研究用的入口；產品一律由 service 把 config 裡的設定傳進來
-LLM_HOST = "http://localhost:8085"
+# 預設值只給研究用的入口；產品一律由 service 把 config 裡的設定傳進來。
+# 寫 IP 不寫 localhost 的原因見 config.LLM_HOST
+LLM_HOST = "http://127.0.0.1:8085"
 LLM_MODEL = "Qwen3.5-9B-Q4_K_M"
 
 # 版面示意圖：自己畫，不借助任何外部排版引擎（LibreOffice、Word 都不能用——
