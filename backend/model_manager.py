@@ -10,6 +10,7 @@ llama-server 一個行程只服務一顆模型，「切換」＝砍掉現有行�
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 import threading
@@ -137,12 +138,14 @@ def _switch(name: str, gguf: Path) -> None:
         mmproj = _mmproj_path(name)
         if mmproj.exists():
             args += ["--mmproj", str(mmproj)]
-        # 金鑰從檔案讀（不放命令列）：沒有它，瀏覽器裡的任何網頁都能呼叫這個推論服務
-        args += ["--api-key-file", str(llm.ensure_key())]
         # log 導到獨立檔案：llama-server 的輸出量大且格式不同，混進 app.log 會淹掉一切
         out = (config.LOG_DIR / "llama-server.log").open("w", encoding="utf-8", errors="replace")
+        # 金鑰用環境變數給：沒有它，瀏覽器裡的任何網頁都能呼叫這個推論服務。
+        # 不用 --api-key-file——llama-server 開不了中文路徑的檔案，程式裝在
+        # C:\Users\王小明\ 底下就整個起不來；也不放命令列，別的程式看得到
         subprocess.Popen(
             args, stdout=out, stderr=subprocess.STDOUT,
+            env={**os.environ, "LLAMA_API_KEY": llm.ensure_key()},
             creationflags=subprocess.CREATE_NO_WINDOW)
 
         deadline = time.monotonic() + READY_TIMEOUT

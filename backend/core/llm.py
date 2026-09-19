@@ -23,8 +23,8 @@ HEALTH_TIMEOUT = 0.5   # localhost 服務活著就是毫秒級回應
 CALL_TIMEOUT = 600
 
 # llama-server 預設對所有網站開放 CORS、又不驗身分：任何網頁都能叫它讀 /slots、借 GPU
-# 跑推論。後端啟動它時帶 --api-key-file（model_manager），這裡的呼叫帶上同一把金鑰。
-# /health 是公開的不必帶；手動啟動、沒設金鑰的 server 收到金鑰標頭也照常回應
+# 跑推論。後端啟動它時用環境變數 LLAMA_API_KEY 給金鑰（model_manager），這裡的呼叫帶上
+# 同一把。/health 是公開的不必帶；手動啟動、沒設金鑰的 server 收到金鑰標頭也照常回應
 _KEY: Optional[str] = None
 
 
@@ -35,13 +35,16 @@ def key_file() -> Path:
     return Path(os.environ.get("RESUME_AUTOFILL_HOME", root / "data")) / "llm.key"
 
 
-def ensure_key() -> Path:
-    """啟動 llama-server 前呼叫：金鑰檔不在就產生一把，回傳檔案位置。"""
+def ensure_key() -> str:
+    """啟動 llama-server 前呼叫：金鑰檔不在就產生一把，回傳金鑰。
+    順便更新快取——檔案被換過的話，之後的呼叫才跟新啟動的 server 對得上。"""
+    global _KEY
     path = key_file()
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(secrets.token_urlsafe(32) + "\n", encoding="ascii")
-    return path
+    _KEY = path.read_text(encoding="ascii").strip()
+    return _KEY
 
 
 def _auth() -> Dict[str, str]:
