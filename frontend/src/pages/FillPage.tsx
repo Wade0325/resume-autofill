@@ -153,8 +153,8 @@ export default function FillPage() {
 }
 
 const ENGINE_TEXT: Record<string, { name: string; desc: string }> = {
-  classic: { name: '讀文字', desc: '照表格印的字與列首欄首判斷，快，不需要看得懂圖的模型' },
-  vlm: { name: '看版面', desc: '模型看著版面示意圖逐格判斷，慢一倍，沒看過的排版準得多' },
+  classic: { name: '讀文字', desc: '照表格印的字與列首欄首判斷，模型看不到圖時用這個' },
+  vlm: { name: '看版面', desc: '模型看著版面示意圖逐格判斷，沒看過的排版準得多' },
 }
 
 /** 用哪一條路填表。放在上傳畫面：換引擎要重新分析，上傳後才換沒有意義。 */

@@ -60,8 +60,9 @@ def _values_of(extracted: Dict[str, Any]) -> set:
 # ---------------------------------------------------------------------------
 # classic：規則錨定 ＋ 純文字模型（planner.py）。不需要視覺投影檔，看不見版面，
 #          靠攤平後的全文與列首欄首判斷。
-# vlm    ：讓模型看著版面示意圖決定每一格放哪一項（filler.py）。慢一倍，對沒看過
-#          的排版準得多（研究用的兩份考題目前逐格全對）。
+# vlm    ：讓模型看著版面示意圖決定每一格放哪一項（filler.py）。對沒看過的排版準得多
+#          （AT-1 重評：classic 50/67、vlm 66/67），速度差不多（120 秒 vs 104～113 秒）；
+#          研究用的三份考題逐格全對。
 # 兩條都留著：使用者的機器不一定掛得動視覺投影檔，掛不動就自動退回 classic。
 ENGINES = ("classic", "vlm")
 
@@ -72,8 +73,11 @@ _NOT_FILLED = ("__SKIP__", "__UNKNOWN__")
 
 
 def current_engine() -> str:
-    engine = db.get_kv("engine") or "classic"
-    return engine if engine in ENGINES else "classic"
+    """使用者選過就照選的；沒選過時，模型看得到圖就用 vlm，看不到才用 classic。"""
+    engine = db.get_kv("engine")
+    if engine in ENGINES:
+        return engine
+    return "vlm" if llm.supports_vision(config.LLM_HOST) else "classic"
 
 
 def _split_key(key: str) -> Tuple[str, int]:
