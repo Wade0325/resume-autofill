@@ -162,18 +162,30 @@ def ask(host: str, system: str, user: UserContent, schema: Dict[str, Any],
 
     t0 = time.perf_counter()
     with traced as generation:
+        # 只有「連不上」才是模型沒啟動（LlmUnavailable）；逾時、文件太長、服務出錯、
+        # 回應看不懂都是模型活著但這次失敗（LlmCallFailed）——叫使用者去啟動模型只會鬼打牆，
+        # 而看版面分批呼叫時，這一類只略過那一批、不會讓整份分析失敗
         try:
             r = requests.post(f"{host}/v1/chat/completions", json=payload, headers=_auth(),
                               timeout=CALL_TIMEOUT)
-            if r.status_code == 401:
-                raise LlmUnavailable("模型服務的金鑰對不上，請從右上角的模型選單重新啟動模型")
-            r.raise_for_status()
+        except requests.ConnectionError as e:          # 含連線逾時（ConnectTimeout 兩邊都算）
+            raise LlmUnavailable(f"模型服務無法連線（{host}）：{e}") from e
+        except requests.Timeout as e:
+            raise LlmCallFailed(
+                f"模型 {CALL_TIMEOUT // 60} 分鐘內沒有回應。沒有獨立顯示卡時推論很慢，"
+                "請確認右上角的模型已就緒，或換用顯示卡跑得動的模型") from e
         except requests.RequestException as e:
             raise LlmUnavailable(f"模型服務無法連線（{host}）：{e}") from e
-
-        body = r.json()
-        choice = body["choices"][0]
-        content = choice["message"]["content"] or ""
+        if r.status_code == 401:
+            raise LlmUnavailable("模型服務的金鑰對不上，請從右上角的模型選單重新啟動模型")
+        if r.status_code >= 400:
+            raise LlmCallFailed(_http_problem(r))
+        try:
+            body = r.json()
+            choice = body["choices"][0]
+            content = choice["message"]["content"] or ""
+        except (ValueError, KeyError, IndexError, TypeError) as e:
+            raise LlmCallFailed(f"模型服務回了看不懂的內容：{e}") from e
         if generation is not None:
             usage = body.get("usage") or {}
             generation.update(output=content, usage_details={
@@ -186,9 +198,27 @@ def ask(host: str, system: str, user: UserContent, schema: Dict[str, Any],
 
     if choice.get("finish_reason") == "length":
         raise LlmCallFailed(
-            "這份文件超出模型的上下文長度，輸出被截斷。"
-            "請用更大的 --ctx-size 重啟 llama-server（目前的提示詞約 "
-            f"{prompt_chars // 2} tokens）")
+            "這份文件太長，超出模型一次能讀的長度，輸出被截斷（提示詞約 "
+            f"{prompt_chars // 2} tokens）。開發者可用 RESUME_AUTOFILL_LLM_CTX 加大上下文後重新啟動模型")
     if not content:
         raise LlmCallFailed("模型沒有回傳任何內容")
-    return json.loads(content)
+    try:
+        return json.loads(content)
+    except ValueError as e:
+        raise LlmCallFailed(f"模型回傳的內容不完整，不是合法的 JSON：{e}") from e
+
+
+def _http_problem(r: requests.Response) -> str:
+    """llama-server 回錯誤時的白話說明。它的錯誤格式是
+    {"error": {"code": 400, "type": "exceed_context_size_error", "message": ...}}。"""
+    try:
+        err = r.json().get("error") or {}
+    except ValueError:
+        err = {}
+    detail = err.get("message") or r.text[:200]
+    if err.get("type") == "exceed_context_size_error":
+        return ("這份文件太長，超出模型一次能讀的長度"
+                f"（需要 {err.get('n_prompt_tokens', '?')} tokens，上限 {err.get('n_ctx', '?')}）")
+    if r.status_code >= 500:
+        return f"模型服務出錯（HTTP {r.status_code}）：{detail}"
+    return f"模型拒絕了這次請求（HTTP {r.status_code}）：{detail}"
