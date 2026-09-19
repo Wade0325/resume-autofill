@@ -1394,8 +1394,8 @@ def apply_fills(slots: List[Slot], chosen: Dict[str, str], fields: Dict[str, str
         for slot in group:
             if reps.get(slot.id):
                 written += 1
-                log.debug("寫 %-18s %-26s %s", slot.id, chosen.get(slot.id),
-                          reps[slot.id].replace("\n", "↵")[:40])
+                log.debug("寫 %-18s %-26s %d字", slot.id, chosen.get(slot.id),
+                          len(reps[slot.id]))
         para = group[0].cell.paras[pi]
         write_changes(para, changes, highlight)
         # 位置彼此不重疊，寫完的字應該正好是「原本的字依序換掉這幾段」。
@@ -1889,8 +1889,9 @@ def ask_boxes(groups: Dict[Tuple[str, int, int], List[Slot]], fields: Dict[str, 
             # 加上模型判斷意思相同的那一個
             ticks[b.id] = not lone_no and (b in literal or (
                 not literal and bool(b.option) and b.option == pick))
-        log.info("勾選題 %s %s＝%s → 勾 %s", boxes[0].addr, key, value[:20],
-                 "、".join(b.option for b in boxes if ticks[b.id]) or "（不勾）")
+        # 值與勾了哪個選項都是個資（勾「有」就是答案），只記勾了幾個
+        log.info("勾選題 %s %s → 勾 %d／%d 個", boxes[0].addr, key,
+                 sum(ticks[b.id] for b in boxes), len(boxes))
     return picked, ticks
 
 
@@ -1986,8 +1987,9 @@ def obvious_boxes(groups: Dict[Tuple[str, int, int], List[Slot]], fields: Dict[s
         for b in boxes:
             out[b.id] = key
             ticks[b.id] = hit[b.id]
-        log.info("欄名就是它 %s %s＝%s → 勾 %s", boxes[0].addr, key, fields[key][:16],
-                 "、".join(b.option for b in boxes if hit[b.id]))
+        # 值與勾了哪個選項都是個資，只記勾了幾個
+        log.info("欄名就是它 %s %s → 勾 %d／%d 個", boxes[0].addr, key,
+                 sum(hit.values()), len(boxes))
     return out
 
 

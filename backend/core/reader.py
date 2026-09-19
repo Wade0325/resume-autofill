@@ -119,7 +119,8 @@ def read(text: str, host: str, model: str,
                        model=model, label=f"讀取履歷(視覺{len(images)}頁)")
     else:
         data = llm.ask(host, SYSTEM_PROMPT, user, schema, model=model, label="讀取履歷")
-    log.debug("llm raw output: %r", data)
+    # 抽出來的就是履歷內容，只記哪些欄位有東西
+    log.debug("模型抽出 %d 項：%s", len(data), ",".join(sorted(k for k, v in data.items() if v)))
     kept = _keep_verbatim(data, text, sections)
 
     # 自傳「標題下面整段照收」:模型要逐字抄上千字幾乎不可能(抄錯一字
@@ -240,8 +241,8 @@ def _keep_verbatim(data: Dict[str, Any], source: str,
                         continue
                     fkey = f"{key}[].{k}"
                     reason = _drop_reason(fkey, v, hay, haystack)
-                    log.debug("verify %s#%d value=%r scope=%s(len=%d) -> %s",
-                              fkey, i, v[:40], scope, len(hay), reason or "keep")
+                    log.debug("verify %s#%d 值%d字 scope=%s(len=%d) -> %s",
+                              fkey, i, len(v), scope, len(hay), reason or "keep")
                     if reason:
                         dropped.append(fkey)
                     else:
@@ -252,8 +253,8 @@ def _keep_verbatim(data: Dict[str, Any], source: str,
                 kept[key] = rows
         elif isinstance(value, str) and value.strip():
             reason = _drop_reason(key, value, haystack, haystack)
-            log.debug("verify %s value=%r scope=whole(len=%d) -> %s",
-                      key, value[:40], len(haystack), reason or "keep")
+            log.debug("verify %s 值%d字 scope=whole(len=%d) -> %s",
+                      key, len(value), len(haystack), reason or "keep")
             if reason:
                 dropped.append(key)
             else:
