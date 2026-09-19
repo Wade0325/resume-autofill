@@ -19,7 +19,26 @@ export async function renderDocxInto(
     host.replaceChildren()
     return false
   }
+  neutralizeLinks(host)
   const page = host.querySelector('section')
   if (page) host.style.zoom = String(width / page.offsetWidth)
   return true
+}
+
+/**
+ * docx-preview 把文件裡的超連結原樣變成 <a href>，而預覽就渲染在這個網頁裡：
+ * 公司給的表格若夾著 javascript: 連結，點下去就能讀走「我的資料」。
+ * 只留一般網址、信箱與文件內錨點（另開分頁，不把這一頁換掉），其餘拿掉 href——字還在，只是點不動。
+ */
+function neutralizeLinks(host: HTMLElement) {
+  for (const a of host.querySelectorAll('a[href]')) {
+    const href = (a.getAttribute('href') ?? '').trim()
+    if (href.startsWith('#')) continue
+    if (/^(https?:|mailto:)/i.test(href)) {
+      a.setAttribute('target', '_blank')
+      a.setAttribute('rel', 'noopener noreferrer')
+    } else {
+      a.removeAttribute('href')
+    }
+  }
 }
