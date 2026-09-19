@@ -128,7 +128,7 @@ _DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 # blob:／data: 是 docx-preview 的圖片與字型、pdf.js 的 worker
 _CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; "
-        "connect-src 'self' blob:; object-src 'none'; base-uri 'none'; "
+        "connect-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'none'; "
         "form-action 'self'; frame-ancestors 'none'")
 if _DIST.is_dir():
     app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="assets")

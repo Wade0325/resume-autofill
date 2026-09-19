@@ -14,7 +14,13 @@ export async function renderDocxInto(
   host.replaceChildren()
   host.style.zoom = '1'
   const width = host.clientWidth
-  await renderAsync(blob, host, undefined, { className: 'docx', inWrapper: false })
+  // renderAltChunks 預設開著：文件夾帶的 HTML 片段（altChunk）會放進同源、沒沙箱的
+  // <iframe srcdoc>，裡面的腳本一插進頁面就執行，不必點任何東西。履歷表用不到這種片段
+  await renderAsync(blob, host, undefined, {
+    className: 'docx',
+    inWrapper: false,
+    renderAltChunks: false,
+  })
   if (token.cancelled) {
     host.replaceChildren()
     return false
