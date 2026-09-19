@@ -26,9 +26,13 @@ function renderInput(spec: FieldSpec, value: string, onChange: (v: string) => vo
   }
 
   if (spec.kind === 'choice') {
+    // 值不在選項裡（匯入時抓到的「單身」之類）也要照實顯示：不然畫面上是「(未填)」，
+    // 完成度卻算已填，存檔時還會原樣留著
+    const offList = value !== '' && !spec.choices.includes(value)
     return (
       <select className={INPUT_CLASS} value={value} onChange={(e) => onChange(e.target.value)}>
         <option value="">(未填)</option>
+        {offList && <option value={value}>{value}（不在選項裡）</option>}
         {spec.choices.map((c) => (
           <option key={c} value={c}>
             {c}
