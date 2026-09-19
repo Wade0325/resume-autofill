@@ -46,10 +46,10 @@ export default function FillPage() {
     }
   }
 
-  async function remap(slotId: string, fieldKey: string) {
+  async function remap(slotId: string, fieldKey: string, ordinal?: number) {
     if (!plan) return
     const result = await run(() =>
-      api.fixMappings(plan.job_id, [{ slot_id: slotId, field_key: fieldKey }]),
+      api.fixMappings(plan.job_id, [{ slot_id: slotId, field_key: fieldKey, ordinal }]),
     )
     if (result) {
       setPlan(result)
@@ -229,7 +229,7 @@ function PlanTable({
   plan: Plan
   fields: FieldSpec[]
   busy: boolean
-  onRemap: (slotId: string, fieldKey: string) => void
+  onRemap: (slotId: string, fieldKey: string, ordinal?: number) => void
 }) {
   return (
     <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
@@ -250,6 +250,7 @@ function PlanTable({
                 key={item.slot_id}
                 item={item}
                 fields={fields}
+                entries={plan.entries}
                 busy={busy}
                 onRemap={onRemap}
               />
@@ -264,17 +265,23 @@ function PlanTable({
 function Row({
   item,
   fields,
+  entries,
   busy,
   onRemap,
 }: {
   item: PlanItem
   fields: FieldSpec[]
+  entries: Record<string, number>
   busy: boolean
-  onRemap: (slotId: string, fieldKey: string) => void
+  onRemap: (slotId: string, fieldKey: string, ordinal?: number) => void
 }) {
   const skipped = item.status === 'skip'
   // 模型判斷的值得使用者優先看一眼；規則與快取都是確定性來源
   const needsReview = !skipped && item.source === 'model'
+  // 學歷、經歷這種清單欄位要能指定第幾筆：表格第 3 列對的是第 2 所學校時，
+  // 光換欄位沒用。選單列到我的資料實際有的筆數（至少 1 筆，也涵蓋目前選的那一筆）
+  const root = item.field_key.includes('[]') ? item.field_key.split('[]')[0] : ''
+  const count = root ? Math.max(entries[root] ?? 0, item.ordinal + 1, 1) : 0
 
   return (
     <tr className={skipped ? 'bg-slate-50/60' : needsReview ? 'bg-amber-50/40' : ''}>
@@ -299,6 +306,22 @@ function Row({
             </option>
           ))}
         </select>
+        {root && (
+          <select
+            value={item.ordinal}
+            disabled={busy}
+            aria-label="第幾筆"
+            onChange={(e) => onRemap(item.slot_id, item.field_key, Number(e.target.value))}
+            className="ml-2 text-sm border border-slate-300 rounded px-2 py-1
+                       focus:outline-none focus:ring-2 focus:ring-sky-500"
+          >
+            {Array.from({ length: count }, (_, i) => (
+              <option key={i} value={i}>
+                第 {i + 1} 筆
+              </option>
+            ))}
+          </select>
+        )}
       </td>
 
       <td className="px-4 py-2.5">

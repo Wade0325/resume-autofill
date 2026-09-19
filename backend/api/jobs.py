@@ -54,7 +54,7 @@ def preview_docx(job_id: WorkId, which: str = "original") -> Response:
 def fix_mappings(job_id: WorkId, body: MappingsIn) -> PlanOut:
     _ensure_ready(job_id)
     try:
-        plan = service.apply_fixes(job_id, [(f.slot_id, f.field_key) for f in body.fixes])
+        plan = service.apply_fixes(job_id, [(f.slot_id, f.field_key, f.ordinal) for f in body.fixes])
     except ValueError as e:
         raise HTTPException(422, str(e))
     if plan is None:

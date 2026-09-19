@@ -94,6 +94,14 @@ def _join_key(field_key: str, ordinal: int) -> str:
     return field_key.replace("[]", f"[{ordinal}]") if "[]" in field_key else field_key
 
 
+# 清單型的資料（education、experience…），填寫頁要知道每一種有幾筆才列得出「第幾筆」
+_LIST_ROOTS = sorted({k.split("[]")[0] for k in BY_KEY if "[]" in k})
+
+
+def _entries(profile: Dict[str, Any]) -> Dict[str, int]:
+    return {root: len(profile.get(root) or []) for root in _LIST_ROOTS}
+
+
 def _slot_order(slot_id: str) -> List[Any]:
     """對映清單照位置排，數字照大小比：直接比字串的話 tbl0.r10 排在 tbl0.r2 前面、
     c12 排在 c2 前面，使用者對著表格一格一格看時會找不到。
@@ -198,7 +206,7 @@ def _vlm_render(job_id: str, filename: str, cached: bool, slots: List[Any],
             kind=_VLM_KIND.get(slot.kind, slot.kind),
             field_key=(d.field_key if d else ""), value=value, existing="",
             source=(d.source if d else ""), status="fill" if fill else "skip",
-            note=note))
+            note=note, ordinal=(d.ordinal if d else 0)))
     items.sort(key=lambda i: _slot_order(i.slot_id))
     fill = sum(1 for i in items if i.status == "fill")
     return PlanOut(
@@ -206,7 +214,7 @@ def _vlm_render(job_id: str, filename: str, cached: bool, slots: List[Any],
         template_cached=cached, llm_available=llm.available(config.LLM_HOST),
         stats=PlanStats(slots=len(slots), fill=fill, skip=len(items) - fill,
                         by_source=by_source),
-        form_fields=[], items=items)
+        form_fields=[], items=items, entries=_entries(profile))
 
 
 def _save_upload(job_id: str, content: bytes, suffix: str = ".docx") -> Path:
@@ -386,8 +394,10 @@ def preview_docx(job_id: str, which: str) -> Optional[bytes]:
         return filled.read_bytes()
 
 
-def apply_fixes(job_id: str, fixes: List[Tuple[str, str]]) -> Optional[PlanOut]:
-    """套用使用者修正。只改決策再重算，不會再呼叫模型。"""
+def apply_fixes(job_id: str,
+                fixes: List[Tuple[str, str, Optional[int]]]) -> Optional[PlanOut]:
+    """套用使用者修正。只改決策再重算，不會再呼叫模型。
+    ordinal 是清單欄位用第幾筆（第 2 所學校）；沒給就沿用這一格原本的。"""
     job = db.get_job(job_id)
     if not job:
         return None
@@ -401,20 +411,21 @@ def apply_fixes(job_id: str, fixes: List[Tuple[str, str]]) -> Optional[PlanOut]:
 
     # 先整批驗證再套用：中途才發現非法值的話，前面幾筆已經播報了
     # 「修改成功」，但整批決策不會落庫
-    for slot_id, field_key in fixes:
+    for slot_id, field_key, _ordinal in fixes:
         if slot_id not in valid:
             raise ValueError(f"位置不存在：{slot_id}")
         if field_key not in BY_KEY and field_key not in ("__SKIP__", "__UNKNOWN__"):
             raise ValueError(f"未知欄位代碼：{field_key}")
 
-    for slot_id, field_key in fixes:
+    for slot_id, field_key, ordinal in fixes:
         previous = decisions.get(slot_id)
         old = previous.field_key if previous else ""
         label = previous.label if previous else ""
-        decisions[slot_id] = planner.Decision(
-            field_key, previous.ordinal if previous else 0, "manual", label)
+        if ordinal is None:
+            ordinal = previous.ordinal if previous else 0
+        decisions[slot_id] = planner.Decision(field_key, ordinal, "manual", label)
         # 這是日後改進提示詞的唯一依據
-        log.info("使用者修正 %s：%s → %s", slot_id, old or "(未決定)", field_key)
+        log.info("使用者修正 %s：%s → %s#%d", slot_id, old or "(未決定)", field_key, ordinal)
         actions.record("修改欄位「%s」", label or slot_id)
 
     db.update_job(job_id, decided={k: list(v) for k, v in decisions.items()})
@@ -468,7 +479,8 @@ def write_output(job_id: str) -> Optional[Dict[str, Any]]:
 
 def _render(job_id: str, filename: str, cached: bool, slots: List[Slot],
             decisions: Dict[str, Any], form_fields: Optional[List[str]] = None) -> PlanOut:
-    ops, skipped = planner.build_plan(slots, db.get_kv("profile") or {}, decisions)
+    profile = db.get_kv("profile") or {}
+    ops, skipped = planner.build_plan(slots, profile, decisions)
 
     items = [_item(o, "fill") for o in ops] + [_item(s, "skip") for s in skipped]
     items.sort(key=lambda i: _slot_order(i.slot_id))
@@ -483,7 +495,7 @@ def _render(job_id: str, filename: str, cached: bool, slots: List[Slot],
         stats=PlanStats(slots=len(slots), fill=len(ops), skip=len(skipped),
                         by_source=by_source),
         form_fields=[BY_KEY[k].label for k in (form_fields or []) if k in BY_KEY],
-        items=items)
+        items=items, entries=_entries(profile))
 
 
 def _item(op, status: str) -> PlanItem:
@@ -491,7 +503,7 @@ def _item(op, status: str) -> PlanItem:
         slot_id=op.slot.id, label=op.label, kind=op.slot.kind,
         field_key=op.field_key, value=str(op.value),
         existing=op.slot.existing, source=op.source,
-        status=status, note=op.note)
+        status=status, note=op.note, ordinal=op.ordinal)
 
 
 def analyze_import(filename: str, content: bytes) -> Dict[str, Any]:

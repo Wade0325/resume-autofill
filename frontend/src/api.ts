@@ -18,6 +18,7 @@ export type PlanItem = {
   source: string
   status: 'fill' | 'skip'
   note: string
+  ordinal: number // 清單欄位（學歷、經歷…）用第幾筆，從 0 起算
 }
 
 export type Plan = {
@@ -28,6 +29,7 @@ export type Plan = {
   stats: { slots: number; fill: number; skip: number; by_source: Record<string, number> }
   form_fields: string[] // 模型看過版面後認出這份表格要填的欄位
   items: PlanItem[]
+  entries: Record<string, number> // 我的資料裡每一種清單有幾筆（education: 3）
 }
 
 export type JobState =
@@ -191,7 +193,10 @@ export const api = {
   analyze: (file: File, onProgress?: (pct: number) => void) =>
     upload<{ job_id: string; status: string; filename: string }>('/jobs', file, onProgress),
   getJob: (jobId: string) => request<JobState>(`/jobs/${jobId}`),
-  fixMappings: (jobId: string, fixes: { slot_id: string; field_key: string }[]) =>
+  fixMappings: (
+    jobId: string,
+    fixes: { slot_id: string; field_key: string; ordinal?: number }[],
+  ) =>
     request<Plan>(`/jobs/${jobId}/mappings`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },

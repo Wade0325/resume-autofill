@@ -1,9 +1,9 @@
 """HTTP 請求與回應模型。"""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class FieldSpecOut(BaseModel):
@@ -37,6 +37,7 @@ class PlanItem(BaseModel):
     source: str                       # rule | model | cache | manual
     status: Literal["fill", "skip"]
     note: str = ""
+    ordinal: int = 0                  # 清單欄位（學歷、經歷…）用第幾筆，從 0 起算
 
 
 class PlanStats(BaseModel):
@@ -55,11 +56,14 @@ class PlanOut(BaseModel):
     # 模型看過版面後認出「這份表格要填哪些欄位」，給使用者對照用（欄位名稱）
     form_fields: List[str] = []
     items: List[PlanItem]
+    # 我的資料裡每一種清單有幾筆（education: 3），填寫頁的「第幾筆」選單照這個列
+    entries: Dict[str, int] = {}
 
 
 class MappingFix(BaseModel):
     slot_id: str
     field_key: str
+    ordinal: Optional[int] = Field(None, ge=0)   # 清單欄位用第幾筆；不給就沿用原本的
 
 
 class MappingsIn(BaseModel):
