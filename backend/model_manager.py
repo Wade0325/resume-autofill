@@ -10,6 +10,7 @@ llama-server 一個行程只服務一顆模型，「切換」＝砍掉現有行�
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 import threading
 import time
@@ -61,6 +62,13 @@ def _mmproj_path(name: str) -> Path:
     return config.MODELS_DIR / f"{name}.mmproj.gguf"
 
 
+def _model_path(name: str) -> Path:
+    """名稱會接進檔案路徑：只收單純的檔名，「..\\」這種會跑出 models/ 的不收。"""
+    if not name or name in (".", "..") or Path(name).name != name:
+        raise ModelError(422, "模型名稱不合法")
+    return config.MODELS_DIR / f"{name}.gguf"
+
+
 def status() -> dict:
     local = {p.stem: p for p in sorted(config.MODELS_DIR.glob("*.gguf"))
              if not p.name.endswith(".mmproj.gguf")}   # 視覺投影檔不是模型，不列
@@ -101,7 +109,7 @@ def _row(name: str, size_gb: float, note: str, downloaded: bool, downloadable: b
 
 def select(name: str) -> None:
     global _starting
-    gguf = config.MODELS_DIR / f"{name}.gguf"
+    gguf = _model_path(name)
     if not gguf.exists():
         raise ModelError(404, "這顆模型還沒下載")
     if not config.LLAMA_SERVER.exists():
@@ -187,9 +195,13 @@ def download_url(url: str) -> str:
     parsed = urlparse(url)
     if parsed.scheme != "https":
         raise ModelError(422, "只接受 https 網址")
-    fname = unquote(Path(parsed.path).name)
+    # 先解碼再取檔名：反過來的話 %2F、%5C 在取檔名時還是字面，解碼後才變成斜線，
+    # 「..%5C..%5Cx.gguf」就會寫到 models/ 外面去。檔名也只收常見字元
+    fname = Path(unquote(parsed.path)).name
     if not fname.lower().endswith(".gguf"):
         raise ModelError(422, "網址必須指向 .gguf 檔（到 Hugging Face 檔案列表複製下載連結）")
+    if not re.fullmatch(r"\w[\w.+\-]*\.gguf", fname, flags=re.IGNORECASE):
+        raise ModelError(422, "檔名含有不支援的字元")
 
     name = fname[: -len(".gguf")]
     if (config.MODELS_DIR / fname).exists():

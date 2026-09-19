@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse
 
 from .. import actions, db, service
 from ..schemas import MappingsIn, OutputOut, PlanOut
-from .uploads import DOCX_MEDIA_TYPE, read_upload
+from .uploads import DOCX_MEDIA_TYPE, WorkId, read_upload
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -20,7 +20,7 @@ async def create_job(file: UploadFile = File(...)) -> dict:
 
 
 @router.get("/{job_id}")
-def read_job(job_id: str) -> dict:
+def read_job(job_id: WorkId) -> dict:
     state = service.get_job_state(job_id)
     if state is None:
         raise HTTPException(404, "找不到這個 job")
@@ -39,7 +39,7 @@ def _ensure_ready(job_id: str) -> None:
 
 
 @router.get("/{job_id}/preview.docx")
-def preview_docx(job_id: str, which: str = "original") -> Response:
+def preview_docx(job_id: WorkId, which: str = "original") -> Response:
     """左右對照用的原稿與填寫後文件，前端自己渲染。"""
     if which not in ("original", "filled"):
         raise HTTPException(422, "which 必須是 original 或 filled")
@@ -51,7 +51,7 @@ def preview_docx(job_id: str, which: str = "original") -> Response:
 
 
 @router.patch("/{job_id}/mappings", response_model=PlanOut)
-def fix_mappings(job_id: str, body: MappingsIn) -> PlanOut:
+def fix_mappings(job_id: WorkId, body: MappingsIn) -> PlanOut:
     _ensure_ready(job_id)
     try:
         plan = service.apply_fixes(job_id, [(f.slot_id, f.field_key) for f in body.fixes])
@@ -63,7 +63,7 @@ def fix_mappings(job_id: str, body: MappingsIn) -> PlanOut:
 
 
 @router.post("/{job_id}/output", response_model=OutputOut)
-def make_output(job_id: str) -> OutputOut:
+def make_output(job_id: WorkId) -> OutputOut:
     _ensure_ready(job_id)
     result = service.write_output(job_id)
     if result is None:
@@ -72,7 +72,7 @@ def make_output(job_id: str) -> OutputOut:
 
 
 @router.get("/{job_id}/output")
-def download_output(job_id: str) -> FileResponse:
+def download_output(job_id: WorkId) -> FileResponse:
     path = service.output_path(job_id)
     if not path.exists():
         raise HTTPException(404, "尚未產生成果檔，請先呼叫 POST /output")

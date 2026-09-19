@@ -1,11 +1,17 @@
-"""上傳收檔的共同驗證：填寫與匯入的規則相同，只差接受的副檔名。"""
+"""填寫與匯入共用的驗證：上傳收檔（規則相同，只差接受的副檔名）與工作代碼。"""
 from __future__ import annotations
 
-from fastapi import HTTPException, UploadFile
+from typing import Annotated
+
+from fastapi import HTTPException, Path, UploadFile
 
 from .. import config
 
 DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+# 工作代碼一律是 service 發的 12 個十六進位字元，而它會接進檔案路徑：
+# Windows 上網址裡的 %5C 解出來是反斜線，不先擋格式，「..\..\」就能讓路徑跑出 jobs 資料夾
+WorkId = Annotated[str, Path(pattern=r"^[0-9a-f]{12}$")]
 
 
 async def read_upload(file: UploadFile, exts: tuple[str, ...]) -> tuple[str, bytes]:

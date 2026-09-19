@@ -106,9 +106,16 @@ if _DIST.is_dir():
         交給前端接手，否則直接輸入網址或按重整就會 404。"""
         if path.startswith("api/"):
             raise HTTPException(404, "找不到這個 API 端點")
-        candidate = _DIST / path
-        if path and candidate.is_file():
-            return FileResponse(candidate)
+        # uvicorn 會把 %2f、%5c 解成斜線，「..%2f..%2fdata/app.db」接在 dist 後面
+        # 就跑出去了——整份個人資料庫都拿得到。只回 dist 裡面的檔案，其餘交給前端
+        if path:
+            try:
+                candidate = (_DIST / path).resolve()
+                inside = candidate.is_relative_to(_DIST) and candidate.is_file()
+            except (OSError, ValueError):     # 網址裡夾著 NUL 之類組不成路徑的字元
+                inside = False
+            if inside:
+                return FileResponse(candidate)
         return FileResponse(_DIST / "index.html")
 
     log.info("前端靜態檔已掛載 path=%s", _DIST)

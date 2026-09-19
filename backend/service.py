@@ -22,7 +22,13 @@ from .schemas import (ImportPreviewOut, ImportRow, PlanItem, PlanOut, PlanStats)
 log = logging.getLogger(__name__)
 
 
+_WORK_ID_RE = re.compile(r"[0-9a-f]{12}")      # analyze／analyze_import 發的代碼
+
+
 def job_dir(job_id: str) -> Path:
+    # 代碼會接進檔案路徑，不是自己發的格式一律不認（API 層已先擋，這裡是最後一道）
+    if not _WORK_ID_RE.fullmatch(job_id):
+        raise ValueError(f"不認得的工作代碼：{job_id!r}")
     return config.JOBS_DIR / job_id
 
 

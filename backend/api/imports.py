@@ -5,7 +5,7 @@ from fastapi import APIRouter, File, HTTPException, Response, UploadFile
 
 from .. import service
 from ..schemas import ImportApplyIn, ImportApplyOut
-from .uploads import DOCX_MEDIA_TYPE, read_upload
+from .uploads import DOCX_MEDIA_TYPE, WorkId, read_upload
 
 router = APIRouter(prefix="/imports", tags=["imports"])
 
@@ -18,7 +18,7 @@ async def create_import(file: UploadFile = File(...)) -> dict:
 
 
 @router.get("/{import_id}")
-def read_import(import_id: str) -> dict:
+def read_import(import_id: WorkId) -> dict:
     state = service.get_import(import_id)
     if state is None:
         raise HTTPException(404, "找不到這次匯入")
@@ -26,7 +26,7 @@ def read_import(import_id: str) -> dict:
 
 
 @router.get("/{import_id}/source")
-def source(import_id: str) -> Response:
+def source(import_id: WorkId) -> Response:
     """上傳的原檔，交給前端自己渲染（PDF 用 pdf.js、docx 用 docx-preview）。"""
     content = service.import_source(import_id)
     if content is None:
@@ -36,7 +36,7 @@ def source(import_id: str) -> Response:
 
 
 @router.post("/{import_id}/apply", response_model=ImportApplyOut)
-def apply_import(import_id: str, body: ImportApplyIn) -> ImportApplyOut:
+def apply_import(import_id: WorkId, body: ImportApplyIn) -> ImportApplyOut:
     applied = service.apply_import(import_id, body.row_ids)
     if applied is None:
         raise HTTPException(404, "找不到這次匯入")
