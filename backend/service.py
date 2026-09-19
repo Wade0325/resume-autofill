@@ -74,12 +74,13 @@ _VLM_KIND = {"box": "checkbox", "gap": "print", "append": "print",
 _NOT_FILLED = ("__SKIP__", "__UNKNOWN__")
 
 
-def current_engine() -> str:
-    """使用者選過就照選的；沒選過時，模型看得到圖就用 vlm，看不到才用 classic。"""
+def current_engine(vision: bool) -> str:
+    """使用者選過就照選的；沒選過時，模型看得到圖（vision）就用 vlm，看不到才用 classic。
+    vision 由呼叫端探一次傳進來——模型沒開時每探一次要等半秒。"""
     engine = db.get_kv("engine")
     if engine in ENGINES:
         return engine
-    return "vlm" if llm.supports_vision(config.LLM_HOST) else "classic"
+    return "vlm" if vision else "classic"
 
 
 def _split_key(key: str) -> Tuple[str, int]:
@@ -292,8 +293,9 @@ def analyze(filename: str, content: bytes) -> str:
     """
     job_id = uuid.uuid4().hex[:12]
     _save_upload(job_id, content)
-    engine = current_engine()
-    if engine == "vlm" and not llm.supports_vision(config.LLM_HOST):
+    vision = llm.supports_vision(config.LLM_HOST)
+    engine = current_engine(vision)
+    if engine == "vlm" and not vision:
         # 視覺版看不到版面就退化成一般文字模型，不如走本來就不看圖的那條路
         log.warning("模型沒掛視覺投影檔，這份改用 classic")
         engine = "classic"

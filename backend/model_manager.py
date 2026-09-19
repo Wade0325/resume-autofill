@@ -86,10 +86,12 @@ def status() -> dict:
     for name in list(_downloads):      # 自訂網址下載中（或失敗）的也要列
         if not any(r["name"] == name for r in rows):
             rows.append(_row(name, 0, "自訂下載", downloaded=False, downloadable=False))
+    # 沒開就不必再探視覺：模型沒開時每探一次要等半秒，前端又一直輪詢這支
+    running = llm.available(config.LLM_HOST)
     return {"active": config.LLM_MODEL,
-            "running": llm.available(config.LLM_HOST),
+            "running": running,
             "starting": _starting,
-            "vision": llm.supports_vision(config.LLM_HOST),
+            "vision": running and llm.supports_vision(config.LLM_HOST),
             "models": rows}
 
 
