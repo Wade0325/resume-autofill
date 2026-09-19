@@ -105,8 +105,9 @@ OTHER_PEOPLE = {
     "family": ("家庭", "家屬", "家人", "父", "母"),
     "reference": ("推薦", "諮詢", "介紹人"),
 }
-# 公司自己填的欄位。「以下由公司填寫」那條線之前也會夾雜這種欄位（面談日期印在最上面）
-COMPANY_WORDS = ("面談", "初試", "複試", "任用", "建議薪資", "主管簽章", "到職日期")
+# 公司自己填的欄位。「以下由公司填寫」那條線之前也會夾雜這種欄位（面談日期印在最上面）。
+# 「到職日期」是公司填的報到日；前面有「可」的「可到職日期」是應徵者填的，不能一起擋掉
+COMPANY_WORDS_RE = re.compile(r"面談|初試|複試|任用|建議薪資|主管簽章|(?<!可)到職日期")
 # 親筆簽名留給本人手寫；同一行的「日期＿年＿月＿日」是簽名的日期，個人資料也不會有
 SIGN_WORDS = ("簽名", "簽章")
 # 兩邊都常出現、卻不代表相關的詞：履歷表的問答題幾乎都有「工作」；
@@ -357,7 +358,9 @@ def _line_slots(line: str) -> List[Tuple[str, int, int, str]]:
     """
     if not line.strip():
         return []
-    if any(b in _squash(line) for b in BLOCKED_LABELS + COMPANY_WORDS + SIGN_WORDS):
+    squashed = _squash(line)
+    if (any(b in squashed for b in BLOCKED_LABELS + SIGN_WORDS)
+            or COMPANY_WORDS_RE.search(squashed)):
         return []    # 應徵職務（每間公司不一樣，產品刻意留白）、公司自己填的欄位、親筆簽名
     out: List[Tuple[str, int, int, str]] = []
     boxes = [m.start() for m in re.finditer(f"[{CHECKBOX_CHARS}]", line)]
