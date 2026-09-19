@@ -160,6 +160,7 @@ const ENGINE_TEXT: Record<string, { name: string; desc: string }> = {
 /** 用哪一條路填表。放在上傳畫面：換引擎要重新分析，上傳後才換沒有意義。 */
 function EnginePicker() {
   const [engine, setEngine] = useState('')
+  const [running, setRunning] = useState(true)
   const [vision, setVision] = useState(true)
   const [options, setOptions] = useState<string[]>([])
 
@@ -168,6 +169,7 @@ function EnginePicker() {
       .getEngine()
       .then((e) => {
         setEngine(e.engine)
+        setRunning(e.running)
         setVision(e.vision)
         setOptions(e.engines)
       })
@@ -211,6 +213,11 @@ function EnginePicker() {
           )
         })}
       </div>
+      {!running && (
+        <div className="mt-2 text-xs text-amber-700">
+          模型還沒啟動：學過的格式照樣能填；沒學過的要先從右上角啟動模型。
+        </div>
+      )}
       {!vision && engine === 'vlm' && (
         <div className="mt-2 text-xs text-amber-700">
           目前的模型看不到圖，這次會自動改用「讀文字」。要用看版面得換成帶視覺的模型。

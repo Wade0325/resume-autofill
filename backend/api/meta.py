@@ -37,10 +37,11 @@ def health() -> HealthOut:
 
 @router.get("/engine")
 def read_engine() -> dict:
-    """現在用哪一條路填表，以及這台機器的模型看不看得到圖。"""
-    vision = llm.supports_vision(config.LLM_HOST)
+    """現在用哪一條路填表、模型開著沒、看不看得到圖（沒開時是開了之後看不看得到）。"""
+    running, vision = service.model_state()
     return {"engine": service.current_engine(vision),
             "engines": list(service.ENGINES),
+            "running": running,
             "vision": vision}
 
 

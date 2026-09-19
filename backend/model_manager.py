@@ -63,6 +63,11 @@ def _mmproj_path(name: str) -> Path:
     return config.MODELS_DIR / f"{name}.mmproj.gguf"
 
 
+def vision_file_ready(name: str) -> bool:
+    """這顆模型的視覺投影檔在不在：在的話啟動時會掛上。模型還沒開也看得出開了之後看不看得到圖。"""
+    return _mmproj_path(name).exists()
+
+
 def _model_path(name: str) -> Path:
     """名稱會接進檔案路徑：只收單純的檔名，「..\\」這種會跑出 models/ 的不收。"""
     if not name or name in (".", "..") or Path(name).name != name:

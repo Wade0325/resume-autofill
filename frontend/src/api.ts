@@ -37,8 +37,9 @@ export type JobState =
   | { status: 'failed'; error: string; filename: string }
   | { status: 'ready'; plan: Plan }
 
-// 兩條填寫路線：classic 看文字、vlm 看版面。vision 是這台機器的模型看不看得到圖
-export type EngineOut = { engine: string; engines: string[]; vision: boolean }
+// 兩條填寫路線：classic 看文字、vlm 看版面。running 是模型開著沒；
+// vision 是這台機器的模型看不看得到圖（沒開時是開了之後看不看得到）
+export type EngineOut = { engine: string; engines: string[]; running: boolean; vision: boolean }
 
 export type ImportRow = {
   row_id: string

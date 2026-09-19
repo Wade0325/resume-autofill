@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import actions, config, db, profiles
+from . import actions, config, db, model_manager, profiles
 from .core import convert, document, filler, llm, planner, reader, writer
 from .core.document import Slot
 from .core.schema import BY_KEY
@@ -74,13 +74,41 @@ _VLM_KIND = {"box": "checkbox", "gap": "print", "append": "print",
 _NOT_FILLED = ("__SKIP__", "__UNKNOWN__")
 
 
+def model_state() -> Tuple[bool, bool]:
+    """(模型開著沒, 看不看得到圖)。
+
+    沒開時看目前這顆模型有沒有視覺檔（開了之後就看得到）——否則每次打開程式、
+    模型還在啟動的那一兩分鐘，預設的判斷方式會先變成讀文字，開好了又變回看版面。
+    沒開就不再探視覺：模型沒開時每探一次要等半秒。"""
+    if llm.available(config.LLM_HOST):
+        return True, llm.supports_vision(config.LLM_HOST)
+    return False, model_manager.vision_file_ready(config.LLM_MODEL)
+
+
 def current_engine(vision: bool) -> str:
     """使用者選過就照選的；沒選過時，模型看得到圖（vision）就用 vlm，看不到才用 classic。
-    vision 由呼叫端探一次傳進來——模型沒開時每探一次要等半秒。"""
+    vision 由呼叫端用 model_state() 探一次傳進來。"""
     engine = db.get_kv("engine")
     if engine in ENGINES:
         return engine
     return "vlm" if vision else "classic"
+
+
+def _learned_engine(src: Path, prefer: str) -> Optional[str]:
+    """這份格式哪一條路學過（兩條認出的位置不一樣，快取各存各的），先看 prefer 那條。
+    模型沒開時用：學過的格式不必問模型，哪條學過就走哪條。解析是純程式，一條約 0.2 秒。"""
+    for engine in (prefer, *(e for e in ENGINES if e != prefer)):
+        try:
+            if engine == "vlm":
+                fp = "vlm:" + document.fingerprint(filler.parse(src)[2])
+            else:
+                fp = document.fingerprint(document.ParsedDoc(str(src)).flatten()[1])
+        except Exception as e:     # 解析不了就當沒學過，交給分析時照常回報
+            log.warning("檢查學過的格式時解析失敗 engine=%s：%s", engine, e)
+            continue
+        if db.get_template(fp):
+            return engine
+    return None
 
 
 def _split_key(key: str) -> Tuple[str, int]:
@@ -191,6 +219,10 @@ def _vlm_worker(job_id: str, filename: str) -> None:
             ticks = _live_ticks({sid: (m["tick"], m.get("basis")) for sid, m in cached.items()
                                  if m.get("tick") is not None}, decisions, profile)
         else:
+            # 沒學過的格式整份靠模型。filler 逐批問、一批失敗照跑下一批，模型沒開的話
+            # 會一批批失敗、最後交出一張空的表——先講清楚要啟動模型
+            if not llm.available(config.LLM_HOST):
+                raise llm.LlmUnavailable("模型沒開，沒學過的格式無法判讀")
             db.update_job(job_id, stage="模型看版面判讀每一格")
             draft = filler.analyze(src, profile, config.LLM_HOST, config.LLM_MODEL)
             by_id = {s.id: s for s in draft.slots}
@@ -292,10 +324,14 @@ def analyze(filename: str, content: bytes) -> str:
     前端拿 job_id 輪詢 get_job_state() 看進度。
     """
     job_id = uuid.uuid4().hex[:12]
-    _save_upload(job_id, content)
-    vision = llm.supports_vision(config.LLM_HOST)
+    src = _save_upload(job_id, content)
+    running, vision = model_state()
     engine = current_engine(vision)
-    if engine == "vlm" and not vision:
+    if not running:
+        # 沒學過的格式哪條路都得問模型（分析時會回報模型沒開）；學過的不必——
+        # 以前模型一沒開就一律改走讀文字，看版面學過的格式也跟著認不得
+        engine = _learned_engine(src, engine) or engine
+    elif engine == "vlm" and not vision:
         # 視覺版看不到版面就退化成一般文字模型，不如走本來就不看圖的那條路
         log.warning("模型沒掛視覺投影檔，這份改用 classic")
         engine = "classic"
