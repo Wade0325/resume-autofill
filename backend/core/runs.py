@@ -19,9 +19,11 @@ from docx.text.run import Run
 _TEXT_TAGS = {qn("w:t"), qn("w:tab"), qn("w:br"), qn("w:cr"), qn("w:noBreakHyphen"),
               qn("w:ptab")}
 _W_T = qn("w:t")
-# 段落標記的格式裡有、放到 run 上卻不合法的修訂標記
-_PARA_MARK_ONLY = {qn("w:ins"), qn("w:del"), qn("w:moveFrom"), qn("w:moveTo"),
-                   qn("w:rPrChange")}
+# 借來的格式不帶這些：修訂標記放到 run 上不合法；刪除線、隱藏是那個空段落（或借來的那個
+# run）自己的事——富邦「專科」那列的段落標記帶著刪除線，照抄的話填進去的學校名稱整個被劃掉
+_NOT_INHERITED = {qn(f"w:{tag}") for tag in (
+    "ins", "del", "moveFrom", "moveTo", "rPrChange",
+    "strike", "dstrike", "vanish", "specVanish", "webHidden")}
 
 
 def _atoms(p) -> List[Tuple[Any, int, int]]:
@@ -71,17 +73,20 @@ def _twin(r, para, highlight: bool):
 def _blank_rpr(p):
     """空段落要新開 run 時用的格式：跟 Word 一樣沿用段落標記的格式；
     段落標記沒設，就借同一列有字的 run 的格式（原本標楷體的表格才不會填出新細明體）。"""
-    mark = p.find(f"{qn('w:pPr')}/{qn('w:rPr')}")
-    if mark is not None:
-        rpr = copy.deepcopy(mark)
-        for el in [el for el in rpr if el.tag in _PARA_MARK_ONLY]:
+    def inherit(rpr):
+        rpr = copy.deepcopy(rpr)
+        for el in [el for el in rpr if el.tag in _NOT_INHERITED]:
             rpr.remove(el)
         return rpr
+
+    mark = p.find(f"{qn('w:pPr')}/{qn('w:rPr')}")
+    if mark is not None:
+        return inherit(mark)
     row = next(p.iterancestors(qn("w:tr")), None)
     for r in (row.iter(qn("w:r")) if row is not None else ()):
         rpr = r.find(qn("w:rPr"))
         if rpr is not None and "".join(t.text or "" for t in r.iter(_W_T)).strip():
-            return copy.deepcopy(rpr)
+            return inherit(rpr)
     return None
 
 
@@ -122,9 +127,10 @@ def write_changes(para, changes: List[Tuple[int, int, str]], highlight: bool = F
             else:
                 atoms[0][0].addprevious(t)
             target = (t, start, start)
-        # 範圍內其他元素的字拿掉（被換掉的那段字本來就包含它們）
+        # 範圍內其他元素的字拿掉（被換掉的那段字本來就包含它們）。不佔字的元素
+        # （分頁、分欄的 w:br）不在 para.text 裡，不算被換掉的字，留著
         for el, s, e in atoms:
-            if el is target[0] or not (s < end and e > start):
+            if el is target[0] or s == e or not (s < end and e > start):
                 continue
             if el.tag == _W_T:
                 a, b = max(start, s) - s, min(end, e) - s
