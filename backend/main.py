@@ -62,7 +62,8 @@ async def same_origin_writes(request: Request, call_next):
     multipart 上傳不觸發 CORS 預檢，任何網站都能叫瀏覽器往這裡送檔案、改資料。
     瀏覽器送這類請求一定帶 Origin，跟 Host 對不上就是別的網站發的。
     沒帶 Origin 的（curl、測試程式）不是瀏覽器，不會被別的網站借用，照常放行。
-    開發時 Vite proxy 不改 Host，頁面與 Host 都是 localhost:5177，一樣對得上。
+    開發時 Vite proxy 設成不改 Host（vite.config.ts 的 changeOrigin: false），
+    頁面與 Host 都是 localhost:5177，一樣對得上。
     """
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         origin = request.headers.get("origin")
