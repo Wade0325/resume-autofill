@@ -236,14 +236,24 @@ cd frontend; npm install; npm run dev
 - `--reload` 是整個行程重啟；資料都在 SQLite 與檔案裡所以無影響，正式啟動不要帶。
 - llama-server 的 `--ctx-size 16384` 不是隨便訂的：整份文件＋輸出，8192 會在生成中被截斷。
   `--temp 0` 讓判斷可重現；`--reasoning off` 關掉 Qwen 的 thinking 模式。
+- 推論引擎有金鑰：後端啟動 llama-server 時用環境變數 `LLAMA_API_KEY` 給 `data/llm.key`
+  裡的金鑰（第一次自動產生），`llm.py` 的呼叫帶同一把。不用 `--api-key-file`——它開不了
+  中文路徑的檔案。`dev.ps1 llm` 手動起的沒有金鑰，照常可用。
+- 後端只收 Host 是 `127.0.0.1`／`localhost` 的請求，會改東西的請求 Origin 要跟 Host 同源
+  （擋別的網頁借瀏覽器打本機服務）。所以 `vite.config.ts` 的 proxy 要維持 `changeOrigin: false`，
+  否則開發時的存檔、上傳全部 403。正式版的頁面另帶 CSP，只准跑自己的腳本。
 
 ### 測試工具
 
 ```
-tools/make_sample.py         產生標準測試表格
-tools/make_tricky_sample.py  標籤刻意寫怪，測模型層
-tests/prompt_test.py         最小 prompt 實驗場：一張截圖＋prompt 丟模型
+tools/make_sample.py            產生標準測試表格
+tools/make_tricky_sample.py     標籤刻意寫怪，測模型層
+tools/check_docx_integrity.py   比對原稿與填好的檔案：勾選框、底線、字型、刪除線有沒有被弄掉
+tests/prompt_test.py            最小 prompt 實驗場：一張截圖＋prompt 丟模型
 ```
+
+研究迴圈的評分只比對每一格的文字，寫回時弄壞格式它看不見。改了寫入端（`runs.py`、
+`writer.py`、`filler.py` 的寫回）之後，除了回放評分，也要拿輸出跑一次 `check_docx_integrity.py`。
 
 ### 看模型實際收到什麼（Langfuse）
 
