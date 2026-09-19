@@ -101,6 +101,8 @@ PLACEHOLDER_RE = re.compile(r"^[\s　_＿…．.\-—–]*$")
 OPTION_SPLIT_RE = re.compile(r"[、，,／/；;]+")
 # 「※以下欄位由本公司人員填寫※」——表格自己說了後面不是求職者填的
 COMPANY_ONLY_RE = re.compile(r"以下.{0,8}(公司|人事|人資).{0,8}填")
+# 公司區塊之後又回到應徵者的部分。要先比這個：「以下由應徵者填寫，公司人員勿填」兩個都對得上
+APPLICANT_AGAIN_RE = re.compile(r"以下.{0,8}(應徵者|應徵人|求職者|申請人|本人).{0,8}填")
 # 別人的資料：表格上沒印這些字，就不拿出來給模型挑（同產品匯入端 reader._SECTION_GATES）
 OTHER_PEOPLE = {
     "emergency": ("緊急聯絡", "緊急連絡"),
@@ -256,6 +258,11 @@ def cells(doc) -> List[Cell]:
     """
     out: List[Cell] = []
     table_no = para_no = 0
+    # 「以下由公司填寫」之後是公司自己的欄位（面談情形、任用與否、建議薪資），不列。
+    # 以前碰到這句就整份不看了、而且只認段落：寫在表格裡的沒認出來，公司區塊夾在中間時
+    # 後面的應徵者部分也一起丟掉。現在表格裡的這句也認，看到「以下由應徵者填寫」就回來。
+    # 跳過的段落、表格照樣算編號，地址才跟 evaluate.py 對得上
+    company = False
     for block in iter_block_items(doc):
         if isinstance(block, Table):
             edges = [0]
@@ -266,6 +273,13 @@ def cells(doc) -> List[Cell]:
             cap_row, cap_text = -2, ""          # 最近一列「整列只有一句長說明」的列
             for r, row in enumerate(block.rows):
                 tcs = row._tr.tc_lst
+                row_text = " ".join(_Cell(tc, block).text for tc in tcs)
+                if APPLICANT_AGAIN_RE.search(row_text):
+                    company = False
+                    continue            # 這一列本身是說明，不是填寫位置
+                if company or COMPANY_ONLY_RE.search(row_text):
+                    company = True
+                    continue
                 grid_col, in_row = 0, []
                 for c, tc in enumerate(tcs):
                     col, span = grid_col, tc.grid_span or 1
@@ -348,9 +362,12 @@ def cells(doc) -> List[Cell]:
                     heads.append((r, len(tcs), [(x[0], x[5], x[6], x[3]) for x in labels]))
             table_no += 1
         else:
-            if COMPANY_ONLY_RE.search(block.text):
-                break           # 這一段之後都是公司自己的欄位（面談情形、任用與否、建議薪資）
-            out.append(Cell(f"p{para_no}", [block]))
+            if APPLICANT_AGAIN_RE.search(block.text):
+                company = False         # 這一段本身是說明，不是填寫位置
+            elif COMPANY_ONLY_RE.search(block.text):
+                company = True
+            elif not company:
+                out.append(Cell(f"p{para_no}", [block]))
             para_no += 1
     return out
 
