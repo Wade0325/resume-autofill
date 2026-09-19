@@ -14,6 +14,7 @@ highlight 模式會把填入的字加上黃色底色，只給網頁預覽用；�
 
 from __future__ import annotations
 
+import copy
 import logging
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -244,11 +245,6 @@ def _kept(before: str, after: str) -> bool:
     return all(ch in it for ch in before if not ch.isspace())
 
 
-def _restore(para, text: str) -> None:
-    """把整段還原成原本的字（插壞了才會走到這裡）。"""
-    write_changes(para, [(0, len(para.text), text)])
-
-
 def _target_paras(doc, grid_of, loc: Dict[str, Any]) -> List[Any]:
     """這個位置涵蓋的段落。分行印的勾選群（「□畢」「□肄」）橫跨好幾段，
     要勾的那個選項不一定在組長那一段。"""
@@ -308,12 +304,12 @@ def apply_ops(src_path: str, out_path: str, ops: List[Any],
                 done = _fill_inline(para, op.value, highlight, loc.get("blank_index", 0))
             elif kind == "print":
                 para = _target_paras(doc, grid_of, loc)[0]
-                before = para.text
+                before, snap = para.text, copy.deepcopy(para._p)
                 done = _fill_print(para, op.value, highlight)
-                # 只准插入：印好的字必須一個不少地照原順序留著。對不上就整段
-                # 還原——寧可留白讓人手寫，也不能把表格印的字寫壞
+                # 只准插入：印好的字必須一個不少地照原順序留著。對不上就整段換回
+                # 寫之前的樣子（連格式）——寧可留白讓人手寫，也不能把表格印的字寫壞
                 if done and not _kept(before, para.text):
-                    _restore(para, before)
+                    para._p[:] = list(snap)
                     done = False
             elif kind == "checkbox":
                 paras = _target_paras(doc, grid_of, loc)
