@@ -31,6 +31,16 @@ def select_model(body: SelectIn) -> dict:
     return {"ok": True}
 
 
+@router.delete("/{name}")
+def delete_model(name: str) -> dict:
+    """刪掉模型檔（含視覺投影檔與沒下載完的暫存檔）。正在用的要先切換到別顆。"""
+    try:
+        model_manager.delete(name)
+    except model_manager.ModelError as e:
+        raise HTTPException(e.status, str(e))
+    return {"ok": True}
+
+
 @router.post("/download")
 def download_model(body: SelectIn) -> dict:
     try:

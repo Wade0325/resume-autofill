@@ -108,6 +108,13 @@ function ModelMenu() {
     api.downloadModel(m.name).then(refresh).catch((e) => setErr(errorText(e)))
   }
 
+  const remove = (m: ModelInfo) => {
+    // 刪掉就要重下載（5 GB 起跳），先問一聲
+    if (!window.confirm(`刪除「${shortName(m.name)}」的模型檔？之後要用得重新下載。`)) return
+    setErr('')
+    api.deleteModel(m.name).then(refresh).catch((e) => setErr(errorText(e)))
+  }
+
   const downloadCustom = () => {
     setErr('')
     api
@@ -139,6 +146,7 @@ function ModelMenu() {
             {info?.running && (
               <span className={info.vision ? 'ml-2 text-violet-600' : 'ml-2 text-slate-400'}>
                 {info.vision ? '目前引擎：看得到截圖' : '目前引擎：純文字'}
+                {info.device ? `・跑在 ${info.device}` : ''}
               </span>
             )}
           </div>
@@ -174,6 +182,7 @@ function ModelMenu() {
                     onSwitch={switchTo}
                     onDownload={download}
                     onDownloadVision={downloadVision}
+                    onDelete={remove}
                   />
                 </li>
               ))}
@@ -222,6 +231,7 @@ function ModelAction({
   onSwitch,
   onDownload,
   onDownloadVision,
+  onDelete,
 }: {
   m: ModelInfo
   starting: string | null
@@ -229,6 +239,7 @@ function ModelAction({
   onSwitch: (m: ModelInfo) => void
   onDownload: (m: ModelInfo) => void
   onDownloadVision: (m: ModelInfo) => void
+  onDelete: (m: ModelInfo) => void
 }) {
   if (starting === m.name)
     return <span className="text-xs text-sky-600 whitespace-nowrap">啟動中…</span>
@@ -249,13 +260,24 @@ function ModelAction({
         {m.active && running ? (
           <span className="text-xs text-emerald-600 whitespace-nowrap">✓ 使用中</span>
         ) : (
-          <button
-            onClick={() => onSwitch(m)}
-            disabled={!!starting}
-            className="text-xs px-3 py-1.5 rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-40 whitespace-nowrap"
-          >
-            {m.active ? '重新啟動' : '切換'}
-          </button>
+          <>
+            <button
+              onClick={() => onSwitch(m)}
+              disabled={!!starting}
+              className="text-xs px-3 py-1.5 rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-40 whitespace-nowrap"
+            >
+              {m.active ? '重新啟動' : '切換'}
+            </button>
+            <button
+              onClick={() => onDelete(m)}
+              disabled={!!starting}
+              title="刪掉模型檔，空出磁碟空間"
+              className="text-xs px-2 py-1.5 rounded-md border border-slate-200 text-slate-400
+                         hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 disabled:opacity-40"
+            >
+              刪除
+            </button>
+          </>
         )}
       </div>
     )

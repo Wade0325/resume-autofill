@@ -260,6 +260,16 @@ cd frontend; npm install; npm run dev
 - `--reload` 是整個行程重啟；資料都在 SQLite 與檔案裡所以無影響，正式啟動不要帶。
 - llama-server 的 `--ctx-size 16384` 不是隨便訂的：整份文件＋輸出，8192 會在生成中被截斷。
   `--temp 0` 讓判斷可重現；`--reasoning off` 關掉 Qwen 的 thinking 模式。
+- 不指定 `--n-gpu-layers`：llama.cpp 會看剩多少 VRAM 自己決定放幾層。以前寫死 999，
+  log 直接說 `n_gpu_layers already set by user to 999, abort`——自動配置整個被關掉，
+  顯卡不夠大的機器只能自己改參數。要手動指定設 `RESUME_AUTOFILL_GPU_LAYERS`。
+- 開程式時自動把上次用的模型載回來（`RESUME_AUTOFILL_AUTOSTART=0` 關掉，開發時不想等就設它）。
+  推論埠上已經有服務在聽就完全不動作——那可能是別的工作階段或使用者自己開的，不該去砍它。
+- 跑在 GPU 還是 CPU：問 `nvidia-smi` 自己生的那個 pid 吃了多少 VRAM。不去解析 llama-server 的 log
+  ——各版本寫法不一樣，這台機器上的 log 根本沒印 CUDA 初始化那幾行。
+- 模型下載會續傳（`.part` ＋ `Range`，斷了不刪），完成後拿來源的 ETag 比對
+  （Hugging Face 的 LFS ETag 就是檔案的 sha256）；壞檔直接刪掉重抓，不會一直續傳到同一個壞結果。
+  開始前先檢查磁碟空間（模型大小＋1 GB 餘裕）。
 - 推論引擎有金鑰：後端啟動 llama-server 時用環境變數 `LLAMA_API_KEY` 給 `data/llm.key`
   裡的金鑰（第一次自動產生），`llm.py` 的呼叫帶同一把。不用 `--api-key-file`——它開不了
   中文路徑的檔案。`dev.ps1 llm` 手動起的沒有金鑰，照常可用。

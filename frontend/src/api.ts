@@ -102,6 +102,7 @@ export type ModelsOut = {
   running: boolean
   starting: string | null
   vision: boolean // 執行中的引擎目前吃不吃圖片
+  device: string // 跑在 GPU 還是 CPU（空＝不知道，例如引擎是別的程式開的）
   models: ModelInfo[]
 }
 
@@ -257,6 +258,8 @@ export const api = {
   models: () => request<ModelsOut>('/models'),
   selectModel: (name: string) => postJson<{ ok: boolean }>('/models/select', { name }),
   downloadModel: (name: string) => postJson<{ ok: boolean }>('/models/download', { name }),
+  deleteModel: (name: string) =>
+    request<{ ok: boolean }>(`/models/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   downloadModelUrl: (url: string) =>
     postJson<{ ok: boolean; name: string }>('/models/download-url', { url }),
 }

@@ -9,9 +9,11 @@ llama-server 一個行程只服務一顆模型，「切換」＝砍掉現有行�
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -45,10 +47,13 @@ CATALOG = [
 
 READY_TIMEOUT = 300    # 9B 冷啟動要載 5 GB 進 VRAM，給足時間
 DOWNLOAD_TIMEOUT = (15, 60)
+DISK_MARGIN_GB = 1.0   # 除了模型本身，至少要再留這麼多空間
 
 _lock = threading.Lock()
 _starting: str | None = None            # 正在啟動的模型名，None = 沒有
 _downloads: dict[str, dict] = {}        # name -> {"pct": int, "error": str|None}
+_device: str = ""                       # 跑起來的引擎用 GPU 還是 CPU，空＝不知道
+_pid: int | None = None                 # 自己生的 llama-server，用來問它吃了多少 VRAM
 
 
 class ModelError(Exception):
@@ -97,6 +102,7 @@ def status() -> dict:
             "running": running,
             "starting": _starting,
             "vision": running and llm.supports_vision(config.LLM_HOST),
+            "device": _device if running else "",
             "models": rows}
 
 
@@ -138,9 +144,15 @@ def _switch(name: str, gguf: Path) -> None:
     port = urlparse(config.LLM_HOST).port or 8085
     try:
         _kill_port(port)
+        # 不指定 --n-gpu-layers：llama.cpp 會自己看剩多少 VRAM 決定放幾層上去。
+        # 以前寫死 999，log 直接說「n_gpu_layers already set by user to 999, abort」——
+        # 自動配置整個被關掉，顯卡不夠大的機器只能自己改參數。
+        # 真的要指定就設 RESUME_AUTOFILL_GPU_LAYERS
         args = [str(config.LLAMA_SERVER), "-m", str(gguf), "--port", str(port),
-                "--ctx-size", str(config.LLM_CTX_SIZE), "--n-gpu-layers", "999",
+                "--ctx-size", str(config.LLM_CTX_SIZE),
                 "--jinja", "--temp", "0", "--reasoning", "off"]
+        if config.GPU_LAYERS:
+            args += ["--n-gpu-layers", config.GPU_LAYERS]
         # 視覺投影檔在就掛上，模型才吃得了頁面截圖
         mmproj = _mmproj_path(name)
         if mmproj.exists():
@@ -150,16 +162,20 @@ def _switch(name: str, gguf: Path) -> None:
         # 金鑰用環境變數給：沒有它，瀏覽器裡的任何網頁都能呼叫這個推論服務。
         # 不用 --api-key-file——llama-server 開不了中文路徑的檔案，程式裝在
         # C:\Users\王小明\ 底下就整個起不來；也不放命令列，別的程式看得到
-        subprocess.Popen(
+        global _pid, _device
+        proc = subprocess.Popen(
             args, stdout=out, stderr=subprocess.STDOUT,
             env={**os.environ, "LLAMA_API_KEY": llm.ensure_key()},
             creationflags=subprocess.CREATE_NO_WINDOW)
+        _pid, _device = proc.pid, ""
 
         deadline = time.monotonic() + READY_TIMEOUT
         while time.monotonic() < deadline:
             if llm.available(config.LLM_HOST):
                 config.LLM_MODEL = name
                 db.put_kv("llm_model", name)   # 後端重啟後記得這個選擇
+                _device = _device_of(proc.pid)
+                log.info("模型就緒 %s device=%s", name, _device or "不明")
                 actions.record("切換模型「%s」成功", name)
                 return
             time.sleep(2)
@@ -183,6 +199,69 @@ def _kill_port(port: int) -> None:
     time.sleep(1)   # 等 port 真正釋放
 
 
+def _device_of(pid: int) -> str:
+    """這個 llama-server 吃了多少 VRAM：有就是跑在 GPU 上，沒有就是 CPU。
+    問 nvidia-smi 自己生的那個行程，不必去猜 log 怎麼寫（不同版本寫法不一樣）。"""
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-compute-apps=pid,used_memory",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW).stdout
+    except (OSError, subprocess.SubprocessError):
+        return "CPU"        # 沒有 nvidia-smi 就是沒有 NVIDIA 顯卡
+    for line in out.splitlines():
+        parts = [x.strip() for x in line.split(",")]
+        if len(parts) == 2 and parts[0] == str(pid) and parts[1].isdigit():
+            return f"GPU（{int(parts[1]) / 1024:.1f} GB）"
+    return "CPU"
+
+
+def autostart() -> None:
+    """開程式時把上次用的模型載回來（以前每次都要自己按「切換」等一兩分鐘）。
+
+    已經有東西在聽那個埠就完全不動作——那可能是使用者自己開的、或別的程式的 server，
+    自動啟動不該去砍它。沒下載、找不到 llama-server 也直接跳過。
+    """
+    name = config.LLM_MODEL
+    try:
+        if llm.available(config.LLM_HOST):
+            log.info("推論埠已經有服務在跑，不自動載入")
+            return
+        if not _model_path(name).exists() or not config.LLAMA_SERVER.exists():
+            return
+        log.info("自動載入上次用的模型 %s", name)
+        select(name)
+    except ModelError as e:
+        log.info("不自動載入模型：%s", e)
+
+
+def delete(name: str) -> None:
+    """刪掉模型檔（連同視覺投影檔與沒下載完的暫存檔）。正在用或正在下載的不給刪。"""
+    gguf = _model_path(name)
+    if name == config.LLM_MODEL and llm.available(config.LLM_HOST):
+        raise ModelError(409, "這顆模型正在使用中，請先切換到別顆再刪除")
+    active = _downloads.get(name)
+    if active and active["error"] is None:
+        raise ModelError(409, "這顆模型正在下載中")
+    targets = [gguf, _mmproj_path(name),
+               _part_of(gguf), _part_of(_mmproj_path(name))]
+    removed = 0
+    for path in targets:
+        if not path.exists():
+            continue
+        try:
+            path.unlink()
+        except OSError as e:
+            raise ModelError(409, f"刪不掉：{e}") from e
+        removed += 1
+    if not removed:
+        raise ModelError(404, "找不到這顆模型")
+    _downloads.pop(name, None)
+    log.info("刪除模型 %s（%d 個檔案）", name, removed)
+    actions.record("刪除模型「%s」成功", name)
+
+
 def download(name: str) -> None:
     """下載型錄裡的模型；主檔在、視覺檔缺時只補視覺檔。"""
     entry = next((e for e in CATALOG if e["name"] == name), None)
@@ -193,6 +272,7 @@ def download(name: str) -> None:
     # 主檔在、視覺檔缺 → 只補視覺檔（早期版本下載的模型沒有 mmproj）
     if have_main and not need_mmproj:
         raise ModelError(409, "這顆模型已經下載過了")
+    _check_space(0 if have_main else float(entry.get("size_gb") or 0))
     _begin_download(name, entry)
 
 
@@ -218,6 +298,7 @@ def download_url(url: str) -> str:
     name = fname[: -len(".gguf")]
     if (config.MODELS_DIR / fname).exists():
         raise ModelError(409, "已有同名的模型檔")
+    _check_space(_remote_size_gb(url))
     _begin_download(name, {"name": name, "url": url})
     return name
 
@@ -251,21 +332,73 @@ def _download(entry: dict) -> None:
         actions.problem("下載模型「%s」失敗：%s", name, e)
 
 
-def _fetch(url: str, dest: Path, name: str, track: bool) -> None:
-    """下載到 .part 再改名，中斷不會留下半套檔案。track=True 時回報進度。"""
-    part = dest.with_suffix(dest.suffix + ".part")
+def _part_of(dest: Path) -> Path:
+    return dest.with_suffix(dest.suffix + ".part")
+
+
+def _check_space(need_gb: float) -> None:
+    """空間不夠就別開始——5 GB 下到一半才失敗，時間與流量都白花。"""
+    if not need_gb:
+        return
+    config.MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    free_gb = shutil.disk_usage(config.MODELS_DIR).free / 1024 ** 3
+    if free_gb < need_gb + DISK_MARGIN_GB:
+        raise ModelError(507, f"磁碟空間不夠：這顆模型約 {need_gb:.1f} GB，"
+                              f"目前只剩 {free_gb:.1f} GB")
+
+
+def _remote_size_gb(url: str) -> float:
+    """自訂網址：先問對方檔案多大。問不到就回 0（不擋，照下載）。"""
     try:
-        with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as r:
+        r = requests.head(url, timeout=DOWNLOAD_TIMEOUT, allow_redirects=True)
+        return int(r.headers.get("Content-Length") or 0) / 1024 ** 3
+    except requests.RequestException:
+        return 0.0
+
+
+def _expected_sha(headers) -> str:
+    """Hugging Face 的檔案 ETag 就是內容的 sha256，拿來驗下載有沒有壞。
+    不是這種格式（一般網站）就不驗。"""
+    for key in ("X-Linked-ETag", "ETag"):
+        value = (headers.get(key) or "").strip('"')
+        if re.fullmatch(r"[0-9a-f]{64}", value):
+            return value
+    return ""
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _fetch(url: str, dest: Path, name: str, track: bool) -> None:
+    """下載到 .part 再改名。斷掉時 .part 留著，下次從斷點續傳；
+    來源有給校驗碼（Hugging Face 的 ETag 就是 sha256）就驗完才改名。"""
+    part = _part_of(dest)
+    have = part.stat().st_size if part.exists() else 0
+    headers = {"Range": f"bytes={have}-"} if have else {}
+    with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT, headers=headers) as r:
+        done_already = have and r.status_code == 416   # 斷點就是檔尾：已經下載完了
+        if have and not done_already and r.status_code != 206:
+            have = 0                                   # 對方不支援續傳，整個重來
+        if not done_already:
             r.raise_for_status()
-            total = int(r.headers.get("Content-Length") or 0)
-            done = 0
-            with part.open("wb") as f:
+        expect = _expected_sha(r.headers)
+        if have:
+            log.info("續傳 %s：已有 %.1f GB", name, have / 1024 ** 3)
+        if not done_already:
+            total = have + int(r.headers.get("Content-Length") or 0)
+            done = have
+            with part.open("ab" if have else "wb") as f:
                 for chunk in r.iter_content(chunk_size=1024 * 1024):
                     f.write(chunk)
                     done += len(chunk)
                     if track and total:
                         _downloads[name]["pct"] = min(99, done * 100 // total)
-        part.replace(dest)
-    except Exception:
-        part.unlink(missing_ok=True)
-        raise
+    if expect and _sha256(part) != expect:
+        part.unlink(missing_ok=True)        # 壞檔留著只會一直續傳到同一個壞結果
+        raise ModelError(502, "下載的檔案跟來源對不起來（可能中途壞掉），請再試一次")
+    part.replace(dest)

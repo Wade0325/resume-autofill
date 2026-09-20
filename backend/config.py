@@ -45,6 +45,11 @@ LLM_CTX_SIZE = int(os.environ.get("RESUME_AUTOFILL_LLM_CTX", "16384"))
 MODELS_DIR = Path(os.environ.get("RESUME_AUTOFILL_MODELS_DIR", _ROOT / "models"))
 LLAMA_SERVER = Path(os.environ.get("RESUME_AUTOFILL_LLAMA_SERVER", _ROOT / "bin" / "llama-server.exe"))
 
+# 空＝讓 llama.cpp 自己看剩多少 VRAM 決定放幾層（寫死的話它會放棄自動配置）
+GPU_LAYERS = os.environ.get("RESUME_AUTOFILL_GPU_LAYERS", "")
+# 開程式時自動把上次用的模型載回來；開發時不想等就設 0
+AUTOSTART_MODEL = os.environ.get("RESUME_AUTOFILL_AUTOSTART", "1") != "0"
+
 LOG_LEVEL = os.environ.get("RESUME_AUTOFILL_LOG_LEVEL", "INFO")
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 JOB_RETENTION_HOURS = 24

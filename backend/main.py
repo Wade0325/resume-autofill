@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import config, db
+from . import config, db, model_manager
 from .api import imports, jobs, logs, meta, models, profile
 from .logging_setup import request_id_var, setup_logging
 
@@ -49,6 +49,10 @@ async def lifespan(app: FastAPI):
     saved_model = db.get_kv("llm_model")
     if saved_model:
         config.LLM_MODEL = saved_model
+    # 上次用的模型自己載回來：以前每次開程式都要自己按「切換」再等一兩分鐘。
+    # 推論埠已經有服務在跑就不動作（可能是使用者自己開的）
+    if config.AUTOSTART_MODEL:
+        model_manager.autostart()
     _purge()
     stale = db.fail_stale_jobs()
     if stale:
