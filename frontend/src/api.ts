@@ -232,6 +232,12 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fixes }),
     }),
+  setValue: (jobId: string, slotId: string, value: string) =>
+    request<Plan>(`/jobs/${jobId}/value`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slot_id: slotId, value }),
+    }),
   setApply: (jobId: string, values: Record<string, string>) =>
     request<Plan>(`/jobs/${jobId}/apply`, {
       method: 'PATCH',

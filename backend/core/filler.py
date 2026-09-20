@@ -45,7 +45,7 @@ from datetime import date
 from dataclasses import dataclass, field
 from itertools import groupby, permutations
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from docx import Document
 from docx.oxml.ns import qn
@@ -70,6 +70,9 @@ LLM_MODEL = "Qwen3.5-9B-Q4_K_M"
 FONT_PATH = os.environ.get("FORM_FONT", r"C:\Windows\Fonts\msjh.ttc")
 PAGE_W, PAGE_H, MAX_PAGES = 1100, 1500, 4
 FONT_SIZE, ADDR_SIZE, LINE_H, ADDR_H = 15, 11, 20, 14
+
+# 使用者在對映清單自己打的值：接在同一套寫入流程上，代碼加前綴跟欄位代碼區分開
+TYPED = "__typed__"
 
 BATCH = 16     # 一次問幾個位置。問多了模型會整批放棄（見 backend/core/planner.py 的實測）
 BOX_BATCH = 8  # 一次問幾題勾選題。二十題一起問，宣告事項那七題會整批答不出來
@@ -1433,6 +1436,8 @@ def apply_fills(slots: List[Slot], chosen: Dict[str, str], fields: Dict[str, str
     highlight 把填進去的字標成黃底，只給網頁預覽用。"""
     ticks = ticks or {}
     texts = {x.id: x.cell.paras[x.para].text for x in slots}
+    by_id = {x.id: x for x in slots}
+    typed_ids = {sid for sid, key in chosen.items() if key and key.startswith(TYPED)}
     reps: Dict[str, str] = {}
     by_cell: Dict[str, List[Slot]] = {}
     by_para: Dict[Tuple[str, int], List[Slot]] = {}
@@ -1474,7 +1479,9 @@ def apply_fills(slots: List[Slot], chosen: Dict[str, str], fields: Dict[str, str
                 i += 1
                 continue
             run = [gaps[i]]
-            while i + len(run) < len(gaps) and chosen.get(gaps[i + len(run)].id) in (None, key):
+            while (not key.startswith(TYPED)      # 自己打的字只寫這一格，不往後面攤
+                   and i + len(run) < len(gaps)
+                   and chosen.get(gaps[i + len(run)].id) in (None, key)):
                 run.append(gaps[i + len(run)])
             reps.update(_spread(run, fields[key], texts))
             i += len(run)
@@ -1488,6 +1495,8 @@ def apply_fills(slots: List[Slot], chosen: Dict[str, str], fields: Dict[str, str
     # 一格一個字的格子（身分證字號底下十格）：字數剛好對上才一格一個寫進去。
     # 對不上就整排不寫——整串塞進第一個小格子比留白還糟，而且字數不合多半是配錯了
     for leader, run in char_runs(slots).items():
+        if leader in typed_ids:        # 手打的照原樣寫在那一格，不拆成一格一個字
+            continue
         chars = re.sub(r"[\s\-－]", "", fields.get(chosen.get(leader) or "", ""))
         reps.pop(leader, None)
         if len(chars) == len(run):
@@ -1534,6 +1543,15 @@ def apply_fills(slots: List[Slot], chosen: Dict[str, str], fields: Dict[str, str
             for x in here:
                 if x.kind != "box" and x.start > boxes[0].start:
                     reps.pop(x.id, None)
+
+    # 使用者自己打的字照原樣寫。上面那些規則（日期拆進年月日、同一項攤到連續空格、
+    # 一格一個字、單位前只收數字）都是為了「從我的資料推出這一格該寫什麼」，
+    # 手打的不必再推一次——他要什麼就寫什麼。勾選框例外：打字的意思是勾那個選項
+    for sid in typed_ids:
+        slot = by_id.get(sid)
+        if slot is not None:
+            text = fields.get(chosen[sid], "")
+            reps[sid] = _replacement(slot, text) if slot.kind == "box" else text
 
     written = 0
     for (_addr, pi), group in by_para.items():
@@ -2281,15 +2299,19 @@ def job_assignment(slots: List[Slot], values: Dict[str, str]) -> Dict[str, str]:
 
 def write(blank: Path, out: Path, assignment: Dict[str, str],
           ticks: Dict[str, bool], profile: Dict[str, Any],
-          highlight: bool = False) -> int:
+          highlight: bool = False, typed: Optional[Dict[str, str]] = None) -> int:
     """把決定好的值寫回文件，存到 out。回傳實際寫了幾處。
 
     重新解析一份原檔再寫，所以使用者改過 assignment 之後可以再叫一次；
     預覽與正式匯出也是各寫各的，不會互相汙染。
     """
     doc, form, slots = parse(blank)
-    written = apply_fills(slots, assignment, usable_fields(form, profile), ticks,
-                          highlight)
+    fields = usable_fields(form, profile)
+    if typed:
+        # 自己打的值沒有欄位代碼，給它一個；這樣底下的寫入完全不必分兩套
+        fields = {**fields, **{TYPED + sid: text for sid, text in typed.items()}}
+        assignment = {**assignment, **{sid: TYPED + sid for sid in typed}}
+    written = apply_fills(slots, assignment, fields, ticks, highlight)
     out.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(out))
     return written

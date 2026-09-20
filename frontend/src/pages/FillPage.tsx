@@ -61,6 +61,15 @@ export default function FillPage() {
     }
   }
 
+  async function typeValue(slotId: string, value: string) {
+    if (!plan) return
+    const result = await run(() => api.setValue(plan.job_id, slotId, value))
+    if (result) {
+      setPlan(result)
+      setPreviewVersion((v) => v + 1)
+    }
+  }
+
   async function applyValues(values: Record<string, string>) {
     if (!plan) return
     const result = await run(() => api.setApply(plan.job_id, values))
@@ -157,7 +166,7 @@ export default function FillPage() {
           <span className="hidden group-open:inline">▾</span> 檢視與修正對映清單（{plan.items.length} 個位置）
         </summary>
         <div className="mt-3">
-          <PlanTable plan={plan} fields={fields} busy={busy} onRemap={remap} />
+          <PlanTable plan={plan} fields={fields} busy={busy} onRemap={remap} onType={typeValue} />
         </div>
       </details>
 
@@ -254,11 +263,13 @@ function PlanTable({
   fields,
   busy,
   onRemap,
+  onType,
 }: {
   plan: Plan
   fields: FieldSpec[]
   busy: boolean
   onRemap: (slotId: string, fieldKey: string, ordinal?: number) => void
+  onType: (slotId: string, value: string) => void
 }) {
   return (
     <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
@@ -282,6 +293,7 @@ function PlanTable({
                 entries={plan.entries}
                 busy={busy}
                 onRemap={onRemap}
+                onType={onType}
               />
             ))}
           </tbody>
@@ -297,12 +309,14 @@ function Row({
   entries,
   busy,
   onRemap,
+  onType,
 }: {
   item: PlanItem
   fields: FieldSpec[]
   entries: Record<string, number>
   busy: boolean
   onRemap: (slotId: string, fieldKey: string, ordinal?: number) => void
+  onType: (slotId: string, value: string) => void
 }) {
   const skipped = item.status === 'skip'
   // 模型判斷的值得使用者優先看一眼；規則與快取都是確定性來源
@@ -367,17 +381,67 @@ function Row({
       </td>
 
       <td className="px-4 py-2.5">
-        {skipped ? (
-          <SkipReason note={item.note} />
-        ) : (
-          <span className="text-slate-900">{item.value.slice(0, 30)}</span>
-        )}
+        <ValueCell item={item} busy={busy} onType={onType} />
+        {skipped && !item.value && <SkipReason note={item.note} />}
       </td>
 
       <td className="px-4 py-2.5 text-xs text-slate-500">
         {skipped ? '—' : sourceLabel(item.source)}
       </td>
     </tr>
+  )
+}
+
+/**
+ * 要填的值：直接在這裡打字就改這一格（後端存在這份工作底下，不會動到「我的資料」）。
+ * 清空就改回自動判斷的值。
+ */
+function ValueCell({
+  item,
+  busy,
+  onType,
+}: {
+  item: PlanItem
+  busy: boolean
+  onType: (slotId: string, value: string) => void
+}) {
+  const [text, setText] = useState(item.value)
+  // 後端回新的計畫（改了欄位、改了這次應徵）就以它為準
+  useEffect(() => setText(item.value), [item.slot_id, item.value])
+  const typed = item.source === 'typed'
+
+  return (
+    <div className="flex items-center gap-1">
+      {/* 同一份表格常有好幾格印著一樣的欄名，aria-label 帶上位置代碼才分得出是哪一格 */}
+      <input
+        value={text}
+        disabled={busy}
+        aria-label={`要填的值：${item.label || '這一格'}（${item.slot_id}）`}
+        placeholder="（不填）"
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => text !== item.value && onType(item.slot_id, text)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+          if (e.key === 'Escape') setText(item.value)
+        }}
+        className={`w-40 text-sm rounded px-2 py-1 border focus:outline-none focus:ring-2
+                    focus:ring-sky-500 ${
+                      typed
+                        ? 'border-sky-300 bg-sky-50 text-slate-900'
+                        : 'border-transparent hover:border-slate-300 text-slate-900'
+                    }`}
+      />
+      {typed && (
+        <button
+          onClick={() => onType(item.slot_id, '')}
+          disabled={busy}
+          title="改回自動判斷的值"
+          className="text-xs text-slate-400 hover:text-slate-700 px-1"
+        >
+          ↺
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -402,6 +466,7 @@ function sourceLabel(source: string) {
     model: '模型',
     manual: '手動',
     apply: '這次應徵',
+    typed: '手動填寫',
   }
   return names[source] ?? source
 }

@@ -73,6 +73,12 @@ class MappingsIn(BaseModel):
     fixes: List[MappingFix]
 
 
+class TypedIn(BaseModel):
+    """對映清單裡直接把某一格改成自己打的字；value 給空字串就改回自動判斷的值。"""
+    slot_id: str
+    value: str
+
+
 class JobHistoryOut(BaseModel):
     """填寫紀錄的一列。保留期內都還能重新下載。"""
     job_id: str

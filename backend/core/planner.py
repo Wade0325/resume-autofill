@@ -53,7 +53,7 @@ class FillOp:
     slot: Slot
     field_key: str
     value: str
-    source: str               # cache | model | manual
+    source: str               # rule | cache | model | manual | apply | typed
     label: str = ""           # 表格上印在這格旁邊的字，機械抽取自列首／欄首
     note: str = ""
     ordinal: int = 0
@@ -713,14 +713,22 @@ def _renumber(slots: List[Slot], decisions: Dict[str, Decision]) -> None:
 
 
 def build_plan(slots: List[Slot], profile: Dict[str, Any],
-               decisions: Dict[str, Decision]) -> Tuple[List[FillOp], List[FillOp]]:
+               decisions: Dict[str, Decision],
+               typed: Optional[Dict[str, str]] = None) -> Tuple[List[FillOp], List[FillOp]]:
+    typed = typed or {}
     by_id = {s.id: s for s in slots}
     ops: List[FillOp] = []
     skipped: List[FillOp] = []
 
+    # 使用者自己打的值最大：連原本判斷不填的格子也照他的意思寫
+    for sid, text in typed.items():
+        if sid in by_id:
+            label = decisions[sid].label if sid in decisions else ""
+            ops.append(FillOp(by_id[sid], "", text, "typed", label))
+
     for sid, (key, ordinal, source, label) in decisions.items():
         slot = by_id.get(sid)
-        if slot is None:
+        if slot is None or sid in typed:
             continue
 
         reason = _reject(key)

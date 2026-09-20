@@ -187,6 +187,11 @@ def apply_values(job: Dict[str, Any]) -> Dict[str, str]:
     return {k: str(v) for k, v in (job.get("apply") or {}).items() if str(v).strip()}
 
 
+def typed_values(job: Dict[str, Any]) -> Dict[str, str]:
+    """這份工作裡使用者自己打的值：{位置代碼: 字}。比任何判斷都優先。"""
+    return {k: str(v).strip() for k, v in (job.get("typed") or {}).items() if str(v).strip()}
+
+
 def _profile_of(job: Dict[str, Any]) -> Dict[str, Any]:
     """我的資料 ＋ 這份工作的「這次應徵」。面板的值只算這一份，不寫回我的資料。"""
     profile = db.get_kv("profile") or {}
@@ -290,7 +295,7 @@ def _vlm_worker(job_id: str, filename: str) -> None:
                       decided={k: list(v) for k, v in decisions.items()},
                       status="analyzed", stage="")
 
-        plan = _vlm_render(job_id, filename, bool(cached), slots, decisions, ticks)
+        plan = _vlm_render(db.get_job(job_id), bool(cached), slots, decisions, ticks)
         log.info("比對完成 fill=%d skip=%d by_source=%s 耗時=%dms",
                  plan.stats.fill, plan.stats.skip, plan.stats.by_source,
                  int((time.perf_counter() - t0) * 1000))
@@ -299,28 +304,31 @@ def _vlm_worker(job_id: str, filename: str) -> None:
         _fail(db.update_job, job_id, filename, "分析", "辨識欄位", e)
 
 
-def _vlm_render(job_id: str, filename: str, cached: bool, slots: List[Any],
+def _vlm_render(job: Dict[str, Any], cached: bool, slots: List[Any],
                 decisions: Dict[str, planner.Decision],
-                ticks: Dict[str, bool],
-                apply: Optional[Dict[str, str]] = None) -> PlanOut:
+                ticks: Dict[str, bool]) -> PlanOut:
     """把 filler 的判讀結果換成前端那張對映清單。
 
     值只是拿來顯示的：實際寫進去的字由 filler 決定（日期會拆進「＿年＿月」、
     西元換民國、勾選框寫的是打勾），所以這裡顯示原始值就好。
     """
-    profile = _profile_of({"apply": apply})
+    job_id, filename = job["id"], job["filename"]
+    apply, typed = apply_values(job), typed_values(job)
+    profile = _profile_of(job)
     # filler 自己算出來的值（年資、英文姓氏）planner 不認得，先查 filler 那一份
     values = filler.fields_of(profile)
     items, by_source = [], {}
     for slot in slots:
         d = decisions.get(slot.id)
-        value = ""
-        if d and d.field_key and d.field_key not in _NOT_FILLED:
+        # 使用者自己打的值最大：連模型判的、這次應徵的都蓋過去
+        value = typed.get(slot.id, "")
+        source = "typed" if value else (d.source if d else "")
+        if not value and d and d.field_key and d.field_key not in _NOT_FILLED:
             value = (values.get(_join_key(d.field_key, d.ordinal))
                      or str(planner.get_value(profile, d.field_key, d.ordinal) or ""))
         fill = bool(value)
         if fill:
-            by_source[d.source] = by_source.get(d.source, 0) + 1
+            by_source[source] = by_source.get(source, 0) + 1
         note = ""
         # 勾選框，以及欄名是選項的空格子（學歷表「日間」底下那格打記號）
         if slot.kind == "box" or slot.id in ticks:
@@ -332,7 +340,7 @@ def _vlm_render(job_id: str, filename: str, cached: bool, slots: List[Any],
             slot_id=slot.id, label=_vlm_label(slot),
             kind=_VLM_KIND.get(slot.kind, slot.kind),
             field_key=(d.field_key if d else slot.job_field), value=value, existing="",
-            source=(d.source if d else ""), status="fill" if fill else "skip",
+            source=source, status="fill" if fill else "skip",
             note=note, ordinal=(d.ordinal if d else 0)))
     items.sort(key=lambda i: _slot_order(i.slot_id))
     fill = sum(1 for i in items if i.status == "fill")
@@ -341,7 +349,7 @@ def _vlm_render(job_id: str, filename: str, cached: bool, slots: List[Any],
         template_cached=cached, llm_available=llm.available(config.LLM_HOST),
         stats=PlanStats(slots=len(slots), fill=fill, skip=len(items) - fill,
                         by_source=by_source),
-        form_fields=[], items=items, entries=_entries(profile), apply=apply or {})
+        form_fields=[], items=items, entries=_entries(profile), apply=apply)
 
 
 def _save_upload(job_id: str, content: bytes, suffix: str = ".docx") -> Path:
@@ -456,7 +464,7 @@ def _analyze_worker(job_id: str, filename: str) -> None:
                       decided={k: list(v) for k, v in decisions.items()},
                       form_fields=form_fields, status="analyzed", stage="")
 
-        plan = _render(job_id, filename, bool(cached), slots, decisions, form_fields)
+        plan = _render(db.get_job(job_id), bool(cached), slots, decisions)
         log.info("比對完成 fill=%d skip=%d by_source=%s 耗時=%dms",
                  plan.stats.fill, plan.stats.skip, plan.stats.by_source,
                  int((time.perf_counter() - t0) * 1000))
@@ -505,11 +513,9 @@ def get_plan(job_id: str) -> Optional[PlanOut]:
     cached = bool(db.get_template(job["fingerprint"]))
     if job.get("engine") == "vlm":
         slots, decisions, ticks = _vlm_restore(job)
-        return _vlm_render(job_id, job["filename"], cached, slots, decisions, ticks,
-                           apply_values(job))
+        return _vlm_render(job, cached, slots, decisions, ticks)
     slots, decisions = _restore(job)
-    return _render(job_id, job["filename"], cached, slots, decisions,
-                   job.get("form_fields"), apply_values(job))
+    return _render(job, cached, slots, decisions)
 
 
 def preview_docx(job_id: str, which: str) -> Optional[bytes]:
@@ -531,10 +537,10 @@ def preview_docx(job_id: str, which: str) -> Optional[bytes]:
         if job.get("engine") == "vlm":
             _slots, decisions, ticks = _vlm_restore(job)
             filler.write(src, filled, _vlm_assignment(decisions), ticks, profile,
-                         highlight=True)
+                         highlight=True, typed=typed_values(job))
         else:
             slots, decisions = _restore(job)
-            ops, _ = planner.build_plan(slots, profile, decisions)
+            ops, _ = planner.build_plan(slots, profile, decisions, typed_values(job))
             writer.apply_ops(str(src), str(filled), ops, highlight=True)
         return filled.read_bytes()
 
@@ -582,10 +588,29 @@ def apply_fixes(job_id: str,
             ticks.pop(slot_id, None)
         db.update_job(job_id, anchors=_vlm_anchors(slots, decisions, ticks,
                                                    db.get_kv("profile") or {}))
-        return _vlm_render(job_id, job["filename"], cached, slots, decisions, ticks,
-                           apply_values(job))
-    return _render(job_id, job["filename"], cached, slots, decisions,
-                   job.get("form_fields"), apply_values(job))
+        return _vlm_render(job, cached, slots, decisions, ticks)
+    return _render(job, cached, slots, decisions)
+
+
+def set_typed(job_id: str, slot_id: str, value: str) -> Optional[PlanOut]:
+    """把某一格改成使用者自己打的字；清空就恢復成原本判斷的值。只改值、不呼叫模型。"""
+    job = db.get_job(job_id)
+    if not job:
+        return None
+    typed = dict(job.get("typed") or {})
+    if value.strip():
+        typed[slot_id] = value.strip()
+    else:
+        typed.pop(slot_id, None)
+    db.update_job(job_id, typed=typed)
+    # 值是使用者的資料，只記長度
+    log.info("手打值 job=%s slot=%s %s", job_id, slot_id,
+             f"{len(value.strip())}字" if value.strip() else "清掉")
+    plan = get_plan(job_id)
+    label = next((i.label for i in plan.items if i.slot_id == slot_id), "") if plan else ""
+    actions.record("手動填寫「%s」" if value.strip() else "清掉手動填的「%s」",
+                   label or slot_id)
+    return plan
 
 
 def set_apply(job_id: str, values: Dict[str, str]) -> Optional[PlanOut]:
@@ -616,11 +641,12 @@ def write_output(job_id: str) -> Optional[Dict[str, Any]]:
     if vlm:
         _slots, decisions, ticks = _vlm_restore(job)
         written = filler.write(input_path(job_id), output_path(job_id),
-                               _vlm_assignment(decisions), ticks, profile)
+                               _vlm_assignment(decisions), ticks, profile,
+                               typed=typed_values(job))
         result = {"written": written, "failed": 0, "fail": []}
     else:
         slots, decisions = _restore(job)
-        ops, _ = planner.build_plan(slots, profile, decisions)
+        ops, _ = planner.build_plan(slots, profile, decisions, typed_values(job))
         result = writer.apply_ops(str(input_path(job_id)), str(output_path(job_id)), ops)
     log.info("寫檔完成 written=%d failed=%d 耗時=%dms",
              result["written"], result["failed"], int((time.perf_counter() - t0) * 1000))
@@ -649,12 +675,13 @@ def write_output(job_id: str) -> Optional[Dict[str, Any]]:
     return {"job_id": job_id, "written": result["written"], "failed": result["failed"]}
 
 
-def _render(job_id: str, filename: str, cached: bool, slots: List[Slot],
-            decisions: Dict[str, Any], form_fields: Optional[List[str]] = None,
-            apply: Optional[Dict[str, str]] = None) -> PlanOut:
-    profile = _profile_of({"apply": apply})
-    decisions = _classic_per_job(decisions, apply or {})
-    ops, skipped = planner.build_plan(slots, profile, decisions)
+def _render(job: Dict[str, Any], cached: bool, slots: List[Slot],
+            decisions: Dict[str, Any]) -> PlanOut:
+    job_id, filename = job["id"], job["filename"]
+    form_fields = job.get("form_fields")
+    profile = _profile_of(job)
+    decisions = _classic_per_job(decisions, apply_values(job))
+    ops, skipped = planner.build_plan(slots, profile, decisions, typed_values(job))
 
     items = [_item(o, "fill") for o in ops] + [_item(s, "skip") for s in skipped]
     items.sort(key=lambda i: _slot_order(i.slot_id))
@@ -669,7 +696,7 @@ def _render(job_id: str, filename: str, cached: bool, slots: List[Slot],
         stats=PlanStats(slots=len(slots), fill=len(ops), skip=len(skipped),
                         by_source=by_source),
         form_fields=[BY_KEY[k].label for k in (form_fields or []) if k in BY_KEY],
-        items=items, entries=_entries(profile), apply=apply or {})
+        items=items, entries=_entries(profile), apply=apply_values(job))
 
 
 def _item(op, status: str) -> PlanItem:

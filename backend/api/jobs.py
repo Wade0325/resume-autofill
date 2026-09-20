@@ -7,7 +7,7 @@ from fastapi import APIRouter, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 
 from .. import actions, db, service
-from ..schemas import ApplyIn, JobHistoryOut, MappingsIn, OutputOut, PlanOut
+from ..schemas import ApplyIn, JobHistoryOut, MappingsIn, OutputOut, PlanOut, TypedIn
 from .uploads import DOCX_MEDIA_TYPE, WorkId, read_upload
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -68,6 +68,15 @@ def fix_mappings(job_id: WorkId, body: MappingsIn) -> PlanOut:
 def list_jobs() -> list:
     """填寫紀錄：最近填過的表單，保留期內可以重新下載。"""
     return service.recent_jobs()
+
+
+@router.patch("/{job_id}/value", response_model=PlanOut)
+def set_value(job_id: WorkId, body: TypedIn) -> PlanOut:
+    """把某一格改成自己打的字（空字串＝改回自動判斷的值）。預覽立刻跟著變。"""
+    plan = service.set_typed(job_id, body.slot_id, body.value)
+    if plan is None:
+        raise HTTPException(404, "找不到這個 job")
+    return plan
 
 
 @router.patch("/{job_id}/apply", response_model=PlanOut)
