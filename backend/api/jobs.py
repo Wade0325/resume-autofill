@@ -1,13 +1,16 @@
 """主要流程：上傳 → 檢視計畫 → 修正 → 產生成果。"""
 from __future__ import annotations
 
+import re
 from typing import List
+from urllib.parse import quote
 
-from fastapi import APIRouter, File, HTTPException, Response, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse
 
 from .. import actions, db, service
-from ..schemas import ApplyIn, JobHistoryOut, MappingsIn, OutputOut, PlanOut, TypedIn
+from ..schemas import (ApplyIn, BatchIdsIn, BatchOutputOut, BatchStatusOut, JobHistoryOut,
+                       MappingsIn, OutputOut, PlanOut, TypedIn)
 from .uploads import DOCX_MEDIA_TYPE, WorkId, read_upload
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -19,6 +22,51 @@ async def create_job(file: UploadFile = File(...)) -> dict:
     name, content = await read_upload(file, (".docx",))
     job_id = service.analyze(name, content)
     return {"job_id": job_id, "status": "processing", "filename": name}
+
+
+# 批次那幾支要排在 /{job_id} 前面：路由照宣告順序比對，擺後面的話
+# /jobs/batch.zip 會先被當成 job_id 攔下來
+_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+
+
+def _batch_ids(raw: List[str]) -> List[str]:
+    """批次的工作代碼。代碼會接進檔案路徑，格式不對一律不認（同 WorkId 的規則）。"""
+    ids = [x for x in raw if x]
+    if not ids:
+        raise HTTPException(422, "沒有指定任何工作")
+    if len(ids) > service.BATCH_MAX:
+        raise HTTPException(422, f"一次最多 {service.BATCH_MAX} 份")
+    bad = [x for x in ids if not _ID_RE.fullmatch(x)]
+    if bad:
+        raise HTTPException(422, "不認得的工作代碼")
+    return ids
+
+
+@router.get("/batch", response_model=List[BatchStatusOut])
+def batch_status(ids: str = Query(..., description="工作代碼，逗號分隔")) -> list:
+    """一次問整批的進度。畫面每兩秒輪詢這一支，所以不回計畫內容。"""
+    return service.batch_status(_batch_ids(ids.split(",")))
+
+
+@router.post("/batch/output", response_model=List[BatchOutputOut])
+def batch_output(body: BatchIdsIn) -> list:
+    """整批套用。一份失敗不影響其他份，逐份回報結果。"""
+    return service.batch_output(_batch_ids(body.job_ids))
+
+
+@router.get("/batch.zip")
+def batch_zip(ids: str = Query(..., description="工作代碼，逗號分隔")) -> Response:
+    """把已經產生的成品打包下載。還沒產生的那幾份直接略過。"""
+    content, count = service.batch_zip(_batch_ids(ids.split(",")))
+    if not count:
+        raise HTTPException(404, "這一批還沒有任何成果檔，請先套用")
+    # 中文檔名要用 RFC 5987 那一式；同時留一個 ASCII 的備援，舊瀏覽器才不會拿到亂碼
+    name = f"已填寫履歷_{count}份.zip"
+    return Response(
+        content=content, media_type="application/zip",
+        headers={"Content-Disposition":
+                 f'attachment; filename="resumes_{count}.zip"; '
+                 f"filename*=UTF-8''{quote(name)}"})
 
 
 @router.get("/{job_id}")

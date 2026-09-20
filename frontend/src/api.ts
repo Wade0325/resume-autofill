@@ -68,6 +68,25 @@ export type ImportState =
   | { status: 'ready'; preview: ImportPreview }
 
 // 填寫紀錄的一列：保留期內都還能重新下載
+/** 批次面板的一列。輪詢用，所以不含計畫內容。 */
+export type BatchStatus = {
+  job_id: string
+  filename: string
+  status: 'processing' | 'analyzed' | 'failed' | 'missing'
+  stage: string
+  error: string
+  downloadable: boolean
+  fill: number
+}
+
+export type BatchOutput = {
+  job_id: string
+  filename: string
+  ok: boolean
+  error: string
+  written: number
+}
+
 export type JobHistory = {
   job_id: string
   filename: string
@@ -261,6 +280,12 @@ export const api = {
   makeOutput: (jobId: string) =>
     postJson<{ written: number; failed: number }>(`/jobs/${jobId}/output`, {}),
   downloadUrl: (jobId: string) => `/api/jobs/${jobId}/output`,
+
+  batchStatus: (jobIds: string[]) =>
+    request<BatchStatus[]>(`/jobs/batch?ids=${jobIds.join(',')}`),
+  batchOutput: (jobIds: string[]) =>
+    postJson<BatchOutput[]>('/jobs/batch/output', { job_ids: jobIds }),
+  batchZipUrl: (jobIds: string[]) => `/api/jobs/batch.zip?ids=${jobIds.join(',')}`,
 
   analyzeImport: (file: File, onProgress?: (pct: number) => void) =>
     upload<{ import_id: string; status: string; filename: string }>(

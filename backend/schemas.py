@@ -114,6 +114,30 @@ class OutputOut(BaseModel):
     failed: int
 
 
+class BatchStatusOut(BaseModel):
+    """批次面板的一列。輪詢用，所以不帶計畫內容。"""
+    job_id: str
+    filename: str
+    status: str                       # processing | analyzed | failed | missing
+    stage: str = ""                   # 排隊中（前面還有 N 份）／逐格判讀 第 n／m 批
+    error: str = ""
+    downloadable: bool
+    fill: int = 0                     # 會填幾格（分析完才有）
+
+
+class BatchIdsIn(BaseModel):
+    job_ids: List[str]
+
+
+class BatchOutputOut(BaseModel):
+    """整批套用的結果。一份失敗不影響其他份，所以逐份回報。"""
+    job_id: str
+    filename: str
+    ok: bool
+    error: str = ""
+    written: int = 0
+
+
 class ImportRow(BaseModel):
     row_id: str                       # "欄位代碼#序號"，模型每欄只給一個值所以必定唯一
     field_key: str

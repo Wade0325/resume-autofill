@@ -13,6 +13,8 @@ type Props = {
   accept?: string
   note?: string
   onCancel?: () => void      // 分析中可以取消（填寫頁有，匯入頁沒有）
+  // 一次收好幾份（填寫頁的批次）。給了就整批交出去，沒給就只收第一個檔案
+  onFiles?: (files: File[]) => void
 }
 
 export default function Dropzone({
@@ -23,14 +25,17 @@ export default function Dropzone({
   accept = '.docx',
   note = '接受 .docx（舊版 .doc 請先用 Word 另存新檔）',
   onCancel,
+  onFiles,
 }: Props) {
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const busy = phase.kind !== 'idle'
 
-  function take(files: FileList | null) {
-    const file = files?.[0]
-    if (file) onFile(file)
+  function take(list: FileList | null) {
+    const files = Array.from(list ?? [])
+    if (files.length === 0) return
+    if (onFiles) onFiles(files)
+    else onFile(files[0])
   }
 
   return (
@@ -54,6 +59,7 @@ export default function Dropzone({
         ref={inputRef}
         type="file"
         accept={accept}
+        multiple={!!onFiles}
         className="hidden"
         onChange={(e) => {
           take(e.target.files)

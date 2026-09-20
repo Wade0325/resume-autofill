@@ -45,17 +45,19 @@ export function FooterBar({
   disabled,
   label,
   secondary,
+  restartLabel = '← 換一份檔案',
 }: {
   onRestart: () => void
   onSubmit: () => void
   disabled: boolean
   label: string
   secondary?: ReactNode
+  restartLabel?: string
 }) {
   return (
     <div className="flex items-center justify-between gap-3 pb-8">
       <button onClick={onRestart} className="text-sm text-slate-500 hover:text-slate-800">
-        ← 換一份檔案
+        {restartLabel}
       </button>
       <div className="flex items-center gap-3">
         {secondary}

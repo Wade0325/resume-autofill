@@ -12,6 +12,7 @@ import {
 import { useBackgroundUpload } from '../useBackgroundUpload'
 import ApplyPanel from '../components/ApplyPanel'
 import Dropzone from '../components/Dropzone'
+import BatchPanel from '../components/BatchPanel'
 import JobHistory from '../components/JobHistory'
 import LearnedFormats from '../components/LearnedFormats'
 import { PageShell, FooterBar, OverwriteBadge } from '../components/common'
@@ -21,6 +22,7 @@ const DocxCompare = lazy(() => import('../components/DocxCompare'))
 
 // 值是插進原本的字裡的，不會蓋掉表格印好的內容
 const INSERTS = new Set(['checkbox', 'print'])
+const KEY_BATCH = 'fill.batchIds'
 
 export default function FillPage() {
   const [fields, setFields] = useState<FieldSpec[]>([])
@@ -28,6 +30,16 @@ export default function FillPage() {
   const [plan, setPlan] = useState<Plan | null>(null)
   const [previewVersion, setPreviewVersion] = useState(0)
   const [busy, setBusy] = useState(false)
+  // 一次丟好幾份時，這一批的工作代碼。跟單份一樣存 sessionStorage，
+  // 切到別頁再回來還在——整批要跑好幾分鐘，中途去看「我的資料」是很正常的事
+  const [batchIds, setBatchIds] = useState<string[]>(() => {
+    try {
+      return JSON.parse(sessionStorage.getItem(KEY_BATCH) ?? '[]')
+    } catch {
+      return []
+    }
+  })
+  const [batchUp, setBatchUp] = useState<{ done: number; total: number } | null>(null)
 
   // 分析在後端背景執行，hook 負責上傳、輪詢進度與 sessionStorage 接續
   const { phase, error, setError, upload, track, reset } = useBackgroundUpload({
@@ -126,6 +138,55 @@ export default function FillPage() {
     })
   }
 
+  /**
+   * 拖進來幾份就開幾個工作。一份就走原本的單份流程（畫面完全不變）；
+   * 多份就各自建一個工作，後端的排隊號誌會讓它們一個一個問模型。
+   */
+  async function uploadMany(files: File[]) {
+    if (files.length === 1) return upload(files[0])
+    setError('')
+    reset()
+    setPlan(null)
+    setBatchUp({ done: 0, total: files.length })
+    const ids: string[] = []
+    try {
+      for (const file of files) {
+        // 一個一個送：後端要為每一份存檔、開執行緒，一次全部灌過去只是讓
+        // 進度條說謊，實際還是排隊
+        ids.push((await api.analyze(file)).job_id)
+        setBatchUp({ done: ids.length, total: files.length })
+      }
+    } catch (e) {
+      setError(errorText(e))
+    }
+    setBatchUp(null)
+    if (ids.length) {
+      sessionStorage.setItem(KEY_BATCH, JSON.stringify(ids))
+      setBatchIds(ids)
+    }
+  }
+
+  /** 離開批次回到上傳畫面。單份的那些狀態也一起清掉。 */
+  function clearBatch() {
+    sessionStorage.removeItem(KEY_BATCH)
+    setBatchIds([])
+    reset()
+    setPlan(null)
+  }
+
+  if (!plan && batchIds.length > 0) {
+    return (
+      <PageShell title="填寫履歷" desc={`這一批共 ${batchIds.length} 份。`} error={error}>
+        <BatchPanel
+          jobIds={batchIds}
+          onOpen={track}
+          onRestart={clearBatch}
+          onError={setError}
+        />
+      </PageShell>
+    )
+  }
+
   if (!plan) {
     return (
       <PageShell
@@ -135,9 +196,12 @@ export default function FillPage() {
       >
         <Dropzone
           title="把空白履歷表拖到這裡"
-          hint="或點擊選擇檔案"
-          phase={phase}
+          hint="或點擊選擇檔案；一次拖好幾份就會整批處理"
+          phase={batchUp
+            ? { kind: 'uploading', percent: Math.round((batchUp.done / batchUp.total) * 100) }
+            : phase}
           onFile={upload}
+          onFiles={uploadMany}
           onCancel={phase.kind === 'analyzing' ? cancelNow : undefined}
         />
         <EnginePicker />
@@ -228,6 +292,7 @@ export default function FillPage() {
           setPlan(null)
         }}
         onSubmit={applyAndDownload}
+        restartLabel={batchIds.length > 0 ? '← 回到這批' : '← 換一份檔案'}
         disabled={busy || plan.stats.fill === 0}
         label={busy ? '處理中…' : `套用並下載（${plan.stats.fill} 格）`}
         secondary={

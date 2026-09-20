@@ -10,6 +10,7 @@ import logging
 import re
 import tempfile
 import threading
+import zipfile
 import time
 import unicodedata
 import uuid
@@ -662,6 +663,95 @@ def reanalyze(job_id: str) -> bool:
     actions.record("重新分析「%s」（不用學過的格式）", job["filename"])
     threading.Thread(target=worker, args=(job_id, job["filename"], False), daemon=True).start()
     return True
+
+
+# ---------------------------------------------------------------------------
+# 批次：一次丟好幾份表格
+# ---------------------------------------------------------------------------
+# 每一份還是一個獨立的工作，走同一條分析流程、同一個排隊號誌（_Queued），
+# 差別只在前端把它們綁成一組看進度、一起下載。不另外做一套批次狀態機——
+# 那會多出「批次壞了但裡面的工作好好的」這種對不起來的狀態。
+
+BATCH_MAX = 20          # 一次最多幾份：再多使用者也看不完，而且全部要排隊等模型
+
+
+def batch_status(job_ids: List[str]) -> List[Dict[str, Any]]:
+    """一次問好幾份的進度。輪詢用，所以不帶計畫內容——
+    get_job_state 在分析完會回整份計畫，拿它輪詢五份等於每兩秒搬五份計畫。"""
+    out = []
+    for job_id in job_ids:
+        job = db.get_job(job_id)
+        if not job:
+            out.append({"job_id": job_id, "filename": "", "status": "missing",
+                        "stage": "", "error": "找不到這份工作", "downloadable": False,
+                        "fill": 0})
+            continue
+        out.append({"job_id": job_id, "filename": job["filename"],
+                    "status": job["status"],
+                    "stage": job.get("stage") or "",
+                    "error": job.get("error") or "",
+                    "downloadable": output_path(job_id).exists(),
+                    "fill": _fill_count(job)})
+    return out
+
+
+def _fill_count(job: Dict[str, Any]) -> int:
+    """這份會填幾格。分析完才算得出來，算不出來就回 0（畫面顯示成空白）。"""
+    if job["status"] != "analyzed":
+        return 0
+    try:
+        plan = get_plan(job["id"])
+        return plan.stats.fill if plan else 0
+    except Exception as e:        # 單獨一份壞掉不該讓整批的進度頁掛掉
+        log.warning("批次算填寫格數失敗 job=%s：%s", job["id"], e)
+        return 0
+
+
+def batch_output(job_ids: List[str]) -> List[Dict[str, Any]]:
+    """整批套用。一份失敗不影響其他份——回報哪幾份沒成功，讓使用者自己去看。"""
+    results = []
+    for job_id in job_ids:
+        job = db.get_job(job_id)
+        if not job:
+            results.append({"job_id": job_id, "filename": "", "ok": False,
+                            "error": "找不到這份工作", "written": 0})
+            continue
+        if job["status"] != "analyzed":
+            results.append({"job_id": job_id, "filename": job["filename"], "ok": False,
+                            "error": job.get("error") or "這份還沒分析完", "written": 0})
+            continue
+        try:
+            result = write_output(job_id)
+            results.append({"job_id": job_id, "filename": job["filename"], "ok": True,
+                            "error": "", "written": (result or {}).get("written", 0)})
+        except Exception as e:
+            log.warning("批次套用失敗 job=%s：%s", job_id, e)
+            results.append({"job_id": job_id, "filename": job["filename"], "ok": False,
+                            "error": str(e), "written": 0})
+    ok = sum(1 for r in results if r["ok"])
+    actions.record("整批填寫 %d 份：成功 %d 份", len(results), ok)
+    return results
+
+
+def batch_zip(job_ids: List[str]) -> Tuple[bytes, int]:
+    """把已經產生的成品打包成一個 zip，回 (內容, 幾份)。
+
+    檔名前面加序號：兩家公司的表格常常都叫「應徵人員資料表.docx」，
+    不編號的話 zip 裡會互相蓋掉。
+    """
+    buf = io.BytesIO()
+    count = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for i, job_id in enumerate(job_ids, 1):
+            path = output_path(job_id)
+            job = db.get_job(job_id)
+            if not path.exists() or not job:
+                continue
+            stem = job["filename"].rsplit(".", 1)[0]
+            z.writestr(f"{i:02d}_{stem}_已填寫.docx", path.read_bytes())
+            count += 1
+    actions.record("下載整批 %d 份成功", count)
+    return buf.getvalue(), count
 
 
 def recent_jobs(limit: int = 20) -> List[Dict[str, Any]]:
