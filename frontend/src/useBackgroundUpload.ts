@@ -62,6 +62,14 @@ export function useBackgroundUpload<S extends Polled>(opts: {
     }
   }
 
+  /** 接手一個既有的工作（填寫紀錄點「開啟」）：還在分析中的也接得起來。 */
+  function track(id: string) {
+    setError('')
+    sessionStorage.setItem(storageKey, id)
+    onDiscard?.()
+    setTrackingId(id)
+  }
+
   /** 回到上傳畫面重來。頁面自己負責清結果 state（setPlan(null) 那類）。 */
   function reset() {
     sessionStorage.removeItem(storageKey)
@@ -70,5 +78,5 @@ export function useBackgroundUpload<S extends Polled>(opts: {
     setPhase({ kind: 'idle' })
   }
 
-  return { phase, error, setError, upload, reset }
+  return { phase, error, setError, upload, track, reset }
 }

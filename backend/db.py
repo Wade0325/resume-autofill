@@ -261,6 +261,15 @@ def update_job(job_id: str, *, decided: Optional[Dict[str, Any]] = None,
                                 "stage": stage, "error": error, "apply": apply})
 
 
+def list_jobs(limit: int = 20) -> List[Dict[str, Any]]:
+    """最近填過的（新的在前）。過期的上傳檔連同紀錄會被清掉，所以這裡看到的都還在保留期內。"""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id, filename, status, engine, error, created_at FROM job "
+            "ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
 def fail_stale_jobs() -> int:
     """把上次關機時還在分析中的工作標成失敗——執行緒已經死了，不會有結果。"""
     n = 0

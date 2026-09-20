@@ -73,6 +73,17 @@ class MappingsIn(BaseModel):
     fixes: List[MappingFix]
 
 
+class JobHistoryOut(BaseModel):
+    """填寫紀錄的一列。保留期內都還能重新下載。"""
+    job_id: str
+    filename: str
+    status: str                       # processing | analyzed | failed
+    engine: str
+    error: str = ""
+    created_at: str
+    downloadable: bool
+
+
 class ApplyIn(BaseModel):
     """「這次應徵」：應徵職務、工作地點…只算這一份工作，不進「我的資料」。"""
     values: Dict[str, str]

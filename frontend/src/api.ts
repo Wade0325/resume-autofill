@@ -65,6 +65,17 @@ export type ImportState =
   | { status: 'failed'; error: string; filename: string }
   | { status: 'ready'; preview: ImportPreview }
 
+// 填寫紀錄的一列：保留期內都還能重新下載
+export type JobHistory = {
+  job_id: string
+  filename: string
+  status: 'processing' | 'analyzed' | 'failed'
+  engine: string
+  error: string
+  created_at: string
+  downloadable: boolean
+}
+
 export type LogEntry = {
   time: string
   level: string
@@ -210,6 +221,7 @@ export const api = {
   analyze: (file: File, onProgress?: (pct: number) => void) =>
     upload<{ job_id: string; status: string; filename: string }>('/jobs', file, onProgress),
   getJob: (jobId: string) => request<JobState>(`/jobs/${jobId}`),
+  jobHistory: () => request<JobHistory[]>('/jobs'),
   fixMappings: (
     jobId: string,
     fixes: { slot_id: string; field_key: string; ordinal?: number }[],

@@ -4,6 +4,7 @@ import { api, errorText, type FieldSpec, type Plan, type PlanItem, type Profile 
 import { useBackgroundUpload } from '../useBackgroundUpload'
 import ApplyPanel from '../components/ApplyPanel'
 import Dropzone from '../components/Dropzone'
+import JobHistory from '../components/JobHistory'
 import { PageShell, FooterBar, OverwriteBadge } from '../components/common'
 
 // pdf.js 佔了主 bundle 一半以上，等真的要顯示預覽時再載
@@ -20,7 +21,7 @@ export default function FillPage() {
   const [busy, setBusy] = useState(false)
 
   // 分析在後端背景執行，hook 負責上傳、輪詢進度與 sessionStorage 接續
-  const { phase, error, setError, upload, reset } = useBackgroundUpload({
+  const { phase, error, setError, upload, track, reset } = useBackgroundUpload({
     storageKey: 'fill.jobId',
     start: async (file, onProgress) => (await api.analyze(file, onProgress)).job_id,
     getState: api.getJob,
@@ -89,6 +90,7 @@ export default function FillPage() {
           onFile={upload}
         />
         <EnginePicker />
+        <JobHistory onOpen={track} onError={setError} />
       </PageShell>
     )
   }

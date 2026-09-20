@@ -469,6 +469,18 @@ def _restore(job: Dict[str, Any]) -> Tuple[List[Slot], Dict[str, planner.Decisio
     return slots, decisions
 
 
+def recent_jobs(limit: int = 20) -> List[Dict[str, Any]]:
+    """填寫紀錄：最近填過哪幾份、還能不能重新下載。
+    保留期過了連上傳檔帶紀錄一起清掉（見 db.purge_old_jobs），所以列出來的都還下載得到。"""
+    out = []
+    for row in db.list_jobs(limit):
+        out.append({"job_id": row["id"], "filename": row["filename"],
+                    "status": row["status"], "engine": row.get("engine") or "classic",
+                    "error": row.get("error") or "", "created_at": row["created_at"],
+                    "downloadable": output_path(row["id"]).exists()})
+    return out
+
+
 def get_job_state(job_id: str) -> Optional[Dict[str, Any]]:
     """輪詢用：processing 給階段、failed 給原因、好了給完整計畫。"""
     job = db.get_job(job_id)

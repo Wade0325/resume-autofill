@@ -1,11 +1,13 @@
 """主要流程：上傳 → 檢視計畫 → 修正 → 產生成果。"""
 from __future__ import annotations
 
+from typing import List
+
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 
 from .. import actions, db, service
-from ..schemas import ApplyIn, MappingsIn, OutputOut, PlanOut
+from ..schemas import ApplyIn, JobHistoryOut, MappingsIn, OutputOut, PlanOut
 from .uploads import DOCX_MEDIA_TYPE, WorkId, read_upload
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -60,6 +62,12 @@ def fix_mappings(job_id: WorkId, body: MappingsIn) -> PlanOut:
     if plan is None:
         raise HTTPException(404, "找不到這個 job")
     return plan
+
+
+@router.get("", response_model=List[JobHistoryOut])
+def list_jobs() -> list:
+    """填寫紀錄：最近填過的表單，保留期內可以重新下載。"""
+    return service.recent_jobs()
 
 
 @router.patch("/{job_id}/apply", response_model=PlanOut)
