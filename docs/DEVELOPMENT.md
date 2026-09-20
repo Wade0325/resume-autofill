@@ -318,12 +318,27 @@ cd frontend; npm install; npm run dev
 - `--reload` 是整個行程重啟；資料都在 SQLite 與檔案裡所以無影響，正式啟動不要帶。
 - llama-server 的 `--ctx-size 16384` 不是隨便訂的：整份文件＋輸出，8192 會在生成中被截斷。
   `--temp 0` 讓判斷可重現；`--reasoning off` 關掉 Qwen 的 thinking 模式。
-- 不指定 `--n-gpu-layers`：llama.cpp 會看剩多少 VRAM 自己決定放幾層。以前寫死 999，
-  log 直接說 `n_gpu_layers already set by user to 999, abort`——自動配置整個被關掉，
-  顯卡不夠大的機器只能自己改參數。要手動指定設 `RESUME_AUTOFILL_GPU_LAYERS`。
+- `--n-gpu-layers 999`：整顆模型都放上 GPU。中間一度改成不指定、讓 llama.cpp 自己看
+  剩多少 VRAM 決定，因為 log 會少一行 `n_gpu_layers already set by user to 999, abort`。
+  **那個改動是錯的，已經改回來**：8 GB 顯卡上自動配置挑了 CPU／GPU 混合，第 0 層被分到
+  CPU，連帶 `fused Gated Delta Net not supported, set to disabled`，每次模型呼叫從
+  ~10 秒變 14～15 秒（三份考題 93／132／128 秒 vs 全上 GPU 的 71／99／90 秒），
+  跑約 40 分鐘後整個 server 以 `got exception: bad allocation` ＋
+  `GGML_ASSERT(batch.slot_batched || batch.size() == 0) failed` 崩潰，之後連不上。
+  那行 abort 只是告知，不是問題。裝不下的機器用 `RESUME_AUTOFILL_GPU_LAYERS` 指定層數
+  （設 `0` 就純 CPU 跑）。
+
+  教訓：評估分數突然變差時，先確認模型服務還活著再懷疑自己的程式——那次「主線也掉分」
+  其實是 server 已經死了。
+
+- 這個標籤只能靠 `nvidia-smi --query-compute-apps` 有沒有列到那個 pid 來判斷，**不能**
+  要求 `used_memory` 是數字：Windows 的 WDDM 驅動模式問不到，那一欄會是 `[N/A]`，
+  以前整顆模型都在顯卡上卻顯示「CPU」。另外自己設 `RESUME_AUTOFILL_GPU_LAYERS=0` 的人
+  一律顯示 CPU——視覺投影檔仍然會佔 1.3 GB 左右顯卡（llama.cpp 預設把它放上去），
+  但文字推論在 CPU，標籤要回答的是「為什麼這麼慢」。
 - 開程式時自動把上次用的模型載回來（`RESUME_AUTOFILL_AUTOSTART=0` 關掉，開發時不想等就設它）。
   推論埠上已經有服務在聽就完全不動作——那可能是別的工作階段或使用者自己開的，不該去砍它。
-- 跑在 GPU 還是 CPU：問 `nvidia-smi` 自己生的那個 pid 吃了多少 VRAM。不去解析 llama-server 的 log
+- 跑在 GPU 還是 CPU：問 `nvidia-smi` 自己生的那個 pid 有沒有被列進「正在用 GPU 的行程」。不去解析 llama-server 的 log
   ——各版本寫法不一樣，這台機器上的 log 根本沒印 CUDA 初始化那幾行。
 - 模型下載會續傳（`.part` ＋ `Range`，斷了不刪），完成後拿來源的 ETag 比對
   （Hugging Face 的 LFS ETag 就是檔案的 sha256）；壞檔直接刪掉重抓，不會一直續傳到同一個壞結果。

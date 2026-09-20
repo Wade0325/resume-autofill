@@ -144,15 +144,17 @@ def _switch(name: str, gguf: Path) -> None:
     port = urlparse(config.LLM_HOST).port or 8085
     try:
         _kill_port(port)
-        # 不指定 --n-gpu-layers：llama.cpp 會自己看剩多少 VRAM 決定放幾層上去。
-        # 以前寫死 999，log 直接說「n_gpu_layers already set by user to 999, abort」——
-        # 自動配置整個被關掉，顯卡不夠大的機器只能自己改參數。
-        # 真的要指定就設 RESUME_AUTOFILL_GPU_LAYERS
+        # 整顆模型都放上 GPU。曾經改成不指定、讓 llama.cpp 自己看剩多少 VRAM 決定——
+        # log 少了一行「n_gpu_layers already set by user to 999, abort」，看起來比較漂亮，
+        # 實際上是災難：8 GB 顯卡上它挑了 CPU／GPU 混合，第 0 層被分到 CPU，
+        # 連帶把 fused Gated Delta Net 關掉，每次呼叫從 ~10 秒變 14～15 秒，
+        # 跑約 40 分鐘後整個 server 以 bad allocation ＋ GGML_ASSERT 崩潰。
+        # 那行 log 只是告知，不是問題。裝不下的機器用 RESUME_AUTOFILL_GPU_LAYERS
+        # 指定層數（設 0 就純 CPU 跑）。
         args = [str(config.LLAMA_SERVER), "-m", str(gguf), "--port", str(port),
                 "--ctx-size", str(config.LLM_CTX_SIZE),
-                "--jinja", "--temp", "0", "--reasoning", "off"]
-        if config.GPU_LAYERS:
-            args += ["--n-gpu-layers", config.GPU_LAYERS]
+                "--jinja", "--temp", "0", "--reasoning", "off",
+                "--n-gpu-layers", config.GPU_LAYERS or "999"]
         # 視覺投影檔在就掛上，模型才吃得了頁面截圖
         mmproj = _mmproj_path(name)
         if mmproj.exists():
@@ -201,7 +203,14 @@ def _kill_port(port: int) -> None:
 
 def _device_of(pid: int) -> str:
     """這個 llama-server 吃了多少 VRAM：有就是跑在 GPU 上，沒有就是 CPU。
-    問 nvidia-smi 自己生的那個行程，不必去猜 log 怎麼寫（不同版本寫法不一樣）。"""
+    問 nvidia-smi 自己生的那個行程，不必去猜 log 怎麼寫（不同版本寫法不一樣）。
+
+    這個標籤是要回答使用者「為什麼這麼慢」，講的是文字推論跑在哪。自己指定 0 層的人
+    就是選了純 CPU，即使視覺投影檔仍然佔著一點顯卡（llama.cpp 預設把它放上去），
+    也不該顯示 GPU 讓人以為應該很快。
+    """
+    if config.GPU_LAYERS == "0":
+        return "CPU"
     try:
         out = subprocess.run(
             ["nvidia-smi", "--query-compute-apps=pid,used_memory",
@@ -212,8 +221,11 @@ def _device_of(pid: int) -> str:
         return "CPU"        # 沒有 nvidia-smi 就是沒有 NVIDIA 顯卡
     for line in out.splitlines():
         parts = [x.strip() for x in line.split(",")]
-        if len(parts) == 2 and parts[0] == str(pid) and parts[1].isdigit():
-            return f"GPU（{int(parts[1]) / 1024:.1f} GB）"
+        if len(parts) == 2 and parts[0] == str(pid):
+            # 被列進「正在用 GPU 的行程」就是跑在 GPU 上。吃了多少是另一回事——
+            # Windows 的 WDDM 驅動模式問不到，這一欄會是 [N/A]，
+            # 以前要求它是數字，結果整顆模型都在顯卡上卻顯示「CPU」
+            return f"GPU（{int(parts[1]) / 1024:.1f} GB）" if parts[1].isdigit() else "GPU"
     return "CPU"
 
 
