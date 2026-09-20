@@ -1733,8 +1733,8 @@ def _row_records(group: List[Slot], root: str, fields: Dict[str, str]) -> Dict[i
 
 
 def ask_rows(blocks: Dict[Tuple[str, int], List[Slot]], fields: Dict[str, str],
-             pages: Pages, host: str = LLM_HOST, model: str = LLM_MODEL,
-             printed: str = "") -> Tuple[Dict[str, str], Dict[str, bool]]:
+             pages: Pages, printed: str, host: str = LLM_HOST,
+             model: str = LLM_MODEL) -> Tuple[Dict[str, str], Dict[str, bool]]:
     """一列一筆的表：問模型「每一欄是什麼」，再由程式照「往下第 N 列＝第 N 筆」排進去。
 
     逐格問時，這種表的每一格都長得一模一樣（空的，只差欄名），模型會把第二筆
@@ -1744,6 +1744,9 @@ def ask_rows(blocks: Dict[Tuple[str, int], List[Slot]], fields: Dict[str, str],
     第幾筆放哪一列，依序看三件事：列首印著這一筆是哪一種（大學那筆放「大學」列）、
     左邊序號欄印的數字（證照表左欄 1、2，右欄 3、4）、都沒有才照由上而下的順序。
     回傳 {位置編號: 項目代碼} 與 {位置編號: 打不打記號}（選項欄用）。
+
+    printed＝這份表格印出來的字，沒有預設值是故意的：少傳了就等於「什麼都沒提到」，
+    家人、諮詢人那幾份清單會整個消失，而且不會有任何錯誤訊息。
     """
     roots = {k.split("[")[0] for k in fields if "[" in k}
     choices = [k for k in BY_KEY if "[]" in k and k.split("[]")[0] in roots
@@ -2329,8 +2332,7 @@ def analyze(blank: Path, profile: Dict[str, Any],
     if blocks:
         step("判讀一列一筆的表")
         try:
-            rows, marks = ask_rows(blocks, fields, pages, host, model,
-                                   printed=printed_text(form))
+            rows, marks = ask_rows(blocks, fields, pages, printed_text(form), host, model)
             chosen.update(rows)
             ticks.update(marks)
         except llm.LlmError as e:
