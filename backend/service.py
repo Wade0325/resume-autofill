@@ -210,7 +210,7 @@ def _classic_per_job(decisions: Dict[str, Any], values: Dict[str, str]) -> Dict[
     out = dict(decisions)
     for sid, d in decisions.items():
         key = _per_job_key(d.label)
-        if key and values.get(key) and d.field_key in _NOT_FILLED:
+        if key and values.get(key) and d.field_key in _NOT_FILLED and d.source != "manual":
             out[sid] = planner.Decision(key, 0, "apply", d.label)
     return out
 
@@ -220,9 +220,12 @@ def _vlm_per_job(slots: List[Any], decisions: Dict[str, planner.Decision],
     """應徵職務、工作地點那幾格一律以「這次應徵」為準：模型挑的、舊快取記的都不算，
     面板沒填就留白。值不在「我的資料」裡，模型挑什麼都是別的欄位的資料。"""
     per_job = {s.id: (s.job_field, _vlm_label(s)) for s in slots if s.job_field}
-    out = {sid: d for sid, d in decisions.items() if sid not in per_job}
+    # 使用者自己在對映清單改過的那幾格以他為準，不要被面板蓋回去
+    out = {sid: d for sid, d in decisions.items()
+           if sid not in per_job or d.source == "manual"}
     out.update({sid: planner.Decision(key, 0, "apply", label)
-                for sid, (key, label) in per_job.items() if values.get(key)})
+                for sid, (key, label) in per_job.items()
+                if sid not in out and values.get(key)})
     return out
 
 
