@@ -702,11 +702,11 @@ def get_plan(job_id: str) -> Optional[PlanOut]:
     return _render(job, cached, slots, decisions)
 
 
-def preview_docx(job_id: str, which: str) -> Optional[bytes]:
+def preview_docx(job_id: str, which: str, highlight: bool = True) -> Optional[bytes]:
     """左右對照的兩份文件，交給前端直接渲染。
 
-    filled 每次重算——使用者剛改過對映就要看到新結果，而且一律標黃底，
-    才看得出資料落在哪一格；下載的成品不標。
+    filled 每次重算——使用者剛改過對映就要看到新結果。網頁上的預覽標黃底，
+    才看得出資料落在哪一格；下載的成品與列印用的那份不標。
     """
     job = db.get_job(job_id)
     if not job:
@@ -721,11 +721,11 @@ def preview_docx(job_id: str, which: str) -> Optional[bytes]:
         if job.get("engine") == "vlm":
             _slots, decisions, ticks = _vlm_restore(job)
             filler.write(src, filled, _vlm_assignment(decisions), ticks, profile,
-                         highlight=True, typed=typed_values(job))
+                         highlight=highlight, typed=typed_values(job))
         else:
             slots, decisions = _restore(job)
             ops, _ = planner.build_plan(slots, profile, decisions, typed_values(job))
-            writer.apply_ops(str(src), str(filled), ops, highlight=True)
+            writer.apply_ops(str(src), str(filled), ops, highlight=highlight)
         _paste_photo(filled)        # 預覽也要看得到照片貼在哪一格
         return filled.read_bytes()
 

@@ -44,25 +44,30 @@ export function FooterBar({
   onSubmit,
   disabled,
   label,
+  secondary,
 }: {
   onRestart: () => void
   onSubmit: () => void
   disabled: boolean
   label: string
+  secondary?: ReactNode
 }) {
   return (
-    <div className="flex items-center justify-between pb-8">
+    <div className="flex items-center justify-between gap-3 pb-8">
       <button onClick={onRestart} className="text-sm text-slate-500 hover:text-slate-800">
         ← 換一份檔案
       </button>
-      <button
-        onClick={onSubmit}
-        disabled={disabled}
-        className="px-6 py-2.5 rounded-md bg-sky-600 text-white font-medium
-                   hover:bg-sky-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
-      >
-        {label}
-      </button>
+      <div className="flex items-center gap-3">
+        {secondary}
+        <button
+          onClick={onSubmit}
+          disabled={disabled}
+          className="px-6 py-2.5 rounded-md bg-sky-600 text-white font-medium
+                     hover:bg-sky-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
+        >
+          {label}
+        </button>
+      </div>
     </div>
   )
 }

@@ -10,6 +10,7 @@ export async function renderDocxInto(
   blob: Blob,
   host: HTMLDivElement,
   token: { cancelled: boolean },
+  fit = true,
 ): Promise<boolean> {
   host.replaceChildren()
   host.style.zoom = '1'
@@ -27,8 +28,68 @@ export async function renderDocxInto(
   }
   neutralizeLinks(host)
   const page = host.querySelector('section')
-  if (page) host.style.zoom = String(width / page.offsetWidth)
+  // 列印用的那份不能縮：要照紙張原尺寸排版，而且它放在畫面外，量不到欄寬
+  if (page && fit) host.style.zoom = String(width / page.offsetWidth)
   return true
+}
+
+const PRINT_ID = 'print-root'
+
+/**
+ * 把一份 .docx 交給瀏覽器列印（列印對話框裡選「另存為 PDF」就是 PDF）。
+ *
+ * 不用任何轉檔工具：文件本來就已經在瀏覽器裡渲染得出來，列印時把整個 app 藏起來、
+ * 只留這一份就好。Windows 內建「Microsoft Print to PDF」，各家瀏覽器也都有
+ * 「另存為 PDF」，使用者不必額外安裝任何東西。
+ *
+ * 紙張尺寸照文件自己的（求職表格不一定是 A4），邊界設 0——頁邊距已經畫在 docx-preview
+ * 排出來的 section 裡，再加一層瀏覽器邊界會把內容往內擠、右邊與下面被裁掉。
+ */
+export async function printDocx(blob: Blob): Promise<void> {
+  cleanupPrint()
+  const host = document.createElement('div')
+  host.id = PRINT_ID
+  // 放在畫面外、但照樣排版：display:none 量不到頁面尺寸，@page 就設不對
+  host.style.cssText = 'position:absolute;left:-10000px;top:0;visibility:hidden'
+  document.body.appendChild(host)
+  const style = document.createElement('style')
+  style.id = `${PRINT_ID}-style`
+  document.head.appendChild(style)
+
+  try {
+    await renderDocxInto(blob, host, { cancelled: false }, false)
+  } catch (e) {
+    cleanupPrint()
+    throw e
+  }
+
+  const page = host.querySelector('section')
+  const size = page ? `size: ${mm(page.offsetWidth)}mm ${mm(page.offsetHeight)}mm;` : ''
+  style.textContent = `@media print {
+    @page { ${size} margin: 0 }
+    body > *:not(#${PRINT_ID}) { display: none !important }
+    #${PRINT_ID} { position: static; left: auto; visibility: visible; zoom: 1 }
+    #${PRINT_ID} section {
+      box-shadow: none !important; margin: 0 !important;
+      break-after: page; page-break-after: always;
+    }
+    #${PRINT_ID} section:last-of-type { break-after: auto; page-break-after: auto }
+  }`
+
+  // Chrome／Edge 會發 afterprint，Safari 不一定——留一個保險，別讓這份留在 DOM 裡
+  window.addEventListener('afterprint', cleanupPrint, { once: true })
+  window.print()
+  window.setTimeout(cleanupPrint, 60_000)
+}
+
+/** CSS 的 1px ＝ 1/96 英吋。@page 只吃實體長度，px 有些瀏覽器不收。 */
+function mm(px: number): string {
+  return ((px / 96) * 25.4).toFixed(1)
+}
+
+function cleanupPrint() {
+  document.getElementById(PRINT_ID)?.remove()
+  document.getElementById(`${PRINT_ID}-style`)?.remove()
 }
 
 /**

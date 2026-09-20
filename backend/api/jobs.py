@@ -41,12 +41,16 @@ def _ensure_ready(job_id: str) -> None:
 
 
 @router.get("/{job_id}/preview.docx")
-def preview_docx(job_id: WorkId, which: str = "original") -> Response:
-    """左右對照用的原稿與填寫後文件，前端自己渲染。"""
+def preview_docx(job_id: WorkId, which: str = "original", highlight: bool = True) -> Response:
+    """左右對照用的原稿與填寫後文件，前端自己渲染。
+
+    highlight=false 的 filled 就是下載成品的內容（同一條寫入路徑，只差沒標黃底）——
+    列印／存成 PDF 走這個，印出來交出去的東西不會帶著黃底。
+    """
     if which not in ("original", "filled"):
         raise HTTPException(422, "which 必須是 original 或 filled")
     _ensure_ready(job_id)
-    content = service.preview_docx(job_id, which)
+    content = service.preview_docx(job_id, which, highlight=highlight)
     if content is None:
         raise HTTPException(404, "找不到這個 job")
     return Response(content=content, media_type=DOCX_MEDIA_TYPE)

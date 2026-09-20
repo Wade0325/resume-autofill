@@ -1,6 +1,14 @@
 import { Suspense, lazy, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, errorText, type FieldSpec, type Plan, type PlanItem, type Profile } from '../api'
+import {
+  api,
+  errorText,
+  fetchBlob,
+  type FieldSpec,
+  type Plan,
+  type PlanItem,
+  type Profile,
+} from '../api'
 import { useBackgroundUpload } from '../useBackgroundUpload'
 import ApplyPanel from '../components/ApplyPanel'
 import Dropzone from '../components/Dropzone'
@@ -103,6 +111,19 @@ export default function FillPage() {
     if (!plan) return
     const result = await run(() => api.makeOutput(plan.job_id))
     if (result) window.location.href = api.downloadUrl(plan.job_id)
+  }
+
+  /** 列印／存成 PDF：拿不標黃底的那份（內容跟下載的成品一樣），交給瀏覽器印。 */
+  async function printResult() {
+    if (!plan) return
+    await run(async () => {
+      const blob = await fetchBlob(
+        `/jobs/${plan.job_id}/preview.docx?which=filled&highlight=false&v=${previewVersion}`,
+      )
+      // docx-preview 有 170 KB，跟預覽共用同一個 chunk，等按了才載
+      const { printDocx } = await import('../components/docx')
+      await printDocx(blob)
+    })
   }
 
   if (!plan) {
@@ -209,6 +230,17 @@ export default function FillPage() {
         onSubmit={applyAndDownload}
         disabled={busy || plan.stats.fill === 0}
         label={busy ? '處理中…' : `套用並下載（${plan.stats.fill} 格）`}
+        secondary={
+          <button
+            onClick={printResult}
+            disabled={busy || plan.stats.fill === 0}
+            title="開啟瀏覽器的列印視窗；印表機選「另存為 PDF」或「Microsoft Print to PDF」就會存成 PDF"
+            className="px-4 py-2.5 rounded-md border border-slate-300 text-sm text-slate-700
+                       hover:bg-slate-50 disabled:text-slate-400 disabled:cursor-not-allowed"
+          >
+            列印／存成 PDF
+          </button>
+        }
       />
     </PageShell>
   )
