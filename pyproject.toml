@@ -23,6 +23,21 @@ dependencies = [
 # 開發用的追蹤。設了 LANGFUSE_* 環境變數才會啟用，打包版不含它
 # 自架的 Langfuse 是 v3 架構，SDK 要跟著留在 v3
 dev = ["langfuse>=3,<4"]
+# 測試。瀏覽器那一組還要 playwright 與已經 build 好的 frontend/dist，
+# 缺任何一樣就自動跳過（見 tests/browser/conftest.py）
+test = ["pytest>=8", "httpx>=0.27", "playwright>=1.49"]
 
 [tool.setuptools.packages.find]
 include = ["backend*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# 預設只跑不需要瀏覽器的那些。要跑瀏覽器：pytest -m browser（或 -m ""跑全部）
+addopts = "-m 'not browser' --strict-markers"
+markers = [
+    "browser: 需要 playwright、chromium 與 build 好的 frontend/dist",
+]
+filterwarnings = [
+    # starlette 的 TestClient 用到 anyio 的舊別名，不是我們能修的
+    "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning",
+]

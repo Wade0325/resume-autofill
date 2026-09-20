@@ -432,7 +432,38 @@ trace／observation 的工具**（54 個工具都是 prompt、dataset、score、
 
 ---
 
-## 7. 打包
+## 7. 測試
+
+```bash
+pip install -e ".[test]"
+pytest                      # 不需要瀏覽器的那些，約 50 秒
+npm --prefix frontend run build && pytest -m browser    # 加上瀏覽器那一組
+pytest -m ""                # 全部
+```
+
+**一個模型都不用跑。** 要模型判斷的地方一律換成假的（`monkeypatch`），要測「模型沒開」
+的行為時就把 `RESUME_AUTOFILL_LLM_HOST` 指到一個沒人在聽的埠讓它真的連不上。
+所以這套測試在沒有顯卡、沒有模型檔的機器上（包括 CI）照樣跑得完。
+
+幾件動手前要知道的事：
+
+- **`RESUME_AUTOFILL_HOME` 必須在 import backend 之前設好**。`backend.config` 是在
+  import 當下讀環境變數的，晚一步設就會寫到真正的 `data/`，把使用者的履歷蓋掉。
+  所以 `tests/conftest.py` 把它寫在模組最上面，不是放進 fixture。
+- **考題不能用研究迴圈那幾份**：`claude_code_in_agent/` 是本人的真實履歷，沒進版控。
+  測試用的表格一律由 `tools/make_sample.py` 當場產生，資料全是虛構的。
+- **瀏覽器那一組另外開一個後端行程**（不是 TestClient）：畫面要真的連得上 HTTP，
+  而且 `frontend/dist` 是後端在 serve 的。它有自己的暫存資料夾。
+  塞測試資料時再開一個子行程（`tests/browser/_seed.py`），因為那個後端的資料夾跟
+  主測試不同，而 config 的路徑在 import 時就定死了。
+- **`page.wait_for_function` 在這個專案不能用**：它是在頁面裡 `eval`，會被本站的
+  CSP（`script-src 'self'`）擋掉。要等條件就自己輪詢。
+- **`page.evaluate` 的多行字串，最後一個敘述的值不能是函式**（例如結尾是
+  `window.print = () => {}`）——回傳值無法序列化，後續行為就不對了。結尾補一個
+  `window.__ready = true` 之類的就好。
+- `visibility:hidden` 的元素 `innerText` 會回空字串，要驗內容得用 `textContent`。
+
+## 8. 打包
 
 ```powershell
 .\scripts\build-package.ps1        # 組出 dist\Resume_AutoFill\
@@ -463,7 +494,7 @@ Resume_AutoFill\
 
 ---
 
-## 8. 待討論
+## 9. 待討論
 
 * 前後端 API 介面定義
 * CPU 推論的打包：CUDA 版 llama-server 在無 NVIDIA 驅動的機器上起不來，
