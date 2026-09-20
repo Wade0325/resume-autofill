@@ -6,11 +6,12 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from . import actions, db
-from .core.schema import FIELDS
+from .core.schema import BY_KEY, FIELDS
 
 log = logging.getLogger(__name__)
 
@@ -50,8 +51,42 @@ def problem(profile: Any) -> Optional[str]:
     return None
 
 
+# 日期寫法百百種：手選的是「1996年04月15日」，匯入的常是「1996/4/15」「1996-04-15」。
+# 存成同一種，我的資料頁的年月日下拉才認得（認不得就退化成文字框）
+_DATE_RE = re.compile(r"\s*(\d{2,4})\s*[年/.\-]\s*(\d{1,2})"
+                      r"(?:\s*[月/.\-]\s*(\d{1,2}))?\s*日?\s*$")
+_DATE_KEYS = {k for k, f in BY_KEY.items() if f.kind == "date"}
+
+
+def _one_date(value: Any) -> Any:
+    """認得出年月（日）就寫成同一種；「至今」「民國85年」這種認不出來的原樣保留。
+    不換算曆制：存的是民國年就還是民國年，由 basic.birthday_era 決定怎麼解讀。"""
+    if not isinstance(value, str):
+        return value
+    m = _DATE_RE.fullmatch(value)
+    if not m:
+        return value
+    year, month, day = m.groups()
+    return f"{year}年{int(month):02d}月" + (f"{int(day):02d}日" if day else "")
+
+
+def normalize_dates(profile: Dict[str, Any]) -> Dict[str, Any]:
+    """整份資料裡的日期欄位統一寫法。只動 schema 標成日期的欄位。"""
+    out = dict(profile)
+    for root, value in profile.items():
+        if isinstance(value, dict):
+            out[root] = {k: (_one_date(v) if f"{root}.{k}" in _DATE_KEYS else v)
+                         for k, v in value.items()}
+        elif isinstance(value, list):
+            out[root] = [{k: (_one_date(v) if f"{root}[].{k}" in _DATE_KEYS else v)
+                          for k, v in row.items()} if isinstance(row, dict) else row
+                         for row in value]
+    return out
+
+
 def save(profile: Dict[str, Any], reason: str) -> None:
     """reason 是被什麼換掉：save | import | restore | file，版本紀錄照這個顯示。"""
+    profile = normalize_dates(profile)
     kept = db.put_profile(profile, reason)
     # 只記結構規模，不記內容——profile 裡全是個資
     log.info("我的資料已更新 原因=%s 留版本=%s 區塊=%d", reason, kept, len(profile))

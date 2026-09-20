@@ -16,9 +16,12 @@ export const SECTIONS: Section[] = [
   { id: 'experience', title: '工作經歷', prefix: 'experience[].', repeatRoot: 'experience' },
   { id: 'skills', title: '專長技能', prefix: 'skills.' },
   { id: 'certificate', title: '專業證照', prefix: 'certificate[].', repeatRoot: 'certificate' },
+  { id: 'language', title: '語言能力', prefix: 'language[].', repeatRoot: 'language' },
   { id: 'family', title: '家庭狀況', prefix: 'family[].', repeatRoot: 'family' },
   { id: 'reference', title: '任用諮詢人', prefix: 'reference[].', repeatRoot: 'reference' },
   { id: 'emergency', title: '緊急聯絡人', prefix: 'emergency.' },
+  { id: 'preference', title: '求職偏好', prefix: 'preference.' },
+  { id: 'qa', title: '常見問答', prefix: 'qa.' },
   { id: 'declaration', title: '聲明事項', prefix: 'declaration.' },
   { id: 'autobiography', title: '自傳', prefix: 'autobiography' },
 ]

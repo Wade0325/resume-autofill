@@ -112,6 +112,29 @@ OTHER_PEOPLE = {
     "family": ("家庭", "家屬", "家人", "父", "母"),
     "reference": ("推薦", "諮詢", "介紹人"),
 }
+# 表格提到才列給模型挑。別人的資料（上面那三區）本來就只在提到那個人時才拿出來；
+# 語言、求職偏好、問答題多數表格根本沒有，清單越長模型越容易配錯
+_ROW_INDEX = re.compile(r"\[\d+\]")
+
+ASK_ONLY_IF_MENTIONED = {
+    **OTHER_PEOPLE,
+    "language": ("語文", "語言", "英文", "外語", "母語"),
+    "preference": ("工作型態", "期望產業", "職務類別", "輪班", "外派", "出差", "求職條件"),
+    "qa": ("優點", "缺點", "生涯", "規劃", "動機", "抱負", "期許"),
+    # 單獨一個欄位也能這樣擋。多一個選項就多一次配錯的機會：實測把發照日期、
+    # 郵遞區號無條件放進清單，模型在密集的證照表與聯絡欄就開始挑錯格子
+    "contact.postal_mailing": ("郵遞區號", "郵區", "郵遞"),
+    "contact.postal_household": ("郵遞區號", "郵區", "郵遞"),
+    "certificate[].issued": ("發照", "發證", "取得日"),
+    "certificate[].expires": ("到期", "有效期"),
+    "basic.military_branch": ("軍種",),
+    "basic.military_rank": ("軍階", "階級"),
+    "basic.military_start": ("入伍",),
+    "basic.military_end": ("退伍",),
+    "basic.military_period": ("服役期間",),
+    "basic.children": ("子女",),
+    "basic.total_tenure": ("總年資", "總計年資"),
+}
 # 公司自己填的欄位。「以下由公司填寫」那條線之前也會夾雜這種欄位（面談日期印在最上面）。
 # 「到職日期」是公司填的報到日；前面有「可」的「可到職日期」是應徵者填的，不能一起擋掉
 COMPANY_WORDS_RE = re.compile(r"面談|初試|複試|任用|建議薪資|主管簽章|(?<!可)到職日期")
@@ -653,17 +676,39 @@ def fields_of(profile: Dict[str, Any]) -> Dict[str, str]:
     surname = _surname_en(str(basic.get("name_passport") or ""), str(basic.get("name_zh") or ""))
     if surname:
         out["basic.surname_en"] = surname
+    # 年齡由生日算到今天：存著的會過期，去年填的今年還是去年的歲數
+    age = _age(out.get("basic.birthday", ""))
+    if age:
+        out["basic.age"] = age
+    # 服役期間與總年資同理：起訖或工作經歷改了就跟著變
+    if basic.get("military_start") and basic.get("military_end"):
+        out["basic.military_period"] = (f"{_canon_date(str(basic['military_start']))}"
+                                        f"~{_canon_date(str(basic['military_end']))}")
+    total = sum(_months(str(row.get("start") or ""), str(row.get("end") or ""))
+                for row in (profile.get("experience") or []) if isinstance(row, dict))
+    if total:
+        out["basic.total_tenure"] = _span(total)
     return out
+
+
+def _age(birthday: str) -> str:
+    """幾歲：生日還沒到就少一歲。認不出生日就不猜。"""
+    m = DATE_RE.search(birthday or "")
+    if not m:
+        return ""
+    today = _today()
+    year, month = int(m.group(1)), int(m.group(2))
+    day = int(m.group(3)) if m.lastindex and m.lastindex >= 3 and m.group(3) else 1
+    age = today.year - year - ((today.month, today.day) < (month, day))
+    return str(age) if 0 < age < 120 else ""
 
 
 def _today() -> date:
     return date.today()
 
 
-def _tenure(start: str, end: str) -> str:
-    """年資：頭尾兩個月都算，跟 104、LinkedIn 的算法一樣（2023年7月～2026年4月＝2年10個月）。
-    還在職（訖是「至今」）就算到這個月。
-    認不出日期、或起訖顛倒就不算——寧可空著，不寫一個錯的年資。"""
+def _months(start: str, end: str) -> int:
+    """這段期間有幾個月，頭尾都算。認不出來或顛倒就回 0。"""
     a = DATE_RE.search(start or "")
     if PRESENT_RE.match(end or ""):
         today = _today()
@@ -676,10 +721,19 @@ def _tenure(start: str, end: str) -> str:
     if not a:
         return ""
     months = (end_year * 12 + end_month) - (int(a.group(1)) * 12 + int(a.group(2))) + 1
-    if months <= 0:
-        return ""
+    return months if months > 0 else 0
+
+
+def _span(months: int) -> str:
     years, rest = divmod(months, 12)
     return (f"{years}年" if years else "") + (f"{rest}個月" if rest else "")
+
+
+def _tenure(start: str, end: str) -> str:
+    """年資：頭尾兩個月都算，跟 104、LinkedIn 的算法一樣（2023年7月～2026年4月＝2年10個月）。
+    還在職（訖是「至今」）就算到這個月。
+    認不出日期、或起訖顛倒就不算——寧可空著，不寫一個錯的年資。"""
+    return _span(_months(start, end))
 
 
 # 國語羅馬拼音的音節（威妥瑪、漢語、通用拼音混著收）。護照全名存成「KUOWEITE」這種
@@ -1679,8 +1733,8 @@ def _row_records(group: List[Slot], root: str, fields: Dict[str, str]) -> Dict[i
 
 
 def ask_rows(blocks: Dict[Tuple[str, int], List[Slot]], fields: Dict[str, str],
-             pages: Pages, host: str = LLM_HOST,
-             model: str = LLM_MODEL) -> Tuple[Dict[str, str], Dict[str, bool]]:
+             pages: Pages, host: str = LLM_HOST, model: str = LLM_MODEL,
+             printed: str = "") -> Tuple[Dict[str, str], Dict[str, bool]]:
     """一列一筆的表：問模型「每一欄是什麼」，再由程式照「往下第 N 列＝第 N 筆」排進去。
 
     逐格問時，這種表的每一格都長得一模一樣（空的，只差欄名），模型會把第二筆
@@ -1692,7 +1746,8 @@ def ask_rows(blocks: Dict[Tuple[str, int], List[Slot]], fields: Dict[str, str],
     回傳 {位置編號: 項目代碼} 與 {位置編號: 打不打記號}（選項欄用）。
     """
     roots = {k.split("[")[0] for k in fields if "[" in k}
-    choices = [k for k in BY_KEY if "[]" in k and k.split("[]")[0] in roots]
+    choices = [k for k in BY_KEY if "[]" in k and k.split("[]")[0] in roots
+               and _mentioned(k, printed) and _worth_offering(k, fields)]
     ids, lines, allowed = [], [], {}
     for bi, group in enumerate(blocks.values(), 1):
         # 左邊的區塊標題；序號（「1」）與列首（「大學」）不是在說這一區是什麼
@@ -2206,10 +2261,34 @@ def usable_fields(form: List[Cell], profile: Dict[str, Any]) -> Dict[str, str]:
     沒提到還留在清單裡，模型會把緊急聯絡人的電話填進本人的住家電話欄。
     比對前抹掉空白——標題常寫成「家　庭　成　員」，不抹就對不上「家庭」。
     """
-    printed = _squash(printed_text(form))
-    return {k: v for k, v in fields_of(profile).items()
-            if not any(k.startswith(root) and not any(w in printed for w in words)
-                       for root, words in OTHER_PEOPLE.items())}
+    printed = printed_text(form)
+    return {k: v for k, v in fields_of(profile).items() if _mentioned(k, printed)}
+
+
+def _mentioned(key: str, printed: str) -> bool:
+    """這個項目可以列給模型挑嗎？名單裡沒提到的就不列。
+
+    攤平後是 certificate[0].issued、欄位代碼是 certificate[].issued，名單寫的是後者：
+    比對前先把序號抹掉，否則「只擋某一個欄位」那幾條永遠對不上，等於沒擋。
+    """
+    key = _ROW_INDEX.sub("[]", key)
+    flat = _squash(printed)
+    return not any(key.startswith(root) and not any(w in flat for w in words)
+                   for root, words in ASK_ONLY_IF_MENTIONED.items())
+
+
+def _worth_offering(key: str, fields: Dict[str, str]) -> bool:
+    """一列一筆的表：名單裡單獨指名的那幾個欄位，還要真的填了值才列給模型挑。
+
+    「發照日期」這一欄表格有問、但使用者沒填，列出來只會佔掉一欄——模型把那一欄
+    認成發照日期，真正有資料的代碼就沒地方去了（實測履歷表因此少填兩格證照名稱）。
+    整個區段的名單（家人、諮詢人）不套這一條：那問的是「這份表有沒有要這個人的資料」，
+    跟填了沒有是兩回事。
+    """
+    if not any(key.startswith(root) and "." in root for root in ASK_ONLY_IF_MENTIONED):
+        return True
+    return any(v for k, v in fields.items() if _ROW_INDEX.sub("[]", k) == key)
+
 
 
 def analyze(blank: Path, profile: Dict[str, Any],
@@ -2234,7 +2313,8 @@ def analyze(blank: Path, profile: Dict[str, Any],
     in_blocks = frozenset(x.id for x in slots if x.addr in block_cells)
     if blocks:
         try:
-            rows, marks = ask_rows(blocks, fields, pages, host, model)
+            rows, marks = ask_rows(blocks, fields, pages, host, model,
+                                   printed=printed_text(form))
             chosen.update(rows)
             ticks.update(marks)
         except llm.LlmError as e:

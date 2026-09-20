@@ -937,6 +937,7 @@ def _list_root(field_key: str) -> str:
 _IDENTITY = {"education": ("school", ("degree", "start")),
              "experience": ("company", ("start",)),
              "certificate": ("name", ()),
+             "language": ("name", ()),
              "family": ("name", ()),
              "reference": ("name", ())}
 _PEOPLE = {"family", "reference"}     # 人名要整個一樣：「王明」不是「王明德」

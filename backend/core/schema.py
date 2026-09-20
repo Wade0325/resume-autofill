@@ -41,7 +41,11 @@ FIELDS: List[FieldSpec] = [
     # 表格沒指定就填西元
     FieldSpec("basic.birthday_era", "生日曆制", kind="choice", choices=["西元", "民國"],
               hint="上面那個出生年月日填的是西元還是民國"),
-    FieldSpec("basic.age", "年齡"),
+    # 年齡不自己存：存了就會過期（去年填的今年還是去年的歲數），由生日算到今天
+    FieldSpec("basic.age", "年齡", derived=True),
+    FieldSpec("basic.children", "子女數", hint="數字，例如 0、2"),
+    # 總年資同樣不自己存：工作經歷改了就該跟著變
+    FieldSpec("basic.total_tenure", "總年資", derived=True),
     FieldSpec("basic.nationality", "國籍", hint="例如 中華民國"),
     FieldSpec("basic.birthplace", "出生地"),
     FieldSpec("basic.height", "身高", hint="公分數字，例如 175"),
@@ -52,6 +56,11 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("basic.military", "兵役狀況", kind="choice", choices=["役畢", "免役", "未役", "替代役", "不適用"]),
     FieldSpec("basic.military_exempt_reason", "免役原因",
               hint="免役的原因本身，例如 體位不合格。不要填「免役」兩個字"),
+    FieldSpec("basic.military_branch", "軍種", hint="例如 陸軍、海軍、空軍、替代役"),
+    FieldSpec("basic.military_rank", "軍階", hint="例如 上兵、下士"),
+    FieldSpec("basic.military_start", "入伍日期", kind="date"),
+    FieldSpec("basic.military_end", "退伍日期", kind="date"),
+    FieldSpec("basic.military_period", "服役期間", derived=True),
     FieldSpec("basic.identity_category", "身分別", kind="choice",
               choices=["無", "身心障礙", "原住民"], hint="表格上的身分別勾選欄"),
     FieldSpec("basic.transport", "交通工具", kind="choice",
@@ -63,7 +72,9 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("contact.email", "電子郵件"),
     # 表格常見「戶籍地址」「通訊地址」兩格；只印一格「地址」的對映到通訊地址。
     FieldSpec("contact.address_mailing", "通訊地址"),
+    FieldSpec("contact.postal_mailing", "通訊郵遞區號", hint="數字，例如 106"),
     FieldSpec("contact.address_household", "戶籍地址"),
+    FieldSpec("contact.postal_household", "戶籍郵遞區號", hint="數字，例如 106"),
 
     # 應徵職務與工作地點每間公司都不一樣，不存進「我的資料」：填寫頁的「這次應徵」
     # 面板填一次、只算那一份工作（per_job）。沒填就留白，跟以前一樣
@@ -121,6 +132,17 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("certificate[].name", "證照名稱", kind="list"),
     FieldSpec("certificate[].issuer", "考試機構", kind="list", hint="發證或考試的單位"),
     FieldSpec("certificate[].number_date", "證照字號與取得日期", kind="list"),
+    FieldSpec("certificate[].issued", "發照日期", kind="list"),
+    FieldSpec("certificate[].expires", "證照到期日", kind="list"),
+
+    # 表格印成「語文別｜聽｜說｜讀｜寫」的那種表用這組；只印一格「語文能力」的用 skills.languages
+    FieldSpec("language[].name", "語文別", kind="list", hint="例如 英文、日文、台語"),
+    FieldSpec("language[].level", "語文能力程度", kind="list",
+              hint="整體程度，例如 精通、流利、中等、略懂"),
+    FieldSpec("language[].listening", "聽", kind="list"),
+    FieldSpec("language[].speaking", "說", kind="list"),
+    FieldSpec("language[].reading", "讀", kind="list"),
+    FieldSpec("language[].writing", "寫", kind="list"),
 
     # 標籤刻意加「家人」前綴：表格印的「姓名」「職業」太通用，
     # 若直接當標籤會在確定性對齊時搶走別區同名的格子。
@@ -142,6 +164,10 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("emergency.name", "緊急聯絡人姓名"),
     FieldSpec("emergency.relation", "緊急聯絡人關係"),
     FieldSpec("emergency.phone", "緊急聯絡人電話"),
+    # 有些表格要兩位：欄名刻意寫「第二」，確定性對齊才不會跟上面那位搶格子
+    FieldSpec("emergency.name2", "第二緊急聯絡人姓名"),
+    FieldSpec("emergency.relation2", "第二緊急聯絡人關係"),
+    FieldSpec("emergency.phone2", "第二緊急聯絡人電話"),
 
     FieldSpec("declaration.relatives_in_company", "親友任職於應徵公司", kind="choice",
               choices=["無", "有"]),
@@ -165,6 +191,20 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("declaration.debt", "負債狀況", kind="choice", choices=["無", "有"]),
     FieldSpec("declaration.disability_certificate", "領有身心障礙手冊或曾患重大傷病",
               kind="choice", choices=["無", "有"]),
+
+    # 求職偏好：表格問到才會用到（見 filler.ASK_ONLY_IF_MENTIONED）
+    FieldSpec("preference.job_type", "工作型態", kind="choice",
+              choices=["全職", "兼職", "實習", "約聘", "派遣"]),
+    FieldSpec("preference.industry", "期望產業", hint="例如 資訊軟體服務業"),
+    FieldSpec("preference.role", "期望職務類別", hint="例如 軟體工程師"),
+    FieldSpec("preference.shift", "可否輪班", kind="choice", choices=["可", "否"]),
+    FieldSpec("preference.travel", "可否出差外派", kind="choice", choices=["可", "否"]),
+
+    # 履歷表常見的問答題，答案本來就要自己寫，存著就不必每份重打
+    FieldSpec("qa.strengths", "優點", kind="longtext"),
+    FieldSpec("qa.weaknesses", "缺點", kind="longtext"),
+    FieldSpec("qa.career_plan", "生涯規劃", kind="longtext"),
+    FieldSpec("qa.why_apply", "應徵動機", kind="longtext"),
 
     FieldSpec("autobiography", "自傳", kind="longtext"),
 ]
@@ -200,6 +240,8 @@ def describe_fields(include_special: bool = True, skip_derived: bool = False,
 DERIVED_FROM = {
     "education[].period": ("education[].start", "education[].end"),
     "experience[].period": ("experience[].start", "experience[].end"),
+    "basic.military_period": ("basic.military_start", "basic.military_end"),
+    "basic.age": ("basic.birthday",),
 }
 
 # 標籤 → 欄位的確定性對照（squash 後精確比對）。
