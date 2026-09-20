@@ -112,7 +112,8 @@ def read(text: str, host: str, model: str,
     log.debug("read: text_len=%d images=%d closed=%s sections=%s",
               len(text), len(images or []), sorted(closed),
               {r: len(t) for r, t in sections.items()})
-    user = f"可抽取的欄位：\n{describe_fields(include_special=False, skip_derived=True)}\n\n履歷全文：\n{text}"
+    fields = describe_fields(include_special=False, skip_derived=True)
+    user = f"可抽取的欄位：\n{fields}\n\n履歷全文：\n{text}"
     if images:
         content: List[Dict[str, Any]] = [{"type": "text", "text": user}]
         for img in images:

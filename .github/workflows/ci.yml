@@ -1,0 +1,68 @@
+# 每次 push 與 PR 跑：Python 的 lint＋測試、前端的型別檢查＋build。
+#
+# 測試不需要顯卡也不需要模型——要模型判斷的地方都換成假的，所以 runner 上跑得完。
+# 瀏覽器那一組（pytest -m browser）刻意沒放進來：要另外裝 chromium、還要先 build 前端，
+# 一次多三四分鐘。等這兩個 job 穩定之後再考慮加，或改成每日跑。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 同一個分支連續推時，舊的那次就不必跑完了
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    # 跑 Windows 不是為了排場：backend/model_manager.py 有幾處沒有防護的
+    # Windows 專屬呼叫（subprocess.CREATE_NO_WINDOW、powershell），而且產品只出 Windows。
+    # 這個倉庫是公開的，Actions 在所有 runner 上都免費，沒有理由為了省錢冒可攜性的險。
+    name: lint 與測試（Windows）
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"      # pyproject 要求 >=3.10
+          cache: pip
+
+      - name: 安裝
+        run: pip install -e ".[test,lint]"
+
+      - name: ruff
+        run: ruff check backend tools tests
+
+      - name: pytest
+        # 預設就排除 browser（見 pyproject 的 addopts）
+        run: pytest
+
+  frontend:
+    # 前端沒有 Windows 相依，跑 ubuntu 比較快
+    name: 型別檢查與 build（Linux）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安裝
+        run: npm ci
+
+      - name: build
+        # package.json 的 build 是 `tsc && vite build`，型別檢查已經包含在裡面
+        run: npm run build

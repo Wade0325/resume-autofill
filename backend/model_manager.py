@@ -127,7 +127,8 @@ def select(name: str) -> None:
     if not gguf.exists():
         raise ModelError(404, "這顆模型還沒下載")
     if not config.LLAMA_SERVER.exists():
-        raise ModelError(500, f"找不到 {config.LLAMA_SERVER}，請先取得 llama.cpp（見 README 第 5 節）")
+        raise ModelError(
+            500, f"找不到 {config.LLAMA_SERVER}，請先取得 llama.cpp（見 README 第 5 節）")
     with _lock:
         if _starting:
             raise ModelError(409, f"「{_starting}」正在啟動中，請稍候")

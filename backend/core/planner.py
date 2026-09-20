@@ -13,8 +13,16 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from . import document, llm
 from .document import Slot
-from .schema import (BLOCKED_LABELS, BY_KEY, BY_LABEL, DERIVED_FROM, FIELD_KEYS,
-                     LABEL_ALIASES, OPTION_SYNONYMS, describe_fields)
+from .schema import (
+    BLOCKED_LABELS,
+    BY_KEY,
+    BY_LABEL,
+    DERIVED_FROM,
+    FIELD_KEYS,
+    LABEL_ALIASES,
+    OPTION_SYNONYMS,
+    describe_fields,
+)
 
 log = logging.getLogger(__name__)
 

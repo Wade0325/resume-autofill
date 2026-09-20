@@ -82,7 +82,8 @@ class TestManageApi:
         assert {r["slots"] for r in rows} == {1}
 
     def test_forget_removes_it(self, client):
-        assert client.post("/api/templates/forget", json={"fingerprint": self.key_b}).status_code == 200
+        r = client.post("/api/templates/forget", json={"fingerprint": self.key_b})
+        assert r.status_code == 200
         assert service._cached_template(self.key_b, self.structure_b) == {}
         assert len(client.get("/api/templates").json()) == 1
 

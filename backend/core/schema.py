@@ -53,7 +53,8 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("basic.blood_type", "血型", kind="choice", choices=["A", "B", "O", "AB"]),
     FieldSpec("basic.health", "健康狀況", kind="choice", choices=["優", "良", "可", "差"]),
     FieldSpec("basic.marital_status", "婚姻狀況", kind="choice", choices=["未婚", "已婚"]),
-    FieldSpec("basic.military", "兵役狀況", kind="choice", choices=["役畢", "免役", "未役", "替代役", "不適用"]),
+    FieldSpec("basic.military", "兵役狀況", kind="choice",
+              choices=["役畢", "免役", "未役", "替代役", "不適用"]),
     FieldSpec("basic.military_exempt_reason", "免役原因",
               hint="免役的原因本身，例如 體位不合格。不要填「免役」兩個字"),
     FieldSpec("basic.military_branch", "軍種", hint="例如 陸軍、海軍、空軍、替代役"),
@@ -82,7 +83,8 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("job.location", "工作地點", per_job=True, hint="這次應徵的上班地點"),
     FieldSpec("job.expected_salary", "希望待遇", kind="money", hint="月薪金額"),
     FieldSpec("job.expected_salary_year", "期望年薪", kind="money", hint="年薪金額"),
-    FieldSpec("job.available_date", "可到職日", kind="date", hint="西元年月日，例如 2026年09月01日"),
+    FieldSpec("job.available_date", "可到職日", kind="date",
+              hint="西元年月日，例如 2026年09月01日"),
     FieldSpec("job.recruit_channel", "招募管道", hint="從哪裡得知職缺，例如 104人力銀行"),
 
     # education[] 這種 key 會展開成 education[0].xxx
@@ -94,7 +96,8 @@ FIELDS: List[FieldSpec] = [
     # 只印一欄「就學期間」的表格用這個，值由入學與畢業合成
     FieldSpec("education[].period", "就學期間", kind="list", derived=True),
     FieldSpec("education[].status", "畢業狀態", kind="list", hint="畢業或肄業"),
-    FieldSpec("education[].division", "日夜間部", kind="list", hint="只有寫日間部／夜間部／進修部時才填"),
+    FieldSpec("education[].division", "日夜間部", kind="list",
+              hint="只有寫日間部／夜間部／進修部時才填"),
     FieldSpec("education[].club", "社團活動", kind="list"),
 
     FieldSpec("experience[].company", "公司名稱", kind="list"),
@@ -159,7 +162,8 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("reference[].title", "諮詢人職稱", kind="list"),
     FieldSpec("reference[].phone", "諮詢人電話", kind="list"),
     FieldSpec("reference[].location", "諮詢人公司所在地", kind="list", hint="縣市即可"),
-    FieldSpec("reference[].relation", "諮詢人關係", kind="list", hint="與本人的關係，例如 直屬主管"),
+    FieldSpec("reference[].relation", "諮詢人關係", kind="list",
+              hint="與本人的關係，例如 直屬主管"),
 
     FieldSpec("emergency.name", "緊急聯絡人姓名"),
     FieldSpec("emergency.relation", "緊急聯絡人關係"),

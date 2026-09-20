@@ -41,8 +41,8 @@ import os
 import re
 import unicodedata
 from collections import Counter
-from datetime import date
 from dataclasses import dataclass, field
+from datetime import date
 from itertools import groupby, permutations
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -55,8 +55,14 @@ from PIL import Image, ImageDraw, ImageFont
 from . import llm
 from .document import ROC_BEFORE_RE, ROC_WORD_RE, iter_block_items, to_roc
 from .runs import write_changes
-from .schema import (BY_KEY, LABEL_ALIASES, OPTION_SYNONYMS, PER_JOB_LABELS,
-                     PRESENT_RE, PRESENT_WORDS)
+from .schema import (
+    BY_KEY,
+    LABEL_ALIASES,
+    OPTION_SYNONYMS,
+    PER_JOB_LABELS,
+    PRESENT_RE,
+    PRESENT_WORDS,
+)
 
 log = logging.getLogger(__name__)
 
@@ -381,7 +387,8 @@ def cells(doc) -> List[Cell]:
                                     seq=seq if alone else 0,
                                     # 「聯絡電話：(　)↵手機：」夾在「緊急聯絡人｜關係」那一列，
                                     # 左邊最近的欄名只看得到「關係」，看不出是誰的電話
-                                    row_first=(real[0][3] if len(real) >= 3 and len(labels) == len(real)
+                                    row_first=(real[0][3]
+                                               if len(real) >= 3 and len(labels) == len(real)
                                                and real[0][1] != addr and real[0][3] != left
                                                and any(w in _squash(real[0][3])
                                                        for ws in OTHER_PEOPLE.values() for w in ws)
@@ -448,7 +455,8 @@ def _line_slots(line: str) -> List[Tuple[str, int, int, str]]:
                     and not re.match(r"[,，、/／]", line[m.end():])):
                 continue    # 行首的空白後面接欄位名稱就只是縮排（「　　　初試日期：」）
             # 括號裡的留白是區碼（「聯絡電話：(　　)」），號碼其餘的部分寫在括號後面
-            if (m.start() and line[m.start() - 1] in "(（" and line[m.end():m.end() + 1] in (")", "）")
+            if (m.start() and line[m.start() - 1] in "(（"
+                    and line[m.end():m.end() + 1] in (")", "）")
                     and line[m.end():m.end() + 1]):
                 out.append(("gap", m.start(), m.end() + 1, "()"))
                 continue
@@ -529,7 +537,8 @@ def slots_of(cell: Cell) -> List[Slot]:
         if PLACEHOLDER_RE.match(text):
             # 「中文姓名：↵（空行）」的空行是上一行那個欄位的地方：值接在冒號後面，
             # 冒號那一行被擋掉的（應徵職務：）空行也跟著不填
-            found = [] if legal or above.endswith(("：", ":")) else [("blank", 0, len(text), "", "")]
+            found = ([] if legal or above.endswith(("：", ":"))
+                     else [("blank", 0, len(text), "", "")])
         else:
             found, base = [], 0
             for line in text.split("\n"):
@@ -1722,7 +1731,8 @@ def _row_records(group: List[Slot], root: str, fields: Dict[str, str]) -> Dict[i
     subs = {k.split("].", 1)[1] for k in fields if k.startswith(root + "[")}
     best: Dict[int, int] = {}
     for sub in sorted(subs):
-        hits = {d: [i for i in range(count) if _names_row(fields.get(f"{root}[{i}].{sub}", ""), key)]
+        hits = {d: [i for i in range(count)
+                    if _names_row(fields.get(f"{root}[{i}].{sub}", ""), key)]
                 for d, key in rows.items()}
         hits = {d: ids for d, ids in hits.items() if ids}
         records = [i for ids in hits.values() for i in ids]
@@ -1932,7 +1942,8 @@ def recall(slots: List[Slot], chosen: Dict[str, str], fields: Dict[str, str],
     }
     lines = [f"  {i}｜{_describe(s)}\n      可選：" + "、".join(
         f"{k}{_label(k)}＝{fields[k][:20]}" for k in cands) for i, (s, cands) in zip(ids, todo)]
-    user: List[Dict[str, Any]] = [{"type": "text", "text": "空著的位置與可選的資料：\n" + "\n".join(lines)}]
+    user: List[Dict[str, Any]] = [
+        {"type": "text", "text": "空著的位置與可選的資料：\n" + "\n".join(lines)}]
     for url in pages.for_addrs({s.addr for s, _cands in todo}):
         user.append({"type": "image_url", "image_url": {"url": url}})
     data = llm.ask(host, RECALL_SYSTEM, user, schema, model=model,
@@ -2027,7 +2038,8 @@ def ask_boxes(groups: Dict[Tuple[str, int, int], List[Slot]], fields: Dict[str, 
             printed = _squash(question)[-36:] + " " + printed
         # 併進來的下一行選項（「↵□其他」）也印出來
         for b in boxes:
-            more = b.cell.paras[b.para].text.split("\n")[b.cell.paras[b.para].text.count("\n", 0, b.start)]
+            whole = b.cell.paras[b.para].text
+            more = whole.split("\n")[whole.count("\n", 0, b.start)]
             if more not in printed:
                 printed += " " + more
         opts = list(dict.fromkeys(b.option for b in boxes if b.option))

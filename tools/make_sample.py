@@ -1,8 +1,9 @@
 """產生一份仿台灣公司格式的 Word 履歷表，用來測試整條流程。"""
 import sys
+
 from docx import Document
-from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Pt
 
 
 def build(path="sample_resume_form.docx"):

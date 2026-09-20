@@ -97,8 +97,10 @@ def _flatten(value: Any, path: str = "") -> Dict[str, str]:
         return {k: v for key, sub in value.items()
                 for k, v in _flatten(sub, f"{path}.{key}" if path else key).items()}
     if isinstance(value, list) and any(isinstance(x, dict) for x in value):
-        return {k: v for i, sub in enumerate(value) for k, v in _flatten(sub, f"{path}[{i}]").items()}
-    text = "、".join(map(str, value)) if isinstance(value, list) else str(value if value is not None else "")
+        return {k: v for i, sub in enumerate(value)
+                for k, v in _flatten(sub, f"{path}[{i}]").items()}
+    text = ("、".join(map(str, value)) if isinstance(value, list)
+            else str(value if value is not None else ""))
     return {path: text.strip()} if text.strip() else {}
 
 
@@ -134,7 +136,10 @@ def export() -> Dict[str, Any]:
 
 
 def restore_file(payload: Any) -> Dict[str, Any]:
-    """還原備份檔：認得自己匯出的格式，也收直接一份我的資料。不對就丟 ValueError（給人看的原因）。"""
+    """還原備份檔：認得自己匯出的格式，也收直接一份我的資料。
+
+    不對就丟 ValueError（給人看的原因）。
+    """
     ours = isinstance(payload, dict) and payload.get("format") == FORMAT
     profile = payload.get("profile") if ours else payload
     why = problem(profile)

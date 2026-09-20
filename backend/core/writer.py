@@ -22,8 +22,16 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from docx import Document
 from docx.oxml.ns import qn
 
-from .document import (BLANK_RUN_RE, CHECKBOX_CHARS, CHECKED_CHARS, GAP_RE, ROC_BEFORE_RE,
-                       TRAILING_COLON_RE, _grid, to_roc)
+from .document import (
+    BLANK_RUN_RE,
+    CHECKBOX_CHARS,
+    CHECKED_CHARS,
+    GAP_RE,
+    ROC_BEFORE_RE,
+    TRAILING_COLON_RE,
+    _grid,
+    to_roc,
+)
 from .runs import write_changes
 
 log = logging.getLogger(__name__)

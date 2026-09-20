@@ -25,10 +25,25 @@ dependencies = [
 dev = ["langfuse>=3,<4"]
 # 測試。瀏覽器那一組還要 playwright 與已經 build 好的 frontend/dist，
 # 缺任何一樣就自動跳過（見 tests/browser/conftest.py）
-test = ["pytest>=8", "httpx>=0.27", "playwright>=1.49"]
+# httpx2 不是打錯：starlette 的 TestClient 已經改用它，裝舊的 httpx 會一直跳棄用警告
+test = ["pytest>=8", "httpx2", "playwright>=1.49"]
+# lint 的版本釘死：ruff 每個小版本都可能多出新規則，浮動版本會讓 CI 無預警變紅，
+# 而且本機與 CI 跑的不是同一套規則就失去意義
+lint = ["ruff==0.9.6"]
 
 [tool.setuptools.packages.find]
 include = ["backend*"]
+
+[tool.ruff]
+# 現有程式碼本來就抓 100：只有 20 幾行超出，收齊比放寬合理
+line-length = 100
+extend-exclude = ["claude_code_in_agent"]   # 研究迴圈不入版控，也不歸這裡管
+
+[tool.ruff.lint]
+# 刻意不開 UP 與 B：UP006/UP007 會要求把 Dict/Optional 全面換成 dict/|，
+# 那是 600 多處的風格遷移，跟「把 lint 釘下來」是兩件事，要做也該單獨做。
+# E/W＝pycodestyle，F＝pyflakes（真正的錯誤），I＝import 排序（差異才穩定）
+select = ["E", "W", "F", "I"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

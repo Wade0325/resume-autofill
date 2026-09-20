@@ -9,8 +9,8 @@ from urllib.parse import quote
 from fastapi import APIRouter, Body, File, HTTPException, Request, Response, UploadFile
 
 from .. import actions, db, profiles, service
-from .uploads import read_upload
 from ..schemas import ProfileIn, ProfileVersionOut
+from .uploads import read_upload
 
 router = APIRouter(tags=["profile"])
 

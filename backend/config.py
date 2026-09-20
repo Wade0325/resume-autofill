@@ -43,7 +43,8 @@ LLM_MODEL = os.environ.get("RESUME_AUTOFILL_LLM_MODEL", "Qwen3.5-9B-Q4_K_M")
 LLM_CTX_SIZE = int(os.environ.get("RESUME_AUTOFILL_LLM_CTX", "16384"))
 
 MODELS_DIR = Path(os.environ.get("RESUME_AUTOFILL_MODELS_DIR", _ROOT / "models"))
-LLAMA_SERVER = Path(os.environ.get("RESUME_AUTOFILL_LLAMA_SERVER", _ROOT / "bin" / "llama-server.exe"))
+LLAMA_SERVER = Path(os.environ.get("RESUME_AUTOFILL_LLAMA_SERVER",
+                                   _ROOT / "bin" / "llama-server.exe"))
 
 # 空＝讓 llama.cpp 自己看剩多少 VRAM 決定放幾層（寫死的話它會放棄自動配置）
 GPU_LAYERS = os.environ.get("RESUME_AUTOFILL_GPU_LAYERS", "")

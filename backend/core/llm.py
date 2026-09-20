@@ -124,7 +124,8 @@ def _traceable(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for m in messages:
         content = m["content"]
         if isinstance(content, list):
-            content = [p if p.get("type") != "image_url" else {"type": "image_url", "image_url": "<截圖>"}
+            content = [p if p.get("type") != "image_url"
+                       else {"type": "image_url", "image_url": "<截圖>"}
                        for p in content]
         out.append({**m, "content": content})
     return out
@@ -199,7 +200,8 @@ def ask(host: str, system: str, user: UserContent, schema: Dict[str, Any],
     if choice.get("finish_reason") == "length":
         raise LlmCallFailed(
             "這份文件太長，超出模型一次能讀的長度，輸出被截斷（提示詞約 "
-            f"{prompt_chars // 2} tokens）。開發者可用 RESUME_AUTOFILL_LLM_CTX 加大上下文後重新啟動模型")
+            f"{prompt_chars // 2} tokens）。開發者可用 RESUME_AUTOFILL_LLM_CTX "
+            "加大上下文後重新啟動模型")
     if not content:
         raise LlmCallFailed("模型沒有回傳任何內容")
     try:

@@ -435,11 +435,17 @@ trace／observation 的工具**（54 個工具都是 prompt、dataset、score、
 ## 7. 測試
 
 ```bash
-pip install -e ".[test]"
+pip install -e ".[test,lint]"
+ruff check backend tools tests
 pytest                      # 不需要瀏覽器的那些，約 50 秒
 npm --prefix frontend run build && pytest -m browser    # 加上瀏覽器那一組
 pytest -m ""                # 全部
 ```
+
+**ruff 的版本是釘死的**（`lint` extra 寫 `ruff==0.9.6`）。ruff 每個小版本都可能多出新規則，
+浮動版本會讓 CI 無預警變紅，而且本機跟 CI 跑的不是同一套規則就失去意義。
+規則集是 `E/W/F/I`、行長 100——刻意不開 `UP` 與 `B`：`UP006`／`UP007` 會要求把
+`Dict`／`Optional` 全面換成 `dict`／`|`，那是 600 多處的風格遷移，要做也該單獨做。
 
 **一個模型都不用跑。** 要模型判斷的地方一律換成假的（`monkeypatch`），要測「模型沒開」
 的行為時就把 `RESUME_AUTOFILL_LLM_HOST` 指到一個沒人在聽的埠讓它真的連不上。
@@ -462,6 +468,27 @@ pytest -m ""                # 全部
   `window.print = () => {}`）——回傳值無法序列化，後續行為就不對了。結尾補一個
   `window.__ready = true` 之類的就好。
 - `visibility:hidden` 的元素 `innerText` 會回空字串，要驗內容得用 `textContent`。
+
+### CI
+
+`.github/workflows/ci.yml`，push 到 main 與所有 PR 都會跑，兩個 job：
+
+| job | runner | 做什麼 |
+|---|---|---|
+| python | windows-latest | `ruff check` ＋ `pytest`（109 項） |
+| frontend | ubuntu-latest | `npm ci` ＋ `npm run build`（`tsc` 在裡面，等於型別檢查） |
+
+**為什麼測試跑 Windows 而不是便宜的 Linux**：`backend/model_manager.py` 有幾處沒有防護的
+Windows 專屬呼叫（`subprocess.CREATE_NO_WINDOW`、`powershell`），產品本身也只出 Windows。
+這個倉庫是公開的，Actions 在所有 runner 上都免費，沒有理由為了省錢冒可攜性的險。
+前端沒有這個問題，所以跑 ubuntu，比較快。
+
+瀏覽器那一組**沒有**放進 CI：要另外裝 chromium、還要先 build 前端，一次多三四分鐘。
+等這兩個 job 穩定之後再考慮加，或改成每日跑。
+
+打包與 Release 也還沒進 CI：`bin/`（llama.cpp ＋ CUDA DLL，約 667 MB）沒進版控，
+CI 拿不到它就產不出完整的包。要做的話得先決定「從上游下載哪個版本」或「發精簡包」，
+那是發佈策略的決定，不是 CI 設定的問題。
 
 ## 8. 打包
 

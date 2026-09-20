@@ -133,7 +133,8 @@ def init() -> None:
         conn.execute("PRAGMA journal_mode=WAL")
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         if version > len(MIGRATIONS):
-            log.warning("資料庫版本 %d 比程式認得的 %d 新，可能是新版程式建的", version, len(MIGRATIONS))
+            log.warning("資料庫版本 %d 比程式認得的 %d 新，可能是新版程式建的",
+                        version, len(MIGRATIONS))
         for n, step in enumerate(MIGRATIONS[version:], start=version + 1):
             step(conn)
             conn.execute(f"PRAGMA user_version = {n}")

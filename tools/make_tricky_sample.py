@@ -5,9 +5,10 @@ make_sample.py 的標準標籤（姓名、行動電話）就算模型判錯，
 對映結果完全取決於模型本身的判斷。
 """
 import sys
+
 from docx import Document
-from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Pt
 
 
 def build(path="tricky_resume_form.docx"):
@@ -54,7 +55,8 @@ def build(path="tricky_resume_form.docx"):
     doc.add_paragraph("參、其他事項").runs[0].bold = True
     doc.add_paragraph("外語能力：____________________________")
     doc.add_paragraph("持有之專業證書：____________________________")
-    doc.add_paragraph("急難時聯絡之人：____________  與本人之關係：________  其聯絡電話：____________")
+    doc.add_paragraph("急難時聯絡之人：____________  與本人之關係：________  "
+                      "其聯絡電話：____________")
     doc.add_paragraph("何時可以來上班：")
 
     doc.add_paragraph()

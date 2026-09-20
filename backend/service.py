@@ -10,10 +10,10 @@ import logging
 import re
 import tempfile
 import threading
-import zipfile
 import time
 import unicodedata
 import uuid
+import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -21,7 +21,7 @@ from . import actions, config, db, model_manager, profiles
 from .core import convert, document, filler, llm, photo, planner, reader, writer
 from .core.document import Slot
 from .core.schema import BY_KEY, PER_JOB_LABELS
-from .schemas import (ImportPreviewOut, ImportRow, PlanItem, PlanOut, PlanStats)
+from .schemas import ImportPreviewOut, ImportRow, PlanItem, PlanOut, PlanStats
 
 log = logging.getLogger(__name__)
 
@@ -1210,7 +1210,8 @@ def _import_rows(extracted: Dict[str, Any]) -> List[ImportRow]:
         text = document.MARKER_RE.sub("", str(value)).strip()
         if field_key not in BY_KEY or not text:
             return
-        current = "" if entry == "new" else str(planner.get_value(profile, field_key, ordinal) or "")
+        current = ("" if entry == "new"
+                   else str(planner.get_value(profile, field_key, ordinal) or ""))
         rows.append(ImportRow(
             row_id=f"{field_key}#{ordinal}", field_key=field_key, ordinal=ordinal,
             current=current, incoming=text, default_checked=not current,
