@@ -47,7 +47,7 @@ CATALOG = [
 
 READY_TIMEOUT = 300    # 9B 冷啟動要載 5 GB 進 VRAM，給足時間
 DOWNLOAD_TIMEOUT = (15, 60)
-DISK_MARGIN_GB = 1.0   # 除了模型本身，至少要再留這麼多空間
+DISK_MARGIN_GB = 0.5   # 除了模型本身，至少要再留這麼多空間（不留的話硬碟正好塞爆）
 
 _lock = threading.Lock()
 _starting: str | None = None            # 正在啟動的模型名，None = 沒有
