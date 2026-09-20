@@ -36,8 +36,9 @@ export default function ProfilePage() {
   useEffect(() => {
     Promise.all([api.fields(), api.getProfile()])
       .then(([f, p]) => {
-        // 合成欄位（就學期間＝入學＋畢業）不需要使用者填
-        setFields(f.filter((x) => !x.derived))
+        // 合成欄位（就學期間＝入學＋畢業）不需要使用者填；
+        // 每間公司不一樣的欄位（應徵職務…）在填寫頁的「這次應徵」填
+        setFields(f.filter((x) => !x.derived && !x.per_job))
         setProfile(p)
       })
       .catch((e) => setError(errorText(e)))

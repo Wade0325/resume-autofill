@@ -5,7 +5,7 @@ from fastapi import APIRouter, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 
 from .. import actions, db, service
-from ..schemas import MappingsIn, OutputOut, PlanOut
+from ..schemas import ApplyIn, MappingsIn, OutputOut, PlanOut
 from .uploads import DOCX_MEDIA_TYPE, WorkId, read_upload
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -57,6 +57,15 @@ def fix_mappings(job_id: WorkId, body: MappingsIn) -> PlanOut:
         plan = service.apply_fixes(job_id, [(f.slot_id, f.field_key, f.ordinal) for f in body.fixes])
     except ValueError as e:
         raise HTTPException(422, str(e))
+    if plan is None:
+        raise HTTPException(404, "找不到這個 job")
+    return plan
+
+
+@router.patch("/{job_id}/apply", response_model=PlanOut)
+def set_apply(job_id: WorkId, body: ApplyIn) -> PlanOut:
+    """「這次應徵」：填完立刻重算計畫與預覽，不必重新分析。"""
+    plan = service.set_apply(job_id, body.values)
     if plan is None:
         raise HTTPException(404, "找不到這個 job")
     return plan

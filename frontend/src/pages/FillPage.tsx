@@ -1,7 +1,8 @@
 import { Suspense, lazy, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, errorText, type FieldSpec, type Plan, type PlanItem } from '../api'
+import { api, errorText, type FieldSpec, type Plan, type PlanItem, type Profile } from '../api'
 import { useBackgroundUpload } from '../useBackgroundUpload'
+import ApplyPanel from '../components/ApplyPanel'
 import Dropzone from '../components/Dropzone'
 import { PageShell, FooterBar, OverwriteBadge } from '../components/common'
 
@@ -13,6 +14,7 @@ const INSERTS = new Set(['checkbox', 'print'])
 
 export default function FillPage() {
   const [fields, setFields] = useState<FieldSpec[]>([])
+  const [profile, setProfile] = useState<Profile>({}) // 只用來顯示「沿用我的資料：…」
   const [plan, setPlan] = useState<Plan | null>(null)
   const [previewVersion, setPreviewVersion] = useState(0)
   const [busy, setBusy] = useState(false)
@@ -31,6 +33,7 @@ export default function FillPage() {
 
   useEffect(() => {
     api.fields().then(setFields).catch((e) => setError(errorText(e)))
+    api.getProfile().then(setProfile).catch(() => setProfile({}))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -54,6 +57,15 @@ export default function FillPage() {
     if (result) {
       setPlan(result)
       setPreviewVersion((v) => v + 1) // 讓右邊重新渲染
+    }
+  }
+
+  async function applyValues(values: Record<string, string>) {
+    if (!plan) return
+    const result = await run(() => api.setApply(plan.job_id, values))
+    if (result) {
+      setPlan(result)
+      setPreviewVersion((v) => v + 1)
     }
   }
 
@@ -102,6 +114,14 @@ export default function FillPage() {
           </span>
         )}
       </div>
+
+      <ApplyPanel
+        fields={fields}
+        plan={plan}
+        profile={profile}
+        busy={busy}
+        onApply={applyValues}
+      />
 
       {plan.form_fields.length > 0 && (
         <details className="bg-slate-50 border border-slate-200 rounded-md px-4 py-3 text-sm">
@@ -379,6 +399,7 @@ function sourceLabel(source: string) {
     cache: '快取',
     model: '模型',
     manual: '手動',
+    apply: '這次應徵',
   }
   return names[source] ?? source
 }

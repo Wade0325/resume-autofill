@@ -22,6 +22,7 @@ class FieldSpec:
     choices: List[str] = field(default_factory=list)
     hint: str = ""           # 只給模型看，不會出現在表單上
     derived: bool = False    # 值由其他欄位合成，不出現在個人資料表單
+    per_job: bool = False    # 每份工作自己一個值，存在那份工作底下，不進「我的資料」
 
 
 FIELDS: List[FieldSpec] = [
@@ -64,7 +65,10 @@ FIELDS: List[FieldSpec] = [
     FieldSpec("contact.address_mailing", "通訊地址"),
     FieldSpec("contact.address_household", "戶籍地址"),
 
-    # 應徵職務刻意不收：每間公司都不一樣，存了也只會填錯，留白讓使用者手寫
+    # 應徵職務與工作地點每間公司都不一樣，不存進「我的資料」：填寫頁的「這次應徵」
+    # 面板填一次、只算那一份工作（per_job）。沒填就留白，跟以前一樣
+    FieldSpec("job.title", "應徵職務", per_job=True, hint="這次應徵的職務名稱"),
+    FieldSpec("job.location", "工作地點", per_job=True, hint="這次應徵的上班地點"),
     FieldSpec("job.expected_salary", "希望待遇", kind="money", hint="月薪金額"),
     FieldSpec("job.expected_salary_year", "期望年薪", kind="money", hint="年薪金額"),
     FieldSpec("job.available_date", "可到職日", kind="date", hint="西元年月日，例如 2026年09月01日"),
@@ -228,6 +232,10 @@ LABEL_ALIASES = {
     "服役資歷": "basic.military",
     "可上班日期": "job.available_date",
     "資訊來源": "job.recruit_channel",
+    "應徵職位": "job.title",
+    "應徵職缺": "job.title",
+    "希望工作地點": "job.location",
+    "上班地點": "job.location",
     "手機": "contact.mobile",
     # 「是否有配偶或二親等以內之血親或姻親於本公司任職」——法規寫法，一個「親友」都沒印
     "血親": "declaration.relatives_in_company",
@@ -252,11 +260,17 @@ BY_LABEL = {f.label: f.key for f in FIELDS if _label_counts[f.label] == 1}
 BLOCKED_LABELS = (
     # 「幾年制」這種個人資料不會有的表單微欄位
     "年制",
-    # 每間公司不一樣的值，填了必錯，一律留白讓使用者手寫
-    "應徵職務", "應徵職位", "應徵職缺",
-    # 應徵的這份工作在哪裡上班（希望工作地點）——跟應徵職務一樣看職缺，個人資料不收
-    "工作地點",
 )
+
+# 每間公司不一樣的值：不存進「我的資料」，由填寫頁的「這次應徵」面板提供。
+# 面板沒填就留白（以前是一律留白，連填的機會都沒有）。
+# 兩條路線都靠這份表認出來：讀文字走 LABEL_MAP，看版面比對欄名（見 filler.JOB_SPECIFIC）
+PER_JOB_LABELS = {
+    "應徵職務": "job.title",
+    "應徵職位": "job.title",
+    "應徵職缺": "job.title",
+    "工作地點": "job.location",
+}
 
 # 勾選題是拿個人資料的值去比對表單上印出來的選項字串，同義不同字就整格填不進去：
 # 表單印「□是 □否」而資料存「無」、印「□退伍」而資料存「役畢」、

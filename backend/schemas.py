@@ -12,6 +12,7 @@ class FieldSpecOut(BaseModel):
     kind: str
     choices: List[str] = []
     derived: bool = False             # 由其他欄位合成，個人資料表單不顯示
+    per_job: bool = False             # 每份工作自己一個值，填寫頁的「這次應徵」面板填
 
 
 class LlmStatus(BaseModel):
@@ -58,6 +59,8 @@ class PlanOut(BaseModel):
     items: List[PlanItem]
     # 我的資料裡每一種清單有幾筆（education: 3），填寫頁的「第幾筆」選單照這個列
     entries: Dict[str, int] = {}
+    # 這份工作的「這次應徵」：應徵職務、工作地點…只算這一份，不進「我的資料」
+    apply: Dict[str, str] = {}
 
 
 class MappingFix(BaseModel):
@@ -68,6 +71,11 @@ class MappingFix(BaseModel):
 
 class MappingsIn(BaseModel):
     fixes: List[MappingFix]
+
+
+class ApplyIn(BaseModel):
+    """「這次應徵」：應徵職務、工作地點…只算這一份工作，不進「我的資料」。"""
+    values: Dict[str, str]
 
 
 class OutputOut(BaseModel):

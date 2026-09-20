@@ -55,8 +55,8 @@ from PIL import Image, ImageDraw, ImageFont
 from . import llm
 from .document import ROC_BEFORE_RE, ROC_WORD_RE, iter_block_items, to_roc
 from .runs import write_changes
-from .schema import (BLOCKED_LABELS, BY_KEY, LABEL_ALIASES, OPTION_SYNONYMS, PRESENT_RE,
-                     PRESENT_WORDS)
+from .schema import (BY_KEY, LABEL_ALIASES, OPTION_SYNONYMS, PER_JOB_LABELS,
+                     PRESENT_RE, PRESENT_WORDS)
 
 log = logging.getLogger(__name__)
 
@@ -115,9 +115,11 @@ COMPANY_WORDS_RE = re.compile(r"面談|初試|複試|任用|建議薪資|主管�
 # 親筆簽名留給本人手寫；同一行的「日期＿年＿月＿日」是簽名的日期，個人資料也不會有
 SIGN_WORDS = ("簽名", "簽章")
 # 被擋的詞怎麼擋：簽名、公司欄位、「年制」（「□二年制 □四年制」整排都是選項）一出現，
-# 整行都不是應徵者要填的；應徵職務、工作地點這種每間公司不一樣的欄位只擋自己那一段，
-# 同一行的「希望待遇：＿＿」照填
-JOB_SPECIFIC = tuple(b for b in BLOCKED_LABELS if b != "年制")
+# 整行都不是應徵者要填的；應徵職務、工作地點這種每間公司不一樣的欄位只算自己那一段，
+# 同一行的「希望待遇：＿＿」照填。這些位置留著、標上它是哪一個欄位，值由填寫頁的
+# 「這次應徵」面板提供（沒填就留白）；模型看不到它們，位置編號也另外算，
+# 學過的格式才不會因此全部對不上
+JOB_SPECIFIC = tuple(PER_JOB_LABELS)
 # 兩邊都常出現、卻不代表相關的詞：履歷表的問答題幾乎都有「工作」；
 # 「期間」則是服役期間、就學期間、任職期間都有，光靠它會把學歷填進服役欄
 GENERIC_WORDS = {"工作", "期間"}
@@ -175,6 +177,9 @@ class Slot:
     filler: str = ""        # gap 原本的留白，用來保持欄寬
     option: str = ""        # box：選項印的字；gap：緊接在後面的單位（年、月、kg），有單位只收數字
     preview: str = ""       # 給模型看的那一格內容，目標位置標成 ▁
+    # 「這次應徵」才有的欄位（應徵職務、工作地點）：值跟著那一份工作，不在「我的資料」裡
+    job_field: str = ""     # 對到的欄位代碼，例如 job.title
+    extra: bool = False     # 這個位置不給模型看、也不進格式指紋（見 JOB_SPECIFIC）
     cell: Cell = field(default=None, repr=False)
 
 
@@ -433,30 +438,35 @@ def _line_slots(line: str) -> List[Tuple[str, int, int, str]]:
         out.append(("append", len(line.rstrip()), len(line.rstrip()), ""))
     elif not out and line.rstrip().endswith(("？", "?")):
         out.append(("line", len(line), len(line), ""))   # 整格是一個問句，答案寫下一行
-    if any(b in squashed for b in JOB_SPECIFIC):
-        out = _drop_job_specific(line, out)
-    return out
+    return _mark_job_specific(line, out)
 
 
-def _drop_job_specific(line: str, slots: List[Tuple[str, int, int, str]]
-                       ) -> List[Tuple[str, int, int, str]]:
-    """應徵職務、工作地點（每間公司不一樣，產品刻意留白）只擋它自己那一段：
-    「應徵職務：＿＿　希望待遇：＿＿」的希望待遇照填——以前整行都丟掉。
+def _per_job_key(text: str) -> str:
+    """這段字是「這次應徵」的哪一個欄位（應徵職務→job.title），不是就回空字串。"""
+    squashed = _squash(text)
+    return next((key for word, key in PER_JOB_LABELS.items() if word in squashed), "")
+
+
+def _mark_job_specific(line: str, slots: List[Tuple[str, int, int, str]]
+                       ) -> List[Tuple[str, int, int, str, str]]:
+    """標出「應徵職務：＿＿　希望待遇：＿＿」裡哪一段是應徵職務、哪一段是希望待遇：
+    只有應徵職務那一段算「這次應徵」，希望待遇照常填。
 
     一個位置歸哪個欄名，看它前面到上一個位置之間印的字；勾選框、以及框後面的填空
     （「□其他＿＿」）沿用同一題第一個框的歸屬，直到出現新的欄名（冒號）。
     回傳照原本的順序：位置的代碼跟順序有關，順序一動，學過的格式就對不上了。
     """
-    dropped, prev_end, prev_kind, blocked = set(), 0, "", False
+    if not any(b in _squash(line) for b in JOB_SPECIFIC):
+        return [(k, s, e, o, "") for k, s, e, o in slots]
+    marked, prev_end, prev_kind, key = {}, 0, "", ""
     for slot in sorted(slots, key=lambda s: s[1]):
         kind, start, end, _option = slot
         region = line[prev_end:start]
         if not (prev_kind == "box" and not re.search(r"[：:]", region)):
-            blocked = any(b in _squash(region) for b in JOB_SPECIFIC)
-        if blocked:
-            dropped.add(slot)
+            key = _per_job_key(region)
+        marked[slot] = key
         prev_end, prev_kind = end, kind
-    return [s for s in slots if s not in dropped]
+    return [(k, s, e, o, marked[(k, s, e, o)]) for k, s, e, o in slots]
 
 
 def _window(text: str, at: int, span: int = 34) -> str:
@@ -493,20 +503,27 @@ def slots_of(cell: Cell) -> List[Slot]:
         if PLACEHOLDER_RE.match(text):
             # 「中文姓名：↵（空行）」的空行是上一行那個欄位的地方：值接在冒號後面，
             # 冒號那一行被擋掉的（應徵職務：）空行也跟著不填
-            found = [] if legal or above.endswith(("：", ":")) else [("blank", 0, len(text), "")]
+            found = [] if legal or above.endswith(("：", ":")) else [("blank", 0, len(text), "", "")]
         else:
             found, base = [], 0
             for line in text.split("\n"):
-                found += [(k, s + base, e + base, opt)
-                          for k, s, e, opt in _line_slots(line)]
+                found += [(k, s + base, e + base, opt, job)
+                          for k, s, e, opt, job in _line_slots(line)]
                 base += len(line) + 1
             if not found and _fill_after(cell, text):
-                found = [("append", len(text), len(text), "")]
+                found = [("append", len(text), len(text), "", "")]
             # 「聯絡電話：(　　)↵手機」：第二段只印一個欄位名稱，號碼寫在它後面
             if (not found and pi and re.search(r"[：:]", first)
                     and _squash(text) in set(LABEL_ALIASES) | {f.label for f in BY_KEY.values()}):
-                found = [("append", len(text.rstrip()), len(text.rstrip()), "")]
-        for n, (kind, start, end, option) in enumerate(found, 1):
+                found = [("append", len(text.rstrip()), len(text.rstrip()), "", "")]
+        # 「這次應徵」的位置另外編號（#0.j1）：照原本的順序插進去會把後面的編號往後推，
+        # 學過的格式就整份對不上了
+        n = j = 0
+        for kind, start, end, option, job_field in found:
+            if job_field:
+                j += 1
+            else:
+                n += 1
             shown_end = end - 1 if option == "()" else end
             if len(cell.paras) > 1 and (kind == "blank" or not re.search(r"[一-鿿A-Za-z]",
                                                                         text[:start])):
@@ -518,10 +535,11 @@ def slots_of(cell: Cell) -> List[Slot]:
             # 排版用的留白先縮成一格：宣告事項那六題的題目與勾選框之間空了五十格，
             # 不縮的話周圍只看得到「▁ 是,請說明:」，題目在問什麼完全看不見
             shown = re.sub(r"[ 　]{2,}", " ", shown.replace("\n", "↵"))
-            out.append(Slot(f"{cell.addr}#{pi}.{n}", kind, cell.addr, pi, start, end,
+            out.append(Slot(f"{cell.addr}#{pi}.{'j' if job_field else ''}{j if job_field else n}",
+                            kind, cell.addr, pi, start, end,
                             filler=text[start:end] if kind == "gap" else "",
                             option=option, preview=_window(shown, shown.index("▁")),
-                            cell=cell))
+                            job_field=job_field, extra=bool(job_field), cell=cell))
         offset += len(text) + 1
     # 格子裡印了「優點：」「缺點：」這種更明確的位置時，問句後面就不算一個位置了——
     # 不然模型會把答案寫在問句後面，印好的欄位反而空著
@@ -537,6 +555,14 @@ def slots_of(cell: Cell) -> List[Slot]:
     united = {s.para for s in out if s.kind == "gap" and s.option in UNITS}
     out = [s for s in out if not (s.kind == "append" and s.para + 1 in united
                                   and s.end == len(cell.paras[s.para].text))]
+    # 整格空白、欄名印在隔壁那格（「應徵職務｜＿＿」）：這一格就是這次應徵的職務。
+    # 只認整格空白的：row_head 是「左邊最近印著字的那格」，自己有印字的格子
+    # （「應徵職務：＿｜錄取後可報到日 □隨時」）左邊那個欄名是別人的，認了就會搶錯格
+    if all(not p.text.strip() for p in cell.paras):
+        label = _per_job_key(cell.row_head) or _per_job_key(cell.col_head)
+        for slot in out:
+            if label and not slot.job_field:
+                slot.job_field = label
     return out
 
 
@@ -2167,7 +2193,9 @@ def analyze(blank: Path, profile: Dict[str, Any],
             host: str = LLM_HOST, model: str = LLM_MODEL) -> Draft:
     """看著版面決定每一個位置放哪一項資料。不寫檔——寫檔是 write() 的事，
     中間留給使用者修正。"""
-    doc, form, slots = parse(blank)
+    doc, form, all_slots = parse(blank)
+    # 「這次應徵」才認出來的位置不進這一輪：模型看到的位置與批次跟以前一模一樣
+    slots = [s for s in all_slots if not s.extra]
     fields = usable_fields(form, profile)
     pages = render_pages(doc)
     log.info("%s：可寫位置 %d 處、資料 %d 項、示意圖 %d 張",
@@ -2229,8 +2257,26 @@ def analyze(blank: Path, profile: Dict[str, Any],
     except llm.LlmError as e:
         log.warning("補漏那一輪失敗：%s", e)
     ticks = {k: v for k, v in ticks.items() if k in kept}   # 去重丟掉的配對，勾選也跟著不算
+    # 應徵職務、工作地點那幾格由「這次應徵」面板決定，模型挑的不算——
+    # 那些值不在「我的資料」裡，模型挑什麼都是別的欄位的資料
+    per_job = {s.id for s in all_slots if s.job_field}
+    kept = {sid: key for sid, key in kept.items() if sid not in per_job}
+    ticks = {sid: tick for sid, tick in ticks.items() if sid not in per_job}
     log.info("%s：模型指定 %d 處、留下 %d 處", blank.name, len(chosen), len(kept))
-    return Draft(slots=slots, fields=fields, assignment=kept, ticks=ticks)
+    return Draft(slots=all_slots, fields=fields, assignment=kept, ticks=ticks)
+
+
+def form_slots(slots: List[Slot]) -> List[Slot]:
+    """算格式指紋用的位置：不含「這次應徵」才認出來的那些，
+    否則同一份表格的指紋會因為這個功能而改掉，學過的格式全部要重學。"""
+    return [s for s in slots if not s.extra]
+
+
+def job_assignment(slots: List[Slot], values: Dict[str, str]) -> Dict[str, str]:
+    """「這次應徵」那幾格要填什麼：面板填了的才寫，沒填的留白（跟以前一樣）。
+    values 是攤平的 {"job.title": "資深工程師"}。"""
+    return {s.id: s.job_field for s in slots
+            if s.job_field and str(values.get(s.job_field, "")).strip()}
 
 
 def write(blank: Path, out: Path, assignment: Dict[str, str],

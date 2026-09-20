@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import actions, config, db, model_manager, profiles
 from .core import convert, document, filler, llm, planner, reader, writer
 from .core.document import Slot
-from .core.schema import BY_KEY
+from .core.schema import BY_KEY, PER_JOB_LABELS
 from .schemas import (ImportPreviewOut, ImportRow, PlanItem, PlanOut, PlanStats)
 
 log = logging.getLogger(__name__)
@@ -182,15 +182,60 @@ def _vlm_anchors(slots: List[Any], decisions: Dict[str, planner.Decision],
             for s in slots]
 
 
+def apply_values(job: Dict[str, Any]) -> Dict[str, str]:
+    """這份工作的「這次應徵」：{"job.title": "資深工程師"}。"""
+    return {k: str(v) for k, v in (job.get("apply") or {}).items() if str(v).strip()}
+
+
+def _profile_of(job: Dict[str, Any]) -> Dict[str, Any]:
+    """我的資料 ＋ 這份工作的「這次應徵」。面板的值只算這一份，不寫回我的資料。"""
+    profile = db.get_kv("profile") or {}
+    values = apply_values(job)
+    if not values:
+        return profile
+    section = {**(profile.get("job") or {}),
+               **{k.split(".", 1)[1]: v for k, v in values.items() if k.startswith("job.")}}
+    return {**profile, "job": section}
+
+
+def _per_job_key(text: str) -> str:
+    """這個欄名是「這次應徵」的哪一個欄位（應徵職務→job.title），不是就回空字串。"""
+    squashed = document.squash(text or "")
+    return next((key for word, key in PER_JOB_LABELS.items() if word in squashed), "")
+
+
+def _classic_per_job(decisions: Dict[str, Any], values: Dict[str, str]) -> Dict[str, Any]:
+    """讀文字：欄名是應徵職務、工作地點的格子照「這次應徵」走。
+    這個功能以前一律留白，學過的格式把那些格子記成 __SKIP__，面板填了就改成填。"""
+    out = dict(decisions)
+    for sid, d in decisions.items():
+        key = _per_job_key(d.label)
+        if key and values.get(key) and d.field_key in _NOT_FILLED:
+            out[sid] = planner.Decision(key, 0, "apply", d.label)
+    return out
+
+
+def _vlm_per_job(slots: List[Any], decisions: Dict[str, planner.Decision],
+                 values: Dict[str, str]) -> Dict[str, planner.Decision]:
+    """應徵職務、工作地點那幾格一律以「這次應徵」為準：模型挑的、舊快取記的都不算，
+    面板沒填就留白。值不在「我的資料」裡，模型挑什麼都是別的欄位的資料。"""
+    per_job = {s.id: (s.job_field, _vlm_label(s)) for s in slots if s.job_field}
+    out = {sid: d for sid, d in decisions.items() if sid not in per_job}
+    out.update({sid: planner.Decision(key, 0, "apply", label)
+                for sid, (key, label) in per_job.items() if values.get(key)})
+    return out
+
+
 def _vlm_restore(job: Dict[str, Any]) -> Tuple[List[Any], Dict[str, planner.Decision],
                                                Dict[str, bool]]:
     """vlm 的位置牽著 python-docx 的段落物件，存不進資料庫——照原檔重新解析一次。
     解析純粹是程式，同一份文件跑幾次結果都一樣，約 0.2 秒。"""
     _doc, _form, slots = filler.parse(input_path(job["id"]))
-    decisions = {k: planner.Decision(*v) for k, v in job["decided"].items()}
+    decisions = _vlm_per_job(slots, {k: planner.Decision(*v) for k, v in job["decided"].items()},
+                             apply_values(job))
     recorded = {a["id"]: (a["tick"], a.get("basis"))
                 for a in job["anchors"] if a.get("tick") is not None}
-    return slots, decisions, _live_ticks(recorded, decisions, db.get_kv("profile") or {})
+    return slots, decisions, _live_ticks(recorded, decisions, _profile_of(job))
 
 
 def _vlm_assignment(decisions: Dict[str, planner.Decision]) -> Dict[str, str]:
@@ -204,8 +249,9 @@ def _vlm_worker(job_id: str, filename: str) -> None:
     try:
         db.update_job(job_id, stage="盤點可寫位置")
         _doc, _form, slots = filler.parse(src)
-        # 指紋帶上引擎：兩條路認出來的位置編號不一樣，學過的對映不能混用
-        fp = "vlm:" + document.fingerprint(slots)
+        # 指紋帶上引擎：兩條路認出來的位置編號不一樣，學過的對映不能混用。
+        # 「這次應徵」那幾格不算進指紋，否則學過的格式會因為多了這個功能而全部要重學
+        fp = "vlm:" + document.fingerprint(filler.form_slots(slots))
         cached = db.get_template(fp)
         log.info("解析完成 位置=%d fingerprint=%s 範本快取=%s",
                  len(slots), fp, "命中" if cached else "未命中")
@@ -233,6 +279,9 @@ def _vlm_worker(job_id: str, filename: str) -> None:
                                                   _vlm_label(by_id[sid]))
             ticks = draft.ticks
 
+        # 這次應徵那幾格不存進決策：值跟著面板走，每次用到時才算（見 _vlm_per_job）
+        decisions = {sid: d for sid, d in decisions.items()
+                     if sid not in {s.id for s in slots if s.job_field}}
         db.update_job(job_id, fingerprint=fp,
                       anchors=_vlm_anchors(slots, decisions, ticks, profile),
                       decided={k: list(v) for k, v in decisions.items()},
@@ -249,13 +298,14 @@ def _vlm_worker(job_id: str, filename: str) -> None:
 
 def _vlm_render(job_id: str, filename: str, cached: bool, slots: List[Any],
                 decisions: Dict[str, planner.Decision],
-                ticks: Dict[str, bool]) -> PlanOut:
+                ticks: Dict[str, bool],
+                apply: Optional[Dict[str, str]] = None) -> PlanOut:
     """把 filler 的判讀結果換成前端那張對映清單。
 
     值只是拿來顯示的：實際寫進去的字由 filler 決定（日期會拆進「＿年＿月」、
     西元換民國、勾選框寫的是打勾），所以這裡顯示原始值就好。
     """
-    profile = db.get_kv("profile") or {}
+    profile = _profile_of({"apply": apply})
     # filler 自己算出來的值（年資、英文姓氏）planner 不認得，先查 filler 那一份
     values = filler.fields_of(profile)
     items, by_source = [], {}
@@ -272,10 +322,13 @@ def _vlm_render(job_id: str, filename: str, cached: bool, slots: List[Any],
         # 勾選框，以及欄名是選項的空格子（學歷表「日間」底下那格打記號）
         if slot.kind == "box" or slot.id in ticks:
             note = "打勾" if ticks.get(slot.id) else ("不勾" if fill else "")
+        elif slot.job_field:
+            # 每間公司不一樣的欄位：面板填了才寫，沒填就跟以前一樣留白
+            note = "這次應徵" if fill else "這次應徵沒填"
         items.append(PlanItem(
             slot_id=slot.id, label=_vlm_label(slot),
             kind=_VLM_KIND.get(slot.kind, slot.kind),
-            field_key=(d.field_key if d else ""), value=value, existing="",
+            field_key=(d.field_key if d else slot.job_field), value=value, existing="",
             source=(d.source if d else ""), status="fill" if fill else "skip",
             note=note, ordinal=(d.ordinal if d else 0)))
     items.sort(key=lambda i: _slot_order(i.slot_id))
@@ -285,7 +338,7 @@ def _vlm_render(job_id: str, filename: str, cached: bool, slots: List[Any],
         template_cached=cached, llm_available=llm.available(config.LLM_HOST),
         stats=PlanStats(slots=len(slots), fill=fill, skip=len(items) - fill,
                         by_source=by_source),
-        form_fields=[], items=items, entries=_entries(profile))
+        form_fields=[], items=items, entries=_entries(profile), apply=apply or {})
 
 
 def _save_upload(job_id: str, content: bytes, suffix: str = ".docx") -> Path:
@@ -437,10 +490,11 @@ def get_plan(job_id: str) -> Optional[PlanOut]:
     cached = bool(db.get_template(job["fingerprint"]))
     if job.get("engine") == "vlm":
         slots, decisions, ticks = _vlm_restore(job)
-        return _vlm_render(job_id, job["filename"], cached, slots, decisions, ticks)
+        return _vlm_render(job_id, job["filename"], cached, slots, decisions, ticks,
+                           apply_values(job))
     slots, decisions = _restore(job)
     return _render(job_id, job["filename"], cached, slots, decisions,
-                   job.get("form_fields"))
+                   job.get("form_fields"), apply_values(job))
 
 
 def preview_docx(job_id: str, which: str) -> Optional[bytes]:
@@ -456,7 +510,7 @@ def preview_docx(job_id: str, which: str) -> Optional[bytes]:
     if which == "original":
         return src.read_bytes()
 
-    profile = db.get_kv("profile") or {}
+    profile = _profile_of(job)
     with tempfile.TemporaryDirectory(prefix="preview_") as tmp:
         filled = Path(tmp) / "filled.docx"
         if job.get("engine") == "vlm":
@@ -513,9 +567,25 @@ def apply_fixes(job_id: str,
             ticks.pop(slot_id, None)
         db.update_job(job_id, anchors=_vlm_anchors(slots, decisions, ticks,
                                                    db.get_kv("profile") or {}))
-        return _vlm_render(job_id, job["filename"], cached, slots, decisions, ticks)
+        return _vlm_render(job_id, job["filename"], cached, slots, decisions, ticks,
+                           apply_values(job))
     return _render(job_id, job["filename"], cached, slots, decisions,
-                   job.get("form_fields"))
+                   job.get("form_fields"), apply_values(job))
+
+
+def set_apply(job_id: str, values: Dict[str, str]) -> Optional[PlanOut]:
+    """存這份工作的「這次應徵」，回傳更新後的計畫。只改值、不呼叫模型。"""
+    job = db.get_job(job_id)
+    if not job:
+        return None
+    clean = {k: str(v).strip() for k, v in values.items()
+             if k in BY_KEY and k.startswith("job.")}
+    db.update_job(job_id, apply=clean)
+    # 值是這次應徵的職務與待遇，只記欄位代碼
+    log.info("這次應徵已更新 job=%s 欄位=%s", job_id,
+             ",".join(sorted(k for k, v in clean.items() if v)) or "(清空)")
+    actions.record("更新「%s」的這次應徵", job["filename"])
+    return get_plan(job_id)
 
 
 def write_output(job_id: str) -> Optional[Dict[str, Any]]:
@@ -523,7 +593,7 @@ def write_output(job_id: str) -> Optional[Dict[str, Any]]:
     if not job:
         return None
     vlm = job.get("engine") == "vlm"
-    profile = db.get_kv("profile") or {}
+    profile = _profile_of(job)
     ticks: Dict[str, bool] = {}
     t0 = time.perf_counter()
     # 下載的成品不標黃底：要核對填在哪一格，看網頁上的左右對照就好，
@@ -552,10 +622,12 @@ def write_output(job_id: str) -> Optional[Dict[str, Any]]:
     # 連同判斷依據（值的雜湊）一起記，資料改了下次就知道這個勾不算數（見 _live_ticks）
     now = _values_for(decisions, profile) if vlm else {}
     mapping = dict(db.get_template(job["fingerprint"]))
+    # 「這次應徵」那幾格不進範本：值跟著那一份工作，不是這份格式學來的
     mapping.update({sid: {"field_key": key, "ordinal": ordinal, "label": label,
                           **({"tick": ticks[sid], "basis": _tick_basis(now.get(sid, ""))}
                              if sid in ticks else {})}
-                    for sid, (key, ordinal, _src, label) in decisions.items()})
+                    for sid, (key, ordinal, _src, label) in decisions.items()
+                    if _src != "apply"})
     db.put_template(job["fingerprint"], mapping, source_name=job["filename"])
     log.info("範本已學習 fingerprint=%s 位置=%d", job["fingerprint"], len(mapping))
 
@@ -563,8 +635,10 @@ def write_output(job_id: str) -> Optional[Dict[str, Any]]:
 
 
 def _render(job_id: str, filename: str, cached: bool, slots: List[Slot],
-            decisions: Dict[str, Any], form_fields: Optional[List[str]] = None) -> PlanOut:
-    profile = db.get_kv("profile") or {}
+            decisions: Dict[str, Any], form_fields: Optional[List[str]] = None,
+            apply: Optional[Dict[str, str]] = None) -> PlanOut:
+    profile = _profile_of({"apply": apply})
+    decisions = _classic_per_job(decisions, apply or {})
     ops, skipped = planner.build_plan(slots, profile, decisions)
 
     items = [_item(o, "fill") for o in ops] + [_item(s, "skip") for s in skipped]
@@ -580,7 +654,7 @@ def _render(job_id: str, filename: str, cached: bool, slots: List[Slot],
         stats=PlanStats(slots=len(slots), fill=len(ops), skip=len(skipped),
                         by_source=by_source),
         form_fields=[BY_KEY[k].label for k in (form_fields or []) if k in BY_KEY],
-        items=items, entries=_entries(profile))
+        items=items, entries=_entries(profile), apply=apply or {})
 
 
 def _item(op, status: str) -> PlanItem:

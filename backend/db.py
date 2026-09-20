@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS job (
     decided     TEXT NOT NULL,
     form_fields TEXT NOT NULL DEFAULT '[]', -- VLM 看版面認出「這份表格要填哪些欄位」
     engine      TEXT NOT NULL DEFAULT 'classic', -- 這份是哪一條路填的：classic | vlm
+    apply       TEXT NOT NULL DEFAULT '{}',   -- 「這次應徵」：應徵職務、工作地點…只算這一份
     stage       TEXT NOT NULL DEFAULT '',   -- processing 時目前進行到哪一步
     error       TEXT NOT NULL DEFAULT '',   -- failed 時給使用者看的原因
     created_at  TEXT NOT NULL
@@ -90,6 +91,11 @@ def _add_column(conn: sqlite3.Connection, table: str, column: str) -> None:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
 
 
+def _v2(conn: sqlite3.Connection) -> None:
+    # 「這次應徵」：每間公司不一樣的欄位跟著這份工作走，不進「我的資料」
+    _add_column(conn, "job", "apply TEXT NOT NULL DEFAULT '{}'")
+
+
 def _v1(conn: sqlite3.Connection) -> None:
     # 舊資料庫補欄位（SCHEMA 的 IF NOT EXISTS 不會改舊表）。
     # import_job 的 status 預設 ready：舊資料列都是同步時代分析完才寫入的
@@ -105,7 +111,7 @@ def _v1(conn: sqlite3.Connection) -> None:
 
 # 資料庫版本記在 PRAGMA user_version：第 n 步做完就記成 n，下次從沒做過的那步接著做。
 # 新表寫在 SCHEMA 就好；改舊表（加欄位、搬資料）才要在這裡加一步，已經發出去的步驟不要改
-MIGRATIONS = [_v1]
+MIGRATIONS = [_v1, _v2]
 
 
 def init() -> None:
@@ -198,7 +204,7 @@ def put_template(fingerprint: str, mapping: Dict[str, str], source_name: str = "
 
 # job 與 import_job 的存取共用同一套「SELECT * → dict → 解 JSON 欄位」與
 # 動態 SET 樣板，只差表名與哪些欄位是 JSON
-_JSON_COLS = {"job": ("anchors", "decided", "form_fields"),
+_JSON_COLS = {"job": ("anchors", "decided", "form_fields", "apply"),
               "import_job": ("extracted",)}
 
 
@@ -247,11 +253,12 @@ def update_job(job_id: str, *, decided: Optional[Dict[str, Any]] = None,
                fingerprint: Optional[str] = None,
                form_fields: Optional[List[str]] = None,
                stage: Optional[str] = None,
-               error: Optional[str] = None) -> None:
+               error: Optional[str] = None,
+               apply: Optional[Dict[str, str]] = None) -> None:
     _update_row("job", job_id, {"decided": decided, "anchors": anchors,
                                 "fingerprint": fingerprint, "status": status,
                                 "form_fields": form_fields,
-                                "stage": stage, "error": error})
+                                "stage": stage, "error": error, "apply": apply})
 
 
 def fail_stale_jobs() -> int:

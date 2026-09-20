@@ -6,6 +6,7 @@ export type FieldSpec = {
   kind: string // text | date | money | choice | longtext | list
   choices: string[]
   derived: boolean
+  per_job: boolean // 每份工作自己一個值，在填寫頁的「這次應徵」面板填
 }
 
 export type PlanItem = {
@@ -30,6 +31,7 @@ export type Plan = {
   form_fields: string[] // 模型看過版面後認出這份表格要填的欄位
   items: PlanItem[]
   entries: Record<string, number> // 我的資料裡每一種清單有幾筆（education: 3）
+  apply: Record<string, string> // 這份工作的「這次應徵」：應徵職務、工作地點…
 }
 
 export type JobState =
@@ -216,6 +218,12 @@ export const api = {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fixes }),
+    }),
+  setApply: (jobId: string, values: Record<string, string>) =>
+    request<Plan>(`/jobs/${jobId}/apply`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values }),
     }),
   makeOutput: (jobId: string) =>
     postJson<{ written: number; failed: number }>(`/jobs/${jobId}/output`, {}),
