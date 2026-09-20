@@ -70,6 +70,14 @@ def list_jobs() -> list:
     return service.recent_jobs()
 
 
+@router.post("/{job_id}/reanalyze")
+def reanalyze(job_id: WorkId) -> dict:
+    """重新判讀這一份，不用學過的格式（學過的對映填錯時用）。需要模型。"""
+    if not service.reanalyze(job_id):
+        raise HTTPException(404, "找不到這個 job，或上傳的原檔已經過期清掉了")
+    return {"ok": True}
+
+
 @router.patch("/{job_id}/value", response_model=PlanOut)
 def set_value(job_id: WorkId, body: TypedIn) -> PlanOut:
     """把某一格改成自己打的字（空字串＝改回自動判斷的值）。預覽立刻跟著變。"""

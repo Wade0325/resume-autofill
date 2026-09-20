@@ -5,6 +5,7 @@ import { useBackgroundUpload } from '../useBackgroundUpload'
 import ApplyPanel from '../components/ApplyPanel'
 import Dropzone from '../components/Dropzone'
 import JobHistory from '../components/JobHistory'
+import LearnedFormats from '../components/LearnedFormats'
 import { PageShell, FooterBar, OverwriteBadge } from '../components/common'
 
 // pdf.js 佔了主 bundle 一半以上，等真的要顯示預覽時再載
@@ -61,6 +62,18 @@ export default function FillPage() {
     }
   }
 
+  /** 學過的對映填錯時：重跑模型，這一次不用學過的格式。 */
+  async function reanalyzeNow() {
+    if (!plan) return
+    if (!window.confirm('重新判讀這一份？這次不用學過的格式，要重跑模型（約 1～2 分鐘）。')) return
+    const ok = await run(() => api.reanalyze(plan.job_id))
+    if (ok) {
+      const id = plan.job_id
+      setPlan(null)
+      track(id) // 回到分析中的畫面，接著輪詢新結果
+    }
+  }
+
   async function typeValue(slotId: string, value: string) {
     if (!plan) return
     const result = await run(() => api.setValue(plan.job_id, slotId, value))
@@ -100,6 +113,7 @@ export default function FillPage() {
         />
         <EnginePicker />
         <JobHistory onOpen={track} onError={setError} />
+        <LearnedFormats onError={setError} />
       </PageShell>
     )
   }
@@ -119,6 +133,15 @@ export default function FillPage() {
             這份格式看過了，直接沿用上次的對映
           </span>
         )}
+        <button
+          onClick={reanalyzeNow}
+          disabled={busy}
+          title="不用學過的格式，重跑一次模型判讀"
+          className="text-xs px-3 py-1 rounded-full border border-slate-300 text-slate-600
+                     hover:bg-slate-50 disabled:opacity-40"
+        >
+          重新判讀
+        </button>
         {!plan.llm_available && (
           <span className="text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded-full px-3 py-1">
             模型未啟動

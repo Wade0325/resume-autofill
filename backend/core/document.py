@@ -275,6 +275,11 @@ def _para_label(text: str, slot: Slot) -> str:
     return head.strip(" 　:：").replace("\n", " ")[-20:]
 
 
+def label_fingerprint(text: str) -> str:
+    """表格上印的字：同一套版型、不同公司的欄名不一樣，結構指紋分不出來，靠這個分。"""
+    return hashlib.sha256(squash(text).encode("utf-8")).hexdigest()[:12]
+
+
 def fingerprint(slots: List[Slot]) -> str:
     """同一份表格 → 同一個指紋 → 直接沿用上次的對映，不必再問模型。"""
     payload = json.dumps(sorted((s.kind, s.id) for s in slots), ensure_ascii=False)

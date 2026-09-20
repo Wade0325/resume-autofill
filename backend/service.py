@@ -94,19 +94,49 @@ def current_engine(vision: bool) -> str:
     return "vlm" if vision else "classic"
 
 
+def _template_key(structure: str, printed: str) -> str:
+    """學過的格式存在哪個鍵：結構指紋 ＋ 表格上印的字。
+
+    只看結構的話，同一套版型的不同公司（欄名不一樣）會共用同一份對映，填出來全錯。
+    舊資料只有結構指紋，查不到新鍵時照樣認舊的，學過的格式不會因為這個改動全部作廢。
+    """
+    return f"{structure}#{document.label_fingerprint(printed)}"
+
+
+def _cached_template(key: str, legacy: str) -> Dict[str, Any]:
+    """先查新鍵（結構＋欄名）；查不到就認舊鍵（只有結構指紋），並順手搬到新鍵底下。
+
+    不搬的話舊資料等於沒修好：舊鍵沒有欄名資訊，同版型的另一家公司照樣撈得到它。
+    搬過去之後第一份用到的表格認領它，其他表格就各學各的。
+    """
+    cached = db.get_template(key)
+    if cached:
+        return cached
+    cached = db.get_template(legacy)
+    if cached:
+        db.rekey_template(legacy, key)
+        log.info("學過的格式改記在新鍵底下 %s → %s", legacy, key)
+    return cached
+
+
 def _learned_engine(src: Path, prefer: str) -> Optional[str]:
     """這份格式哪一條路學過（兩條認出的位置不一樣，快取各存各的），先看 prefer 那條。
     模型沒開時用：學過的格式不必問模型，哪條學過就走哪條。解析是純程式，一條約 0.2 秒。"""
     for engine in (prefer, *(e for e in ENGINES if e != prefer)):
         try:
             if engine == "vlm":
-                fp = "vlm:" + document.fingerprint(filler.parse(src)[2])
+                # 指紋不含「這次應徵」那幾格，要跟分析時算的一模一樣才查得到
+                _doc, form, slots = filler.parse(src)
+                fp = "vlm:" + document.fingerprint(filler.form_slots(slots))
+                key = _template_key(fp, filler.printed_text(form))
             else:
-                fp = document.fingerprint(document.ParsedDoc(str(src)).flatten()[1])
+                text, slots = document.ParsedDoc(str(src)).flatten()
+                fp = document.fingerprint(slots)
+                key = _template_key(fp, text)
         except Exception as e:     # 解析不了就當沒學過，交給分析時照常回報
             log.warning("檢查學過的格式時解析失敗 engine=%s：%s", engine, e)
             continue
-        if db.get_template(fp):
+        if _cached_template(key, fp):
             return engine
     return None
 
@@ -251,18 +281,20 @@ def _vlm_assignment(decisions: Dict[str, planner.Decision]) -> Dict[str, str]:
             if d.field_key and d.field_key not in _NOT_FILLED}
 
 
-def _vlm_worker(job_id: str, filename: str) -> None:
+def _vlm_worker(job_id: str, filename: str, use_cache: bool = True) -> None:
     src = input_path(job_id)
     t0 = time.perf_counter()
     try:
         db.update_job(job_id, stage="盤點可寫位置")
-        _doc, _form, slots = filler.parse(src)
+        _doc, form, slots = filler.parse(src)
         # 指紋帶上引擎：兩條路認出來的位置編號不一樣，學過的對映不能混用。
         # 「這次應徵」那幾格不算進指紋，否則學過的格式會因為多了這個功能而全部要重學
-        fp = "vlm:" + document.fingerprint(filler.form_slots(slots))
-        cached = db.get_template(fp)
+        structure = "vlm:" + document.fingerprint(filler.form_slots(slots))
+        fp = _template_key(structure, filler.printed_text(form))
+        cached = _cached_template(fp, structure) if use_cache else {}
         log.info("解析完成 位置=%d fingerprint=%s 範本快取=%s",
-                 len(slots), fp, "命中" if cached else "未命中")
+                 len(slots), fp,
+                 "命中" if cached else ("這次不用快取" if not use_cache else "未命中"))
 
         profile = db.get_kv("profile") or {}
         if cached:
@@ -406,7 +438,7 @@ def analyze(filename: str, content: bytes) -> str:
     return job_id
 
 
-def _analyze_worker(job_id: str, filename: str) -> None:
+def _analyze_worker(job_id: str, filename: str, use_cache: bool = True) -> None:
     src = input_path(job_id)
     t0 = time.perf_counter()
     try:
@@ -426,8 +458,9 @@ def _analyze_worker(job_id: str, filename: str) -> None:
         if existing:
             # 有已填值才需要重掃一次——這次把那些值標成可覆蓋的位置
             text, slots = parsed.flatten(_values_of(existing))
-        fp = document.fingerprint(slots)
-        cached = db.get_template(fp)
+        structure = document.fingerprint(slots)
+        fp = _template_key(structure, text)
+        cached = _cached_template(fp, structure) if use_cache else {}
         log.info("解析完成 位置=%d 可覆蓋=%d 全文=%d字 fingerprint=%s 範本快取=%s",
                  len(slots),
                  sum(1 for s in slots if s.kind == "cell" and s.existing.strip()),
@@ -478,6 +511,40 @@ def _restore(job: Dict[str, Any]) -> Tuple[List[Slot], Dict[str, planner.Decisio
     slots = [Slot(**s) for s in job["anchors"]]
     decisions = {k: planner.Decision(*v) for k, v in job["decided"].items()}
     return slots, decisions
+
+
+def learned_formats() -> List[Dict[str, Any]]:
+    """學過的格式：哪一條路學的、幾個位置、什麼時候學的、從哪個檔名學來。"""
+    out = []
+    for row in db.list_templates():
+        fp = row["fingerprint"]
+        out.append({"fingerprint": fp,
+                    "engine": "vlm" if fp.startswith("vlm:") else "classic",
+                    "source_name": row["source_name"], "slots": row["slots"],
+                    "updated_at": row["updated_at"]})
+    return out
+
+
+def forget_format(fingerprint: str) -> bool:
+    """忘掉一份學過的格式，下次上傳同一份表格會重新判讀。"""
+    if not db.delete_template(fingerprint):
+        return False
+    log.info("忘掉學過的格式 fingerprint=%s", fingerprint)
+    actions.record("忘掉學過的一份格式")
+    return True
+
+
+def reanalyze(job_id: str) -> bool:
+    """這一份重新判讀，不用學過的格式（學過的對映填錯時用）。需要模型。"""
+    job = db.get_job(job_id)
+    if not job or not input_path(job_id).exists():
+        return False
+    db.update_job(job_id, status="processing", stage="準備中", error="", decided={}, anchors=[])
+    worker = _vlm_worker if job.get("engine") == "vlm" else _analyze_worker
+    log.info("重新分析（不用快取） job=%s engine=%s", job_id, job.get("engine"))
+    actions.record("重新分析「%s」（不用學過的格式）", job["filename"])
+    threading.Thread(target=worker, args=(job_id, job["filename"], False), daemon=True).start()
+    return True
 
 
 def recent_jobs(limit: int = 20) -> List[Dict[str, Any]]:

@@ -73,6 +73,19 @@ class MappingsIn(BaseModel):
     fixes: List[MappingFix]
 
 
+class LearnedFormatOut(BaseModel):
+    """學過的一份格式。fingerprint 是結構指紋＋表格上印的字。"""
+    fingerprint: str
+    engine: str
+    source_name: str = ""
+    slots: int
+    updated_at: str
+
+
+class FingerprintIn(BaseModel):
+    fingerprint: str
+
+
 class TypedIn(BaseModel):
     """對映清單裡直接把某一格改成自己打的字；value 給空字串就改回自動判斷的值。"""
     slot_id: str

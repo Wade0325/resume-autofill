@@ -76,6 +76,15 @@ export type JobHistory = {
   downloadable: boolean
 }
 
+// 學過的一份格式：同一份表格第二次上傳就靠它，不必再問模型
+export type LearnedFormat = {
+  fingerprint: string
+  engine: string
+  source_name: string
+  slots: number
+  updated_at: string
+}
+
 export type LogEntry = {
   time: string
   level: string
@@ -256,6 +265,11 @@ export const api = {
     postJson<{ applied: number; changed: string[] }>(`/imports/${importId}/apply`, {
       row_ids: rowIds,
     }),
+
+  learnedFormats: () => request<LearnedFormat[]>('/templates'),
+  forgetFormat: (fingerprint: string) =>
+    postJson<{ ok: boolean }>('/templates/forget', { fingerprint }),
+  reanalyze: (jobId: string) => postJson<{ ok: boolean }>(`/jobs/${jobId}/reanalyze`, {}),
 
   logs: ({ level }: { level?: string }) =>
     request<LogEntry[]>(`/logs${level ? `?level=${level}` : ''}`),

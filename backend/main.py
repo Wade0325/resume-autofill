@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import config, db, model_manager
-from .api import imports, jobs, logs, meta, models, profile
+from .api import imports, jobs, logs, meta, models, profile, templates
 from .logging_setup import request_id_var, setup_logging
 
 log = logging.getLogger(__name__)
@@ -143,6 +143,7 @@ app.include_router(jobs.router, prefix="/api")
 app.include_router(imports.router, prefix="/api")
 app.include_router(logs.router, prefix="/api")
 app.include_router(models.router, prefix="/api")
+app.include_router(templates.router, prefix="/api")
 
 # 正式版把 build 好的前端交給同一個服務托管，使用者只會看到一個網址。
 # 開發時 dist 不存在，走 Vite dev server 的 proxy，這裡就跳過。

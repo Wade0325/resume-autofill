@@ -208,6 +208,29 @@ def put_template(fingerprint: str, mapping: Dict[str, str], source_name: str = "
             (fingerprint, source_name, json.dumps(mapping, ensure_ascii=False), _now()))
 
 
+def list_templates() -> List[Dict[str, Any]]:
+    """學過的格式：新的在前。mapping 只回筆數，內容是對映細節，管理介面用不到。"""
+    with connect() as conn:
+        rows = conn.execute("SELECT fingerprint, source_name, mapping, updated_at "
+                            "FROM template ORDER BY updated_at DESC").fetchall()
+    return [{"fingerprint": r["fingerprint"], "source_name": r["source_name"],
+             "slots": len(json.loads(r["mapping"])), "updated_at": r["updated_at"]}
+            for r in rows]
+
+
+def rekey_template(old: str, new: str) -> None:
+    """把一份學過的格式換個鍵（舊資料只有結構指紋，用到時搬到「結構＋欄名」底下）。"""
+    with connect() as conn:
+        conn.execute("UPDATE OR REPLACE template SET fingerprint = ? WHERE fingerprint = ?",
+                     (new, old))
+
+
+def delete_template(fingerprint: str) -> bool:
+    with connect() as conn:
+        return conn.execute("DELETE FROM template WHERE fingerprint = ?",
+                            (fingerprint,)).rowcount > 0
+
+
 # job 與 import_job 的存取共用同一套「SELECT * → dict → 解 JSON 欄位」與
 # 動態 SET 樣板，只差表名與哪些欄位是 JSON
 _JSON_COLS = {"job": ("anchors", "decided", "form_fields", "apply", "typed"),

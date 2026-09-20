@@ -2194,6 +2194,11 @@ def parse(blank: Path) -> Tuple[Any, List[Cell], List[Slot]]:
     return doc, form, [s for cell in form for s in slots_of(cell)]
 
 
+def printed_text(form: List[Cell]) -> str:
+    """這份表格上印著的所有字（欄名、說明、選項）。"""
+    return "".join(p.text for cell in form for p in cell.paras)
+
+
 def usable_fields(form: List[Cell], profile: Dict[str, Any]) -> Dict[str, str]:
     """這份表格用得到的個人資料。
 
@@ -2201,7 +2206,7 @@ def usable_fields(form: List[Cell], profile: Dict[str, Any]) -> Dict[str, str]:
     沒提到還留在清單裡，模型會把緊急聯絡人的電話填進本人的住家電話欄。
     比對前抹掉空白——標題常寫成「家　庭　成　員」，不抹就對不上「家庭」。
     """
-    printed = _squash("".join(p.text for cell in form for p in cell.paras))
+    printed = _squash(printed_text(form))
     return {k: v for k, v in fields_of(profile).items()
             if not any(k.startswith(root) and not any(w in printed for w in words)
                        for root, words in OTHER_PEOPLE.items())}
