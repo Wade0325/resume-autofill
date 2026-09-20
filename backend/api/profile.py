@@ -6,9 +6,10 @@ from datetime import datetime
 from typing import Any, List
 from urllib.parse import quote
 
-from fastapi import APIRouter, Body, HTTPException, Request, Response
+from fastapi import APIRouter, Body, File, HTTPException, Request, Response, UploadFile
 
-from .. import actions, db, profiles
+from .. import actions, db, profiles, service
+from .uploads import read_upload
 from ..schemas import ProfileIn, ProfileVersionOut
 
 router = APIRouter(tags=["profile"])
@@ -26,6 +27,37 @@ def put_profile(profile: ProfileIn) -> dict:
         raise HTTPException(422, why)
     profiles.save(profile, "save")
     actions.record("修改欄位成功")
+    return {"ok": True}
+
+
+PHOTO_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
+
+
+@router.post("/profile/photo")
+async def upload_photo(file: UploadFile = File(...)) -> dict:
+    """大頭照：存起來後填履歷時自動貼進照片格。"""
+    _name, content = await read_upload(file, PHOTO_EXTS)
+    try:
+        service.save_photo(content)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return {"ok": True}
+
+
+@router.get("/profile/photo")
+def get_photo() -> Response:
+    path = service.photo_path()
+    if not path.exists():
+        raise HTTPException(404, "還沒有大頭照")
+    # 每次存檔都換一張，瀏覽器不要留著舊的
+    return Response(path.read_bytes(), media_type="image/jpeg",
+                    headers={"Cache-Control": "no-store"})
+
+
+@router.delete("/profile/photo")
+def remove_photo() -> dict:
+    if not service.delete_photo():
+        raise HTTPException(404, "還沒有大頭照")
     return {"ok": True}
 
 

@@ -223,6 +223,9 @@ export const api = {
 
   getProfile: () => request<Profile>('/profile'),
   saveProfile: (profile: Profile) => putJson<{ ok: boolean }>('/profile', profile),
+  uploadPhoto: (file: File) => upload<{ ok: boolean }>('/profile/photo', file),
+  deletePhoto: () => request<{ ok: boolean }>('/profile/photo', { method: 'DELETE' }),
+  photoUrl: (version: number) => `/api/profile/photo?v=${version}`,
   profileVersions: () => request<ProfileVersion[]>('/profile/versions'),
   restoreVersion: (id: number) => postJson<Profile>(`/profile/versions/${id}/restore`, {}),
   restoreProfileFile: (data: unknown) => postJson<Profile>('/profile/restore', data),

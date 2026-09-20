@@ -8,6 +8,7 @@ import { isImpossibleDate } from '../components/DateSelect'
 import { ErrorBox } from '../components/common'
 import { TABS } from '../components/Layout'
 import ProfileBackup from '../components/ProfileBackup'
+import PhotoBox from '../components/PhotoBox'
 
 export default function ProfilePage() {
   const [fields, setFields] = useState<FieldSpec[]>([])
@@ -204,6 +205,12 @@ export default function ProfilePage() {
           ) : (
             <section className="bg-white rounded-lg border border-slate-200 p-6">
               <h2 className="font-semibold text-slate-900 mb-4">{section.title}</h2>
+              {/* 大頭照跟著基本資料：填履歷時自動貼進表格的照片格 */}
+              {section.id === 'basic' && (
+                <div className="mb-6 pb-6 border-b border-slate-100">
+                  <PhotoBox onError={setError} />
+                </div>
+              )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {fields
                   .filter((f) => f.key.startsWith(section.prefix))
