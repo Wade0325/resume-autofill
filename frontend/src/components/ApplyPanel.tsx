@@ -20,15 +20,17 @@ export default function ApplyPanel({
   onApply: (values: Record<string, string>) => void
 }) {
   const specs = fields.filter((f) => f.key.startsWith('job.'))
-  const [draft, setDraft] = useState<Record<string, string>>(plan.apply)
+  // 後端沒給就當空的：欄位少一個不該讓整頁掛掉
+  const saved = plan.apply ?? {}
+  const [draft, setDraft] = useState<Record<string, string>>(saved)
 
   // 換一份工作（或剛套用完）就以後端那份為準
-  useEffect(() => setDraft(plan.apply), [plan.job_id, plan.apply])
+  useEffect(() => setDraft(plan.apply ?? {}), [plan.job_id, plan.apply])
 
   if (specs.length === 0) return null
-  const dirty = specs.some((s) => (draft[s.key] ?? '') !== (plan.apply[s.key] ?? ''))
+  const dirty = specs.some((s) => (draft[s.key] ?? '') !== (saved[s.key] ?? ''))
   // 這份表格真的問了這些欄位就先展開，免得使用者沒注意到有地方可以填
-  const asked = plan.items.filter((i) => i.note.startsWith('這次應徵'))
+  const asked = (plan.items ?? []).filter((i) => i.note?.startsWith('這次應徵'))
   const missing = asked.filter((i) => i.status === 'skip').length
 
   return (
