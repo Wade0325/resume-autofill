@@ -92,12 +92,16 @@ def _closed_sections(text: str) -> set:
 
 
 def read(text: str, host: str, model: str,
-         images: Optional[List[bytes]] = None) -> Dict[str, Any]:
+         images: Optional[List[bytes]] = None, verify: bool = True) -> Dict[str, Any]:
     """回傳 {欄位代碼: 值}；列表欄位回傳 {root: [{sub: 值}]}。
 
     images 給 PNG 頁面截圖時走視覺模式：模型同時看到排版與精確文字，
     合併儲存格、標籤與值的歸屬比攤平文字好判斷。逐字驗證照舊，
     看圖看錯的值會因為不在原文中而被丟掉。
+
+    verify=False 只給「掃描成圖片、完全沒有文字層」的 PDF 用：沒有原文可以比對，
+    驗證會把每個值都丟掉（以前就是這樣默默回 0 筆）。這種情況改成全收，
+    由使用者自己核對——匯入頁會標出來。
     """
     closed = _closed_sections(text)
     if closed:
@@ -121,7 +125,7 @@ def read(text: str, host: str, model: str,
         data = llm.ask(host, SYSTEM_PROMPT, user, schema, model=model, label="讀取履歷")
     # 抽出來的就是履歷內容，只記哪些欄位有東西
     log.debug("模型抽出 %d 項：%s", len(data), ",".join(sorted(k for k, v in data.items() if v)))
-    kept = _keep_verbatim(data, text, sections)
+    kept = _keep_verbatim(data, text, sections) if verify else _keep_plausible(data)
 
     # 自傳「標題下面整段照收」:模型要逐字抄上千字幾乎不可能(抄錯一字
     # 就被驗證整段丟棄),所以它一律跳過。程式直接取,逐字正確是天生的
@@ -202,6 +206,39 @@ def _schema(closed: set = frozenset()) -> Dict[str, Any]:
 DATE_ONLY_RE = re.compile(r"^[\d\s年月日民國/.-]+$")
 
 
+def _loose_index(text: str) -> tuple:
+    """(只留文字與數字的字串, 每個字在原文的位置)。
+
+    比對長文用：模型改寫時最愛動的就是標點與空白（「，」寫成「、」、括號換半形），
+    只看文字本身才對得上。位置留著，才能把對上的那一段從原文原封不動取回來。
+    """
+    keep, index = [], []
+    for i, ch in enumerate(text):
+        if ch.isalnum():
+            keep.append(ch)
+            index.append(i)
+    return "".join(keep), index
+
+
+# 長文（工作內容、自傳、問答題）模型幾乎一定會改寫：換行、標點、省略幾個字，
+# 整段就被逐字驗證丟掉。開頭這麼多字對得上就認，值改用原文那一段——留下的還是文件裡的字
+LONG_ANCHOR = 16
+LONG_MIN = 24
+
+
+def _from_source(value: str, source: str) -> Optional[str]:
+    """長文對不上時，用開頭去原文找，把原文那一段拿回來。找不到就回 None。"""
+    loose, _ = _loose_index(value)
+    if len(loose) < LONG_MIN:
+        return None
+    hay, index = _loose_index(source)
+    at = hay.find(loose[:LONG_ANCHOR])
+    if at < 0:
+        return None
+    stop = min(at + len(loose), len(index)) - 1
+    return source[index[at]:index[stop] + 1].strip()
+
+
 def _drop_reason(key: str, value: str, hay: str, whole: str) -> Optional[str]:
     """值該不該丟?回傳丟棄原因代碼,None＝通過。
 
@@ -218,6 +255,26 @@ def _drop_reason(key: str, value: str, hay: str, whole: str) -> Optional[str]:
         if not (key == "experience[].end" and PRESENT_RE.match(value)):
             return "not_a_date"
     return None
+
+
+def _keep_plausible(data: Dict[str, Any]) -> Dict[str, Any]:
+    """沒有原文可以比對（掃描檔）時的版本：只擋「日期欄位填的不像日期」，其餘全收。"""
+    kept: Dict[str, Any] = {}
+    for key, value in data.items():
+        if isinstance(value, list):
+            rows = [{k: v.strip() for k, v in row.items()
+                     if isinstance(v, str) and v.strip()
+                     and not _drop_reason(f"{key}[].{k}", v, document.squash(v),
+                                          document.squash(v))}
+                    for row in value if isinstance(row, dict)]
+            rows = [r for r in rows if r]
+            if rows:
+                kept[key] = rows
+        elif isinstance(value, str) and value.strip():
+            if not _drop_reason(key, value, document.squash(value), document.squash(value)):
+                kept[key] = value.strip()
+    log.info("掃描檔：沒有原文可比對，模型抽到的 %d 項全收，請使用者自行核對", len(kept))
+    return kept
 
 
 def _keep_verbatim(data: Dict[str, Any], source: str,
@@ -243,9 +300,13 @@ def _keep_verbatim(data: Dict[str, Any], source: str,
                         continue
                     fkey = f"{key}[].{k}"
                     reason = _drop_reason(fkey, v, hay, haystack)
+                    rescued = _from_source(v, source) if reason else None
                     log.debug("verify %s#%d 值%d字 scope=%s(len=%d) -> %s",
-                              fkey, i, len(v), scope, len(hay), reason or "keep")
-                    if reason:
+                              fkey, i, len(v), scope, len(hay),
+                              reason if reason and not rescued else "keep")
+                    if rescued:
+                        clean[k] = rescued          # 模型改寫過，換成原文那一段
+                    elif reason:
                         dropped.append(fkey)
                     else:
                         clean[k] = v.strip()
@@ -255,9 +316,13 @@ def _keep_verbatim(data: Dict[str, Any], source: str,
                 kept[key] = rows
         elif isinstance(value, str) and value.strip():
             reason = _drop_reason(key, value, haystack, haystack)
+            rescued = _from_source(value, source) if reason else None
             log.debug("verify %s 值%d字 scope=whole(len=%d) -> %s",
-                      key, len(value), len(haystack), reason or "keep")
-            if reason:
+                      key, len(value), len(haystack),
+                      reason if reason and not rescued else "keep")
+            if rescued:
+                kept[key] = rescued
+            elif reason:
                 dropped.append(key)
             else:
                 kept[key] = value.strip()

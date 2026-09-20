@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS import_job (
     status     TEXT NOT NULL DEFAULT 'ready',   -- processing | ready | failed
     stage      TEXT NOT NULL DEFAULT '',        -- processing 時目前進行到哪一步
     error      TEXT NOT NULL DEFAULT '',        -- failed 時給使用者看的原因
+    note       TEXT NOT NULL DEFAULT '',        -- 給使用者的提醒（掃描檔沒有原文可比對…）
     created_at TEXT NOT NULL
 );
 -- 我的資料被換掉之前的樣子：存檔、匯入、還原前各留一份，只留最近 KEEP_VERSIONS 份
@@ -92,6 +93,11 @@ def _add_column(conn: sqlite3.Connection, table: str, column: str) -> None:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
 
 
+def _v4(conn: sqlite3.Connection) -> None:
+    # 匯入的提醒（掃描檔）
+    _add_column(conn, "import_job", "note TEXT NOT NULL DEFAULT ''")
+
+
 def _v3(conn: sqlite3.Connection) -> None:
     # 對映清單可以直接把某一格改成自己打的字
     _add_column(conn, "job", "typed TEXT NOT NULL DEFAULT '{}'")
@@ -117,7 +123,7 @@ def _v1(conn: sqlite3.Connection) -> None:
 
 # 資料庫版本記在 PRAGMA user_version：第 n 步做完就記成 n，下次從沒做過的那步接著做。
 # 新表寫在 SCHEMA 就好；改舊表（加欄位、搬資料）才要在這裡加一步，已經發出去的步驟不要改
-MIGRATIONS = [_v1, _v2, _v3]
+MIGRATIONS = [_v1, _v2, _v3, _v4]
 
 
 def init() -> None:
@@ -322,9 +328,9 @@ def create_import(import_id: str, filename: str) -> None:
 
 def update_import(import_id: str, *, extracted: Optional[Dict[str, Any]] = None,
                   status: Optional[str] = None, stage: Optional[str] = None,
-                  error: Optional[str] = None) -> None:
+                  error: Optional[str] = None, note: Optional[str] = None) -> None:
     _update_row("import_job", import_id, {"extracted": extracted, "status": status,
-                                          "stage": stage, "error": error})
+                                          "stage": stage, "error": error, "note": note})
 
 
 def get_import(import_id: str) -> Optional[Dict[str, Any]]:

@@ -130,6 +130,8 @@ class ImportPreviewOut(BaseModel):
     import_id: str
     filename: str
     rows: List[ImportRow]
+    note: str = ""                    # 給使用者的提醒（掃描檔：沒有原文可比對，請自己核對）
+    has_source: bool = True           # 有沒有原檔可以顯示（貼上的文字沒有）
 
 
 class ImportApplyIn(BaseModel):

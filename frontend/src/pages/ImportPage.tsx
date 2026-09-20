@@ -1,6 +1,6 @@
 import { Fragment, Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, errorText, type FieldSpec, type ImportPreview, type ImportRow } from '../api'
+import { api, errorText, fetchBlob, type FieldSpec, type ImportPreview, type ImportRow } from '../api'
 import { useBackgroundUpload } from '../useBackgroundUpload'
 import { SECTIONS } from '../sections'
 import Dropzone from '../components/Dropzone'
@@ -24,7 +24,7 @@ export default function ImportPage() {
   const [applied, setApplied] = useState<{ count: number; changed: string[] } | null>(null)
 
   // 讀取在後端背景執行，hook 負責上傳、輪詢進度與 sessionStorage 接續
-  const { phase, error, setError, upload, reset } = useBackgroundUpload({
+  const { phase, error, setError, upload, track, reset } = useBackgroundUpload({
     storageKey: 'import.id',
     start: async (file, onProgress) => (await api.analyzeImport(file, onProgress)).import_id,
     getState: api.getImport,
@@ -88,6 +88,15 @@ export default function ImportPage() {
     }
   }
 
+  async function pasteText(text: string) {
+    setError('')
+    try {
+      track((await api.importText(text)).import_id)
+    } catch (e) {
+      setError(errorText(e))
+    }
+  }
+
   function toggle(rowId: string) {
     const next = new Set(picked)
     if (next.has(rowId)) next.delete(rowId)
@@ -117,6 +126,7 @@ export default function ImportPage() {
           accept=".pdf,.docx"
           note="接受 104 履歷的 .pdf 與 Word 的 .docx"
         />
+        <PasteText phase={phase} onSubmit={pasteText} />
       </PageShell>
     )
   }
@@ -137,6 +147,11 @@ export default function ImportPage() {
           >
             查看我的資料
           </Link>
+        </div>
+      )}
+      {preview.note && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-md px-4 py-3 text-sm">
+          {preview.note}
         </div>
       )}
       <div className="flex flex-wrap items-center gap-4 text-sm text-slate-600">
@@ -172,16 +187,20 @@ export default function ImportPage() {
         </nav>
 
         <div className="sticky top-6">
-          <Suspense
-            fallback={<div className="text-sm text-slate-400 py-8 text-center">履歷預覽載入中…</div>}
-          >
-            <ResumeDocView
-              importId={preview.import_id}
-              filename={preview.filename}
-              marks={marks}
-              hoveredId={hovered}
-            />
-          </Suspense>
+          {preview.has_source ? (
+            <Suspense
+              fallback={<div className="text-sm text-slate-400 py-8 text-center">履歷預覽載入中…</div>}
+            >
+              <ResumeDocView
+                importId={preview.import_id}
+                filename={preview.filename}
+                marks={marks}
+                hoveredId={hovered}
+              />
+            </Suspense>
+          ) : (
+            <PastedText importId={preview.import_id} />
+          )}
         </div>
 
         <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
@@ -305,6 +324,71 @@ function EntryHeader({ row }: { row: ImportRow }) {
         {row.entry_name && <span className="ml-2 text-slate-600">{row.entry_name}</span>}
       </td>
     </tr>
+  )
+}
+
+/** 貼上文字匯入：手邊只有網頁版履歷、或從 PDF 複製出來的內容時用這個。 */
+function PasteText({
+  phase,
+  onSubmit,
+}: {
+  phase: { kind: string }
+  onSubmit: (text: string) => void
+}) {
+  const [text, setText] = useState('')
+  const busy = phase.kind !== 'idle'
+  return (
+    <details className="bg-white border border-slate-200 rounded-lg">
+      <summary className="cursor-pointer select-none px-4 py-3 text-sm text-slate-700">
+        沒有檔案？貼上文字也可以
+        <span className="ml-2 text-xs text-slate-500">
+          網頁版履歷、從 PDF 複製出來的內容都行
+        </span>
+      </summary>
+      <div className="px-4 pb-4">
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={8}
+          aria-label="貼上履歷內容"
+          placeholder="把履歷內容貼在這裡…"
+          className="w-full text-sm border border-slate-300 rounded-md px-3 py-2
+                     focus:outline-none focus:ring-2 focus:ring-sky-500"
+        />
+        <div className="mt-2 flex items-center gap-3">
+          <button
+            onClick={() => onSubmit(text)}
+            disabled={busy || text.trim().length < 20}
+            className="px-4 py-2 rounded-md bg-sky-600 text-white text-sm font-medium
+                       hover:bg-sky-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
+          >
+            開始讀取
+          </button>
+          <span className="text-xs text-slate-500">跟上傳檔案一樣，讀完可以逐欄勾選再匯入</span>
+        </div>
+      </div>
+    </details>
+  )
+}
+
+/** 貼上的文字沒有原稿可以渲染，就把文字本身列出來對照。 */
+function PastedText({ importId }: { importId: string }) {
+  const [text, setText] = useState('')
+  useEffect(() => {
+    fetchBlob(`/imports/${importId}/source`)
+      .then((b) => b.text())
+      .then(setText)
+      .catch(() => setText(''))
+  }, [importId])
+  return (
+    <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+      <div className="px-4 py-2 text-xs text-slate-500 border-b border-slate-100">
+        貼上的內容
+      </div>
+      <pre className="p-4 text-xs text-slate-700 whitespace-pre-wrap break-words max-h-[70vh] overflow-y-auto">
+        {text}
+      </pre>
+    </div>
   )
 }
 

@@ -58,6 +58,8 @@ export type ImportPreview = {
   import_id: string
   filename: string
   rows: ImportRow[]
+  note: string // 掃描檔之類要提醒使用者的話
+  has_source: boolean // 有沒有原稿可以對照（貼上的文字沒有）
 }
 
 export type ImportState =
@@ -264,6 +266,8 @@ export const api = {
     upload<{ import_id: string; status: string; filename: string }>(
       '/imports', file, onProgress),
   getImport: (importId: string) => request<ImportState>(`/imports/${importId}`),
+  importText: (text: string) =>
+    postJson<{ import_id: string; status: string; filename: string }>('/imports/text', { text }),
   applyImport: (importId: string, rowIds: string[]) =>
     postJson<{ applied: number; changed: string[] }>(`/imports/${importId}/apply`, {
       row_ids: rowIds,

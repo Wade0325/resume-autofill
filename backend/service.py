@@ -36,9 +36,12 @@ def job_dir(job_id: str) -> Path:
 
 
 def input_path(job_id: str) -> Path:
-    """上傳的原檔。填寫一律是 .docx，匯入還收 104 履歷的 .pdf。"""
-    pdf = job_dir(job_id) / "input.pdf"
-    return pdf if pdf.exists() else job_dir(job_id) / "input.docx"
+    """上傳的原檔。填寫一律是 .docx，匯入還收 104 履歷的 .pdf 與貼上的純文字。"""
+    for suffix in (".pdf", ".txt"):
+        path = job_dir(job_id) / f"input{suffix}"
+        if path.exists():
+            return path
+    return job_dir(job_id) / "input.docx"
 
 
 def output_path(job_id: str) -> Path:
@@ -903,6 +906,21 @@ def analyze_import(filename: str, content: bytes) -> Dict[str, Any]:
     return {"import_id": import_id, "status": "processing", "filename": filename}
 
 
+def analyze_import_text(text: str) -> Dict[str, Any]:
+    """貼上的文字：手邊只有網頁版或 PDF 複製出來的內容時，不必先存成檔案。"""
+    import_id = uuid.uuid4().hex[:12]
+    _save_upload(import_id, text.encode("utf-8"), ".txt")
+    log.info("匯入貼上的文字 %d 字 import=%s", len(text), import_id)
+    db.create_import(import_id, "貼上的文字")
+    threading.Thread(target=_import_worker, args=(import_id, "貼上的文字"),
+                     daemon=True).start()
+    return {"import_id": import_id, "status": "processing", "filename": "貼上的文字"}
+
+
+# 有文字層的 PDF 隨便都有幾百字；抽不到這麼多就是整份掃描成圖片
+SCANNED_MAX_CHARS = 60
+
+
 def _import_worker(import_id: str, filename: str) -> None:
     src = input_path(import_id)
     t0 = time.perf_counter()
@@ -910,7 +928,10 @@ def _import_worker(import_id: str, filename: str) -> None:
         is_pdf = src.suffix == ".pdf"
         db.update_import(import_id, stage="讀取文件內容")
         pdf_bytes = src.read_bytes() if is_pdf else b""
-        text = convert.pdf_to_text(pdf_bytes) if is_pdf else document.text_only(str(src))
+        if src.suffix == ".txt":
+            text = src.read_text(encoding="utf-8", errors="replace")
+        else:
+            text = convert.pdf_to_text(pdf_bytes) if is_pdf else document.text_only(str(src))
 
         # .docx 攤平後本來就帶著表格結構，附截圖反而讓模型改去讀圖——實測純文字
         # 比較準（欄位標題被當成值、姓名被當成職稱那類錯誤明顯變多）
@@ -924,17 +945,29 @@ def _import_worker(import_id: str, filename: str) -> None:
                 log.warning("截圖產生失敗，改用純文字讀取：%s", e)
                 images = []
 
-        db.update_import(import_id, stage="模型讀取資料中")
-        try:
-            extracted = reader.read(text, config.LLM_HOST, config.LLM_MODEL, images=images)
-        except llm.LlmError:
+        # 整份掃描成圖片的 PDF：沒有文字層，逐字驗證會把每個值都丟掉（以前默默回 0 筆）
+        scanned = is_pdf and len(document.squash(text)) < SCANNED_MAX_CHARS
+        note = ""
+        if scanned:
             if not images:
-                raise
-            # 視覺呼叫失敗不該讓整次匯入陪葬，退回純文字再試一次
-            log.warning("視覺讀取失敗，退回純文字重試")
-            extracted = reader.read(text, config.LLM_HOST, config.LLM_MODEL)
+                raise ValueError("這份 PDF 是掃描的圖片，裡面沒有文字可以讀。"
+                                 "請改用有文字的 PDF，或啟動看得到圖的模型再試一次")
+            note = "這份是掃描的圖片檔，沒有原文可以比對，內容由模型看圖判讀——請自己核對一遍"
+            log.info("掃描型 PDF：全文只有 %d 字，改用看圖判讀", len(document.squash(text)))
 
-        db.update_import(import_id, extracted=extracted, status="ready", stage="")
+        db.update_import(import_id, stage="模型讀取資料中")
+        with _Queued(import_id):
+            try:
+                extracted = reader.read(text, config.LLM_HOST, config.LLM_MODEL,
+                                        images=images, verify=not scanned)
+            except llm.LlmError:
+                if not images or scanned:
+                    raise
+                # 視覺呼叫失敗不該讓整次匯入陪葬，退回純文字再試一次
+                log.warning("視覺讀取失敗，退回純文字重試")
+                extracted = reader.read(text, config.LLM_HOST, config.LLM_MODEL)
+
+        db.update_import(import_id, extracted=extracted, status="ready", stage="", note=note)
         rows = _import_rows(extracted)
         log.info("匯入讀取完成 全文=%d字 欄位=%d 需覆蓋=%d 耗時=%dms",
                  len(text), len(rows), sum(1 for r in rows if not r.default_checked),
@@ -962,7 +995,9 @@ def get_import(import_id: str) -> Optional[Dict[str, Any]]:
         return {"status": "failed", "error": record.get("error") or "讀取失敗",
                 "filename": record["filename"]}
     preview = ImportPreviewOut(import_id=import_id, filename=record["filename"],
-                               rows=_import_rows(record["extracted"]))
+                               rows=_import_rows(record["extracted"]),
+                               note=record.get("note") or "",
+                               has_source=input_path(import_id).suffix != ".txt")
     return {"status": "ready", "preview": preview.model_dump()}
 
 
