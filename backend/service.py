@@ -75,6 +75,56 @@ _VLM_KIND = {"box": "checkbox", "gap": "print", "append": "print",
 _NOT_FILLED = ("__SKIP__", "__UNKNOWN__")
 
 
+# 使用者按過取消的工作；worker 在批次之間看這個
+_cancelled: set = set()
+# 一次只讓一份去問模型：推論服務同時只吃得下一份，排隊才看得到「前面還有幾份」
+_model_slot = threading.BoundedSemaphore(1)
+_waiting = 0          # 在排隊的
+_running: set = set()  # 正在問模型的（算「前面還有幾份」要把它算進去）
+
+
+def cancel(job_id: str) -> bool:
+    """取消分析。正在問模型的那一批跑完才會停——中斷 HTTP 請求救不回半個回應。"""
+    job = db.get_job(job_id)
+    if not job or job["status"] != "processing":
+        return False
+    _cancelled.add(job_id)
+    db.update_job(job_id, stage="取消中…")
+    log.info("使用者取消分析 job=%s", job_id)
+    actions.record("取消分析「%s」", job["filename"])
+    return True
+
+
+class _Queued:
+    """排隊等推論服務。等的時候照樣看得到自己排第幾個，也還能取消。"""
+
+    def __init__(self, job_id: str):
+        self.job_id = job_id
+        self.held = False
+
+    def __enter__(self):
+        global _waiting
+        _waiting += 1
+        try:
+            while not _model_slot.acquire(timeout=0.5):
+                if self.job_id in _cancelled:
+                    raise filler.Cancelled("排隊中取消")
+                # 前面還有幾份＝正在跑的 ＋ 比自己早排的（自己不算）
+                ahead = len(_running) + max(_waiting - 1, 0)
+                db.update_job(self.job_id, stage=f"排隊中（前面還有 {ahead} 份）")
+            self.held = True
+            _running.add(self.job_id)
+        finally:
+            _waiting -= 1
+        return self
+
+    def __exit__(self, *exc):
+        if self.held:
+            _running.discard(self.job_id)
+            _model_slot.release()
+        return False
+
+
 def model_state() -> Tuple[bool, bool]:
     """(模型開著沒, 看不看得到圖)。
 
@@ -355,7 +405,11 @@ def _vlm_worker(job_id: str, filename: str, use_cache: bool = True) -> None:
             if not llm.available(config.LLM_HOST):
                 raise llm.LlmUnavailable("模型沒開，沒學過的格式無法判讀")
             db.update_job(job_id, stage="模型看版面判讀每一格")
-            draft = filler.analyze(src, profile, config.LLM_HOST, config.LLM_MODEL)
+            with _Queued(job_id):
+                draft = filler.analyze(
+                    src, profile, config.LLM_HOST, config.LLM_MODEL,
+                    progress=lambda text: db.update_job(job_id, stage=text),
+                    stop=lambda: job_id in _cancelled)
             by_id = {s.id: s for s in draft.slots}
             decisions = {}
             for sid, key in draft.assignment.items():
@@ -377,8 +431,14 @@ def _vlm_worker(job_id: str, filename: str, use_cache: bool = True) -> None:
                  plan.stats.fill, plan.stats.skip, plan.stats.by_source,
                  int((time.perf_counter() - t0) * 1000))
         actions.record("上傳履歷「%s」成功", filename)
+    except filler.Cancelled:
+        log.info("分析已取消 job=%s", job_id)
+        db.update_job(job_id, status="failed", stage="", error="已取消分析")
+        actions.record("取消分析「%s」成功", filename)
     except Exception as e:
         _fail(db.update_job, job_id, filename, "分析", "辨識欄位", e)
+    finally:
+        _cancelled.discard(job_id)
 
 
 def _vlm_render(job: Dict[str, Any], cached: bool, slots: List[Any],
@@ -523,9 +583,12 @@ def _analyze_worker(job_id: str, filename: str, use_cache: bool = True) -> None:
 
         db.update_job(job_id, stage="辨識欄位對映" if not cached else "套用已學過的格式")
         headers = parsed.slot_headers(slots)
-        decisions = planner.decide_by_anchor(
-            parsed.table_texts(), slots, config.LLM_HOST, config.LLM_MODEL, cached,
-            headers=headers, allowed=form_fields or None)
+        if job_id in _cancelled:
+            raise filler.Cancelled("取消")
+        with _Queued(job_id):
+            decisions = planner.decide_by_anchor(
+                parsed.table_texts(), slots, config.LLM_HOST, config.LLM_MODEL, cached,
+                headers=headers, allowed=form_fields or None)
 
         # 第二輪修正：只在有新錨定的格子時跑（純快取代表使用者確認過）。
         # 先做零成本的確定性對齊（白名單外格子、期間欄拆併），
@@ -547,8 +610,14 @@ def _analyze_worker(job_id: str, filename: str, use_cache: bool = True) -> None:
                  plan.stats.fill, plan.stats.skip, plan.stats.by_source,
                  int((time.perf_counter() - t0) * 1000))
         actions.record("上傳履歷「%s」成功", filename)
+    except filler.Cancelled:
+        log.info("分析已取消 job=%s", job_id)
+        db.update_job(job_id, status="failed", stage="", error="已取消分析")
+        actions.record("取消分析「%s」成功", filename)
     except Exception as e:
         _fail(db.update_job, job_id, filename, "分析", "辨識欄位", e)
+    finally:
+        _cancelled.discard(job_id)
 
 
 def _restore(job: Dict[str, Any]) -> Tuple[List[Slot], Dict[str, planner.Decision]]:

@@ -273,6 +273,7 @@ export const api = {
   forgetFormat: (fingerprint: string) =>
     postJson<{ ok: boolean }>('/templates/forget', { fingerprint }),
   reanalyze: (jobId: string) => postJson<{ ok: boolean }>(`/jobs/${jobId}/reanalyze`, {}),
+  cancelJob: (jobId: string) => postJson<{ ok: boolean }>(`/jobs/${jobId}/cancel`, {}),
 
   logs: ({ level }: { level?: string }) =>
     request<LogEntry[]>(`/logs${level ? `?level=${level}` : ''}`),

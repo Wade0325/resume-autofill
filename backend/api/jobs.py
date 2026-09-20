@@ -70,6 +70,14 @@ def list_jobs() -> list:
     return service.recent_jobs()
 
 
+@router.post("/{job_id}/cancel")
+def cancel(job_id: WorkId) -> dict:
+    """取消分析。正在問模型的那一批跑完才會停。"""
+    if not service.cancel(job_id):
+        raise HTTPException(404, "這份不在分析中")
+    return {"ok": True}
+
+
 @router.post("/{job_id}/reanalyze")
 def reanalyze(job_id: WorkId) -> dict:
     """重新判讀這一份，不用學過的格式（學過的對映填錯時用）。需要模型。"""

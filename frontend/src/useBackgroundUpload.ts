@@ -17,6 +17,25 @@ type Polled =
  * onDiscard 在「換了新檔／放棄追蹤／重來」時呼叫，頁面清自己的附帶狀態
  * （匯入頁存的勾選）。
  */
+/**
+ * 分析要一兩分鐘，多數人會先去做別的事。完成時把分頁標題改掉（回到這一頁就還原），
+ * 使用者答應過通知就再發一則。沒答應就不主動問——跳權限視窗比沒通知還煩。
+ */
+function notifyDone() {
+  if (!document.hidden) return
+  const original = document.title
+  document.title = '✓ 分析完成 · ' + original
+  const restore = () => {
+    if (document.hidden) return
+    document.title = original
+    document.removeEventListener('visibilitychange', restore)
+  }
+  document.addEventListener('visibilitychange', restore)
+  if ('Notification' in window && Notification.permission === 'granted') {
+    new Notification('分析完成', { body: '回到履歷自動填寫看結果' })
+  }
+}
+
 export function useBackgroundUpload<S extends Polled>(opts: {
   storageKey: string
   start: (file: File, onProgress: (pct: number) => void) => Promise<string>
@@ -36,6 +55,7 @@ export function useBackgroundUpload<S extends Polled>(opts: {
     ready: (st) => {
       onReady(st)
       setPhase({ kind: 'idle' })
+      notifyDone()
     },
     failed: setError,
     progress: (stage, startedAt) => setPhase({ kind: 'analyzing', startedAt, stage }),

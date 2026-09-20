@@ -12,6 +12,7 @@ type Props = {
   onFile: (file: File) => void
   accept?: string
   note?: string
+  onCancel?: () => void      // 分析中可以取消（填寫頁有，匯入頁沒有）
 }
 
 export default function Dropzone({
@@ -21,6 +22,7 @@ export default function Dropzone({
   onFile,
   accept = '.docx',
   note = '接受 .docx（舊版 .doc 請先用 Word 另存新檔）',
+  onCancel,
 }: Props) {
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -58,7 +60,7 @@ export default function Dropzone({
           e.target.value = '' // 清空才能重複選同一個檔案
         }}
       />
-      {busy ? <Progress phase={phase} /> : (
+      {busy ? <Progress phase={phase} onCancel={onCancel} /> : (
         <>
           <p className="text-slate-800 font-medium">{title}</p>
           <p className="text-sm text-slate-500 mt-1">{hint}</p>
@@ -69,7 +71,7 @@ export default function Dropzone({
   )
 }
 
-function Progress({ phase }: { phase: UploadPhase }) {
+function Progress({ phase, onCancel }: { phase: UploadPhase; onCancel?: () => void }) {
   // 上傳有明確百分比；解析與模型判斷沒有可回報的進度，
   // 所以改用已經過的秒數，至少讓人知道它還在動。
   // 秒數由這裡每秒自己跳——狀態輪詢是兩秒一次，跟著它跳會一次跳兩秒
@@ -101,9 +103,18 @@ function Progress({ phase }: { phase: UploadPhase }) {
         />
       </div>
       {!uploading && (
-        <p className="text-xs text-slate-400 mt-3">
-          第一次遇到的格式要靠模型判讀，約 1～4 分鐘。
-        </p>
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <p className="text-xs text-slate-400">第一次遇到的格式要靠模型判讀，約 1～4 分鐘。</p>
+          {onCancel && (
+            <button
+              onClick={onCancel}
+              className="text-xs px-3 py-1 rounded-md border border-slate-300 text-slate-600
+                         hover:bg-slate-50 whitespace-nowrap"
+            >
+              取消
+            </button>
+          )}
+        </div>
       )}
     </div>
   )

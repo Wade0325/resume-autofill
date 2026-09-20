@@ -62,6 +62,13 @@ export default function FillPage() {
     }
   }
 
+  /** 分析中按取消：正在問模型的那一批跑完才會停。 */
+  async function cancelNow() {
+    const id = sessionStorage.getItem('fill.jobId')
+    if (!id) return
+    await run(() => api.cancelJob(id))
+  }
+
   /** 學過的對映填錯時：重跑模型，這一次不用學過的格式。 */
   async function reanalyzeNow() {
     if (!plan) return
@@ -110,6 +117,7 @@ export default function FillPage() {
           hint="或點擊選擇檔案"
           phase={phase}
           onFile={upload}
+          onCancel={phase.kind === 'analyzing' ? cancelNow : undefined}
         />
         <EnginePicker />
         <JobHistory onOpen={track} onError={setError} />

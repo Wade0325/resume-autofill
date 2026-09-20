@@ -2290,11 +2290,26 @@ def _worth_offering(key: str, fields: Dict[str, str]) -> bool:
     return any(v for k, v in fields.items() if _ROW_INDEX.sub("[]", k) == key)
 
 
+class Cancelled(Exception):
+    """使用者按了取消。分析在批次之間檢查，不會卡在模型那一個呼叫裡。"""
+
 
 def analyze(blank: Path, profile: Dict[str, Any],
-            host: str = LLM_HOST, model: str = LLM_MODEL) -> Draft:
+            host: str = LLM_HOST, model: str = LLM_MODEL,
+            progress: Optional[Any] = None, stop: Optional[Any] = None) -> Draft:
     """看著版面決定每一個位置放哪一項資料。不寫檔——寫檔是 write() 的事，
-    中間留給使用者修正。"""
+    中間留給使用者修正。
+
+    progress(說明文字)：每一批問完回報一次，讓使用者看得到「第幾批／共幾批」。
+    stop()：回 True 就中止（使用者按了取消）。兩個都在批次之間呼叫，
+    不會打斷正在跑的那一次模型呼叫。
+    """
+    def step(text: str) -> None:
+        if stop is not None and stop():
+            raise Cancelled(text)
+        if progress is not None:
+            progress(text)
+
     doc, form, all_slots = parse(blank)
     # 「這次應徵」才認出來的位置不進這一輪：模型看到的位置與批次跟以前一模一樣
     slots = [s for s in all_slots if not s.extra]
@@ -2312,6 +2327,7 @@ def analyze(blank: Path, profile: Dict[str, Any],
     block_cells = {x.addr for group in blocks.values() for x in group}
     in_blocks = frozenset(x.id for x in slots if x.addr in block_cells)
     if blocks:
+        step("判讀一列一筆的表")
         try:
             rows, marks = ask_rows(blocks, fields, pages, host, model,
                                    printed=printed_text(form))
@@ -2323,14 +2339,17 @@ def analyze(blank: Path, profile: Dict[str, Any],
     # 勾選題自己問一輪。排在逐格問之後，才看得到同一列已經填了哪些資料
     groups = box_groups([x for x in slots if x.id not in in_blocks])
     in_boxes = frozenset(x.id for g in groups.values() for x in g)
-    for n, batch in enumerate(_batches([x for x in slots
-                                        if x.id not in in_blocks | in_boxes | followers]), 1):
+    batches = list(_batches([x for x in slots
+                             if x.id not in in_blocks | in_boxes | followers]))
+    for n, batch in enumerate(batches, 1):
+        step(f"逐格判讀 第 {n}／{len(batches)} 批")
         try:
             chosen.update(ask(batch, fields, pages, chosen, host, model))
         except llm.LlmError as e:      # 一批失敗不該讓整份表格陪葬，其餘照跑、照評分
             log.warning("第 %d 批問失敗：%s", n, e)
 
     if groups:
+        step(f"判讀勾選題（{len(groups)} 題）")
         try:
             picked, tk = ask_boxes(groups, fields, pages, chosen,
                                    host=host, model=model)
@@ -2353,6 +2372,7 @@ def analyze(blank: Path, profile: Dict[str, Any],
     # 補漏看去重之後的結果：第一輪被丟掉的配對（住家電話欄填了已經用過的行動電話）
     # 讓出來的位置，也要能再問一次
     kept = dedupe(slots, chosen, fields, trusted=in_blocks)
+    step("補漏")
     try:
         kept = dedupe(slots, {**kept, **recall(slots, kept, fields, pages, skip,
                                                host, model)},
