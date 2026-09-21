@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import copy
 import os
 import shutil
 import sys
@@ -74,6 +75,16 @@ def sample_form(tmp_path_factory) -> Path:
     path = tmp_path_factory.mktemp("form") / "sample_resume_form.docx"
     make_sample.build(str(path))
     return path
+
+
+@pytest.fixture
+def profile() -> dict:
+    """整份測試用的虛構履歷（`PROFILE`）。
+
+    用 fixture 拿，不要 import：pytest 用 `conftest` 這個名字載入的不一定是這一份
+    （還有 browser 那一份），寫成 `tests.conftest` 又會把這個檔整個再執行一次。
+    """
+    return copy.deepcopy(PROFILE)
 
 
 @pytest.fixture(autouse=True)

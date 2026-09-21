@@ -94,6 +94,12 @@ class LlmCallFailed(LlmError):
     訊息要能直接給使用者看——這不是「去啟動模型」能解決的。"""
 
 
+class LlmContextFull(LlmCallFailed):
+    """提示加回答超過了伺服器的上下文：提示送不進去（HTTP 400），或回答寫到一半撞滿
+    （finish_reason=length，llama-server 的 n_predict 預設不設限，撞到的只會是上下文）。
+    跟其他失敗分開，是因為接著問的那串對話要整串重開才問得成，見 `Chat.ask`。"""
+
+
 def available(host: str) -> bool:
     try:
         return requests.get(f"{host}/health", timeout=HEALTH_TIMEOUT).status_code == 200
@@ -155,7 +161,7 @@ def ask(host: str, system: str, user: UserContent, schema: Dict[str, Any],
 
 
 def _call(host: str, messages: List[Dict[str, Any]], schema: Dict[str, Any],
-          model: str, label: str) -> Tuple[Dict[str, Any], str]:
+          model: str, label: str) -> Tuple[Dict[str, Any], str, int]:
     payload = {
         "model": model,
         # 複製一份：Chat 傳進來的就是它自己那串對話，回來之後馬上會接上 assistant 訊息。
@@ -204,15 +210,15 @@ def _call(host: str, messages: List[Dict[str, Any]], schema: Dict[str, Any],
         if r.status_code == 401:
             raise LlmUnavailable("模型服務的金鑰對不上，請從右上角的模型選單重新啟動模型")
         if r.status_code >= 400:
-            raise LlmCallFailed(_http_problem(r))
+            raise _http_problem(r)
         try:
             body = r.json()
             choice = body["choices"][0]
             content = choice["message"]["content"] or ""
         except (ValueError, KeyError, IndexError, TypeError) as e:
             raise LlmCallFailed(f"模型服務回了看不懂的內容：{e}") from e
+        usage = body.get("usage") or {}
         if generation is not None:
-            usage = body.get("usage") or {}
             generation.update(output=content, usage_details={
                 "input": usage.get("prompt_tokens", 0),
                 "output": usage.get("completion_tokens", 0)})
@@ -222,21 +228,25 @@ def _call(host: str, messages: List[Dict[str, Any]], schema: Dict[str, Any],
              len(content), int((time.perf_counter() - t0) * 1000))
 
     if choice.get("finish_reason") == "length":
-        raise LlmCallFailed(
+        raise LlmContextFull(
             "這份文件太長，超出模型一次能讀的長度，輸出被截斷（提示詞約 "
             f"{prompt_chars // 2} tokens）。開發者可用 RESUME_AUTOFILL_LLM_CTX "
             "加大上下文後重新啟動模型")
     if not content:
         raise LlmCallFailed("模型沒有回傳任何內容")
-    # 原文一併回傳：接著問的那幾批要把它當成 assistant 訊息接回對話裡
+    # 原文與用量一併回傳：接著問的那幾批要把原文當成 assistant 訊息接回對話裡，
+    # 用量是這串對話現在的實際長度。prompt_tokens 算的是整段提示，快取命中的前綴也算在內
+    # （實測接著問只重算 27 個 token 的那一次，回報的是整段 801）；舊版沒回報就是 0
+    prompt_tokens = usage.get("prompt_tokens") or 0
+    used = prompt_tokens + (usage.get("completion_tokens") or 0) if prompt_tokens else 0
     try:
-        return json.loads(content), content
+        return json.loads(content), content, used
     except ValueError as e:
         raise LlmCallFailed(f"模型回傳的內容不完整，不是合法的 JSON：{e}") from e
 
 
-def _http_problem(r: requests.Response) -> str:
-    """llama-server 回錯誤時的白話說明。它的錯誤格式是
+def _http_problem(r: requests.Response) -> LlmCallFailed:
+    """llama-server 回錯誤時，換成帶白話說明的例外。它的錯誤格式是
     {"error": {"code": 400, "type": "exceed_context_size_error", "message": ...}}。"""
     try:
         err = r.json().get("error") or {}
@@ -244,11 +254,28 @@ def _http_problem(r: requests.Response) -> str:
         err = {}
     detail = err.get("message") or r.text[:200]
     if err.get("type") == "exceed_context_size_error":
-        return ("這份文件太長，超出模型一次能讀的長度"
-                f"（需要 {err.get('n_prompt_tokens', '?')} tokens，上限 {err.get('n_ctx', '?')}）")
+        return LlmContextFull(
+            "這份文件太長，超出模型一次能讀的長度"
+            f"（需要 {err.get('n_prompt_tokens', '?')} tokens，上限 {err.get('n_ctx', '?')}）")
     if r.status_code >= 500:
-        return f"模型服務出錯（HTTP {r.status_code}）：{detail}"
-    return f"模型拒絕了這次請求（HTTP {r.status_code}）：{detail}"
+        return LlmCallFailed(f"模型服務出錯（HTTP {r.status_code}）：{detail}")
+    return LlmCallFailed(f"模型拒絕了這次請求（HTTP {r.status_code}）：{detail}")
+
+
+DEFAULT_CTX = 16384   # 問不到伺服器的上下文時的假設：產品啟動 llama-server 的預設值
+                      # （config.LLM_CTX_SIZE；core 不引用 config）
+PAGE_TOKENS = 1600    # 一整張示意圖（1100×1500）送進模型的 token，llama-server 實測；
+                      # 不滿一頁的比較少（三份考題的最後一頁 716～988）
+ANSWER_ROOM = 500     # 留給回答的空間：配對一批 16 格，回答約 300
+
+
+def _estimate(content: UserContent) -> int:
+    """還沒送出去的訊息估多長，寧可估多：文字一個字算一個 token（我們的提示實測
+    平均 0.5，中文多的段落最高 0.86），圖片一律當成整頁。"""
+    if isinstance(content, str):
+        return len(content)
+    return sum(PAGE_TOKENS if p.get("type") == "image_url" else len(p.get("text", ""))
+               for p in content)
 
 
 class Chat:
@@ -267,6 +294,8 @@ class Chat:
         self.host, self.model = host, model
         self.messages: List[Dict[str, Any]] = [{"role": "system", "content": system}]
         self._sent: set = set()
+        self._counted = (0, 0)       # (伺服器報的長度, 那時對話有幾則)
+        self._ctx: Optional[int] = None
 
     def seen(self, key: str) -> bool:
         """這串對話裡已經附過這個東西了嗎（個人資料、某一張示意圖）。
@@ -279,40 +308,65 @@ class Chat:
         return key in self._sent
 
     def tokens(self) -> int:
-        """粗估這串對話有多少 token。文字算半個字一個 token，圖片按實測抓 1300。"""
-        n = 0
-        for m in self.messages:
-            c = m["content"]
-            if isinstance(c, str):
-                n += len(c) // 2
-            else:
-                for part in c:
-                    n += 1300 if part.get("type") == "image_url" else len(part.get("text", "")) // 2
-        return n
+        """這串對話現在有多長。
 
-    def start_over_if_long(self, limit: int = 11000) -> None:
-        """對話長到快撞上下文就重開一串。
-
-        接著問省的是提示快取，但代價是提示會一直長。撞到上限的後果（輸出被截斷）
-        比多花一次冷啟動嚴重得多，所以寧可重來。重開之後 `seen` 會全部回到 False，
-        個人資料與示意圖會再附一次。
+        上一次問成時伺服器報的是實數（整段提示＋回答），之後接上的訊息才用估的。
+        以前整串都用估的——文字兩個字算一個 token、圖片一律 1300——中文多的段落少估
+        四成、整頁的示意圖少估三百，門檻還沒到，伺服器已經先拒絕了。
         """
-        if self.tokens() > limit:
-            log.info("對話已累積約 %d tokens，重開一串", self.tokens())
-            del self.messages[1:]
-            self._sent.clear()
+        known, upto = self._counted
+        return known + sum(_estimate(m["content"]) for m in self.messages[upto:])
+
+    def context(self) -> int:
+        """伺服器單一請求實際能用多長（`context_size`）。問不到就當成產品的預設值。"""
+        if self._ctx is None:
+            self._ctx = context_size(self.host) or DEFAULT_CTX
+        return self._ctx
+
+    def start_over(self) -> None:
+        """整串重開。`seen` 全部回到 False，個人資料與示意圖要再附一次。"""
+        del self.messages[1:]
+        self._sent.clear()
+        self._counted = (0, 0)
+
+    def start_over_if_long(self, user: UserContent) -> bool:
+        """接上這一批就會超過上下文的話，先重開一串，回傳 True——呼叫端要重組這一批，
+        個人資料與示意圖要重新附上。
+
+        接著問省的是提示快取，但代價是提示會一直長。撞到上限的後果（這一批問不成）
+        比多花一次冷啟動嚴重得多，所以寧可重來。上限要問伺服器，不能寫死：以前寫死
+        11000，使用者把 RESUME_AUTOFILL_LLM_CTX 調得比它小，這個閥就永遠不會開，
+        對話直接長過上限。已經是新的一串就不重開——重開也不會比較短。
+        """
+        if len(self.messages) == 1:
+            return False
+        if self.tokens() + _estimate(user) + ANSWER_ROOM <= self.context():
+            return False
+        log.info("對話已累積約 %d tokens，接上這一批會超過上下文 %d，重開一串",
+                 self.tokens(), self.context())
+        self.start_over()
+        return True
 
     def ask(self, user: UserContent, schema: Dict[str, Any], label: str = "",
             attached: Iterable[str] = ()) -> Dict[str, Any]:
         """問這一批。`attached`＝這一次附上了什麼的代號，問成了才記下來。"""
         self.messages.append({"role": "user", "content": user})
         try:
-            data, raw = _call(self.host, self.messages, schema, self.model, label)
+            data, raw, used = _call(self.host, self.messages, schema, self.model, label)
+        except LlmContextFull:
+            # 這串對話已經塞不下了。只收回這一批的話，下一批接在一樣長的對話上會再撞一次；
+            # 沒問成、長度也不會再長，start_over_if_long 永遠不會動作——之後每一批都失敗。
+            # 所以整串重開
+            self.start_over()
+            raise
         except Exception:
-            # 這一次沒問成：把半截的 user 收回，不然下一批會接在一個沒有回答的
-            # 問題後面。`attached` 還沒記進 _sent，所以下一批會重新附上示意圖
+            # 其他原因沒問成（逾時、服務出錯……）：把半截的 user 收回，不然下一批會接在
+            # 一個沒有回答的問題後面。`attached` 還沒記進 _sent，所以下一批會重新附上
+            # 示意圖。對話本身留著，下一批照樣吃得到提示快取
             self.messages.pop()
             raise
         self.messages.append({"role": "assistant", "content": raw})
         self._sent.update(attached)
+        if used:
+            self._counted = (used, len(self.messages))
         return data
