@@ -101,6 +101,21 @@ def available(host: str) -> bool:
         return False
 
 
+def context_size(host: str) -> int:
+    """這台 llama-server 的單一請求實際能用多長的上下文。問不到就回 0。
+
+    要問伺服器，不要讀 `config.LLM_CTX_SIZE`：那是我們「要求」的值，llama.cpp 會依
+    模型訓練長度往下夾，`--parallel N` 時每個請求也只拿到其中一份。`/props` 的
+    `default_generation_settings.n_ctx` 就是 llama-server 自己 log 的 `n_ctx_slot`，
+    單一請求的真值。使用者也可能自己啟動 server，那時環境變數更是完全不算數。
+    """
+    try:
+        props = requests.get(f"{host}/props", headers=_auth(), timeout=HEALTH_TIMEOUT).json()
+        return int(props.get("default_generation_settings", {}).get("n_ctx") or 0)
+    except Exception:
+        return 0
+
+
 def supports_vision(host: str) -> bool:
     """llama-server 有掛 mmproj 時，/props 會回報 vision 能力。
 

@@ -49,6 +49,16 @@ READY_TIMEOUT = 300    # 9B 冷啟動要載 5 GB 進 VRAM，給足時間
 DOWNLOAD_TIMEOUT = (15, 60)
 DISK_MARGIN_GB = 0.5   # 除了模型本身，至少要再留這麼多空間（不留的話硬碟正好塞爆）
 
+# 上下文夠不夠，由「拆不開的那一次呼叫」決定：勾選題那一輪必須附上整份示意圖，
+# 只附題目所在那一頁時真建築連跑兩輪都少一格（見 filler.ask_boxes 的註解）。
+# 用 llama-server 的 /tokenize 量過各個成分：示意圖每張 1300、個人資料每項約 16，
+# 配上 filler 的三個夾子（示意圖最多 MAX_PAGES=4 張、勾選題一批 BOX_BATCH=8 題、
+# 位置一批 BATCH=16 個），需求是有天花板的——表格再大都不會超過：
+#   222（BOXES_SYSTEM）＋ 5400（很厚的履歷）＋ 5200（4 張圖）＋ 500（8 題）＋ 300（回答）
+# 約 11600。三份考題實際量到的峰值是 7637，預設的 16384 有約兩倍餘裕。
+CTX_FLOOR = 8200        # 低於這個，4 頁的表格根本送不出去——是失敗不是變慢
+CTX_COMFORTABLE = 12000  # 到這個以上，履歷很長又碰上 4 頁的表格也還有餘裕
+
 _lock = threading.Lock()
 _starting: str | None = None            # 正在啟動的模型名，None = 沒有
 _downloads: dict[str, dict] = {}        # name -> {"pct": int, "error": str|None}
@@ -180,6 +190,7 @@ def _switch(name: str, gguf: Path) -> None:
                 _device = _device_of(proc.pid)
                 log.info("模型就緒 %s device=%s", name, _device or "不明")
                 actions.record("切換模型「%s」成功", name)
+                _check_context(name)
                 return
             time.sleep(2)
         actions.problem("切換模型「%s」失敗：等了 %d 秒還沒就緒，詳見 llama-server.log",
@@ -189,6 +200,29 @@ def _switch(name: str, gguf: Path) -> None:
         actions.problem("切換模型「%s」失敗：%s", name, e)
     finally:
         _starting = None
+
+
+def _check_context(name: str) -> None:
+    """模型起來之後，看它實際的上下文夠不夠這個產品用。
+
+    在這裡講，是因為這是唯一「還來得及」的時機：太小的話，使用者要等到丟進一份
+    長表格、分析跑到一半才會失敗，而且失敗訊息跟他做的事看起來毫無關係。
+
+    問伺服器而不是看 `config.LLM_CTX_SIZE`：那只是我們要求的值，llama.cpp 會往下夾，
+    使用者也可能自己啟動 server。問不到就不判斷——寧可不說，也不要嚇到其實沒事的人。
+    """
+    n_ctx = llm.context_size(config.LLM_HOST)
+    if not n_ctx:
+        log.info("問不到模型的上下文長度，略過檢查")
+        return
+    log.info("模型的上下文 %d（啟動時要求 %d）", n_ctx, config.LLM_CTX_SIZE)
+    if n_ctx < CTX_FLOOR:
+        actions.problem("模型「%s」一次能讀的長度太小，長一點的表格會填不完", name)
+        log.warning("上下文只有 %d，至少要 %d：4 頁的表格配上較長的履歷就會超出。"
+                    "用 RESUME_AUTOFILL_LLM_CTX 調高之後重新啟動模型", n_ctx, CTX_FLOOR)
+    elif n_ctx < CTX_COMFORTABLE:
+        log.warning("上下文 %d 偏小（建議 %d 以上）：履歷長又碰上 4 頁的表格時可能填不完",
+                    n_ctx, CTX_COMFORTABLE)
 
 
 def _kill_port(port: int) -> None:
