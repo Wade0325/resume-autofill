@@ -185,6 +185,11 @@ PDF 取字一定要 NFKC——104 的字型把中文對映到康熙部首區，�
   一列一筆那一輪的 enum（攔 `llm.ask` 把 schema 取出來），還有 `parse()` 認出來的位置
   （新增欄位等於新增欄位名稱，可能改變格子的標題判讀）。同一份資料、同三份考題，
   舊碼與新碼各跑一次對照。分數會因為模型本身的變異上下跳，這三份清單不會。
+
+  要一次錄下**每一次**呼叫就攔 `llm.requests.post`：配對那一輪接著問（`llm.Chat`），
+  不經過 `llm.ask`，只攔 `llm.ask` 會錄到零筆，看起來像「什麼都沒變」。把每一次的
+  payload 做雜湊、兩邊比對，四輪送出去的東西是不是逐字相同一次就知道——假的回答要
+  固定，不然後面幾批的提示會因為前面的回答不同而分岔。
 - **批次（一次好幾份）沒有自己的狀態機**：每一份還是一個獨立的工作，走同一條分析流程、
   同一個排隊號誌（`service._Queued`），前端只是把代碼存成一組（`sessionStorage`
   的 `fill.batchIds`）拿來看進度、一起下載。另做一套批次狀態會多出「批次壞了但裡面的
@@ -392,7 +397,8 @@ tools/check_docx_integrity.py   比對原稿與填好的檔案：勾選框、底
 
 ### 看模型實際收到什麼（Langfuse）
 
-`llm.ask` 是所有模型呼叫的唯一出入口，包了選擇性的 Langfuse 追蹤。
+所有模型呼叫都經過 `llm._call`：`llm.ask`（問一次就結束）和 `llm.Chat.ask`（配對那一輪
+接著問）最後都走到那裡，選擇性的 Langfuse 追蹤也包在那一層。
 金鑰填在根目錄的 `.env`（不入版控），填好重啟後端就開始送，留空就完全不啟用：
 
 ```powershell
@@ -404,9 +410,10 @@ pip install -e ".[dev]"
 自架的 Langfuse 是 v3 架構，SDK 要跟著留在 v3（`langfuse>=3,<4`）——
 v4 換了資料模型與攝取端點，對 v3 伺服器送不進去。
 
-每次呼叫是一筆 generation：input 是完整的 system＋user 訊息、output 是模型回應、
-metadata 帶著那次用的 JSON Schema、usage 帶 token 數。頁面截圖會換成「<截圖>」
-——base64 幾百 KB 塞進 trace 只會讓畫面爆掉。
+每次呼叫是一筆 generation：input 是送出去的整串訊息（配對那一輪接著問時，前幾輪
+都在裡面）、output 是模型回應、metadata 帶著那次用的 JSON Schema 與圖片張數
+（`images` 整串共幾張、`images_new` 這一輪新附幾張）、usage 帶 token 數。
+頁面截圖會換成「<截圖>」——base64 幾百 KB 塞進 trace 只會讓畫面爆掉。
 
 **只用本機自架的 Langfuse。**提示詞裡是完整的履歷內容（身分證字號、生日、
 地址），送到雲端等於把個資上傳第三方。SDK 沒指定位址時的預設值就是雲端，

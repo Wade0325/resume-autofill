@@ -160,6 +160,15 @@ def ask(host: str, system: str, user: UserContent, schema: Dict[str, Any],
                  schema, model, label)[0]
 
 
+def _size(content: UserContent) -> Tuple[int, int]:
+    """一則訊息的（字數, 圖片張數）。"""
+    if isinstance(content, str):
+        return len(content), 0
+    parts = [p for p in content if isinstance(p, dict)]
+    return (sum(len(p.get("text", "")) for p in parts),
+            sum(1 for p in parts if p.get("type") == "image_url"))
+
+
 def _call(host: str, messages: List[Dict[str, Any]], schema: Dict[str, Any],
           model: str, label: str) -> Tuple[Dict[str, Any], str, int]:
     payload = {
@@ -177,18 +186,19 @@ def _call(host: str, messages: List[Dict[str, Any]], schema: Dict[str, Any],
         },
     }
 
-    last = messages[-1]["content"]
-    prompt_chars = len(last) if isinstance(last, str) else sum(
-        len(p.get("text", "")) for p in last if isinstance(p, dict))
-    images = 0 if isinstance(last, str) else sum(
-        1 for p in last if isinstance(p, dict) and p.get("type") == "image_url")
+    # 整段提示多長、附了幾張圖，要整串加總：接著問的時候，前幾輪的個人資料與示意圖都還在
+    # 提示裡，只看最後一則會把一萬多 token 的提示說成幾百字。這一輪新附的另外記——
+    # 「圖片 0 張」才分得出是正確地沒有重附，還是圖片全掉了
+    sizes = [_size(m["content"]) for m in messages]
+    prompt_chars, images = sum(c for c, _ in sizes), sum(i for _, i in sizes)
+    new_chars, new_images = sizes[-1]
     turns = sum(1 for m in messages if m["role"] == "user")
 
     tracer = _tracer()
     traced = (tracer.start_as_current_generation(
         name=label or "llm", model=model,
         input=_traceable(payload["messages"]),
-        metadata={"schema": schema, "images": images})
+        metadata={"schema": schema, "images": images, "images_new": new_images})
         if tracer else nullcontext())
 
     t0 = time.perf_counter()
@@ -223,21 +233,24 @@ def _call(host: str, messages: List[Dict[str, Any]], schema: Dict[str, Any],
                 "input": usage.get("prompt_tokens", 0),
                 "output": usage.get("completion_tokens", 0)})
 
-    log.info("模型呼叫 %s 提示=%d字 圖片=%d 第%d輪 finish=%s 回應=%d字 耗時=%dms",
-             label or "-", prompt_chars, images, turns, choice.get("finish_reason"),
-             len(content), int((time.perf_counter() - t0) * 1000))
+    # 伺服器算的整段提示，快取命中的前綴也算在內（實測接著問只重算 27 個 token 的那一次，
+    # 回報的是整段 801）；舊版沒回報就是 0
+    prompt_tokens = usage.get("prompt_tokens") or 0
+    log.info("模型呼叫 %s 提示=%d字 圖片=%d（這一輪新附 %d字、%d張） 第%d輪 tokens=%s "
+             "finish=%s 回應=%d字 耗時=%dms",
+             label or "-", prompt_chars, images, new_chars, new_images, turns,
+             prompt_tokens or "?", choice.get("finish_reason"), len(content),
+             int((time.perf_counter() - t0) * 1000))
 
     if choice.get("finish_reason") == "length":
         raise LlmContextFull(
             "這份文件太長，超出模型一次能讀的長度，輸出被截斷（提示詞約 "
-            f"{prompt_chars // 2} tokens）。開發者可用 RESUME_AUTOFILL_LLM_CTX "
+            f"{prompt_tokens or prompt_chars // 2} tokens）。開發者可用 RESUME_AUTOFILL_LLM_CTX "
             "加大上下文後重新啟動模型")
     if not content:
         raise LlmCallFailed("模型沒有回傳任何內容")
     # 原文與用量一併回傳：接著問的那幾批要把原文當成 assistant 訊息接回對話裡，
-    # 用量是這串對話現在的實際長度。prompt_tokens 算的是整段提示，快取命中的前綴也算在內
-    # （實測接著問只重算 27 個 token 的那一次，回報的是整段 801）；舊版沒回報就是 0
-    prompt_tokens = usage.get("prompt_tokens") or 0
+    # 用量（提示＋回答）是這串對話現在的實際長度
     used = prompt_tokens + (usage.get("completion_tokens") or 0) if prompt_tokens else 0
     try:
         return json.loads(content), content, used
@@ -272,10 +285,8 @@ ANSWER_ROOM = 500     # 留給回答的空間：配對一批 16 格，回答約 
 def _estimate(content: UserContent) -> int:
     """還沒送出去的訊息估多長，寧可估多：文字一個字算一個 token（我們的提示實測
     平均 0.5，中文多的段落最高 0.86），圖片一律當成整頁。"""
-    if isinstance(content, str):
-        return len(content)
-    return sum(PAGE_TOKENS if p.get("type") == "image_url" else len(p.get("text", ""))
-               for p in content)
+    chars, images = _size(content)
+    return chars + PAGE_TOKENS * images
 
 
 class Chat:
