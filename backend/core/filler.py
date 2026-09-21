@@ -973,20 +973,25 @@ def ask(batch: List[Slot], fields: Dict[str, str], pages: Pages,
         "required": ids,
         "additionalProperties": False,
     }
-    # 每一批只有最後一句不同：個人資料與示意圖都排在前面，llama-server 的提示快取
-    # 才吃得到。不再重貼整份位置清單——整張表格的長相示意圖已經畫給模型看了，
-    # 再貼一份 180 行的清單只是讓每一批的提示多五千個 token
-    # 這一輪的幾批接在同一串對話上問：個人資料與示意圖只有第一批附上，後面幾批
-    # 只接新的問題。示意圖也只附這一批位置所在的那幾張——分批本來就照文件順序切，
-    # 一批十六個位置幾乎都落在同一張上（見 Pages）
+    # 這一輪的幾批接在同一串對話上問：個人資料與示意圖只有第一次用到時附上，後面幾批
+    # 只接新的問題，llama-server 的提示快取才吃得到。也不重貼整份位置清單——整張表格
+    # 的長相示意圖已經畫給模型看了，再貼一份 180 行的清單只是讓提示多五千個 token。
+    # 示意圖只附這一批位置所在的那幾張：分批本來就照文件順序切，一批十六個位置
+    # 幾乎都落在同一張上（見 Pages）
+    #
+    # attached 收齊這一次附了什麼，交給 chat.ask 在問成之後才記帳：這裡到 ask 之間
+    # 要是出了事，這些就不算附過，下一批會重新附上
     chat.start_over_if_long()
+    attached: List[str] = []
     user: List[Dict[str, Any]] = []
-    if chat.first_time("fields"):
+    if not chat.seen("fields"):
+        attached.append("fields")
         user.append({"type": "text", "text": (
             "個人資料（項目代碼：值）：\n"
             + "\n".join(f"- {k}{_label(k)}：{v[:60]}" for k, v in fields.items()))})
-    user += pages.parts([i for i in pages.for_addrs({s.addr for s in batch})
-                         if chat.first_time(f"page{i}")])
+    fresh = [i for i in pages.for_addrs({s.addr for s in batch}) if not chat.seen(f"page{i}")]
+    attached += [f"page{i}" for i in fresh]
+    user += pages.parts(fresh)
     # 已經用掉的資料排在最後（放前面會把提示快取的共同前綴打斷）。沒有這一段的話，
     # 模型看不到別批的決定：五個問答題配七項回答，每一批都從頭挑一次就會互相搶
     done = ("\n\n已經填在別的位置的資料項（不要再挑，除非這一格真的也要填同一項）：\n"
@@ -994,7 +999,7 @@ def ask(batch: List[Slot], fields: Dict[str, str], pages: Pages,
     user.append({"type": "text", "text": "這一批要判斷的位置：\n" + "\n".join(
         f"  {sid}｜{_describe(s)}" for sid, s in zip(ids, batch)) + done})
 
-    data = chat.ask(user, schema, label=f"配對:{len(ids)}處")
+    data = chat.ask(user, schema, label=f"配對:{len(ids)}處", attached=attached)
     back = dict(zip(ids, batch))
     return {back[sid].id: key for sid, key in data.items()
             if sid in back and key in fields}
