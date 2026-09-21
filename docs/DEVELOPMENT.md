@@ -493,8 +493,10 @@ Windows 專屬呼叫（`subprocess.CREATE_NO_WINDOW`、`powershell`），產品�
 各寫一套解析邏輯，兩邊遲早不一致（已經踩過一次——`launch()` 預設要的瀏覽器版本
 跟 conftest 實際 fallback 用的那份不同）。
 
-它比另外兩個 job 慢（約四到五分鐘，多數花在裝 chromium 與 build 前端），但三個 job 是
-平行的，所以總時間沒有變成相加。哪天覺得太吵，再改成每日排程比較實際。
+它比另外兩個 job 慢一點（實測 1m54s，其中下載 chromium 約 195 MB 佔了大半，測試本身
+只跑 31 秒），但三個 job 是平行的，所以總時間沒有變成相加——加它之前約 1.5 分鐘，
+加了之後約 2 分鐘。真嫌慢的話先快取 `~\AppData\Local\ms-playwright`，那比改成每日排程
+划算；每日排程的代價是壞掉的畫面最久要一天才會被發現。
 
 打包與 Release 也還沒進 CI：`bin/`（llama.cpp ＋ CUDA DLL，約 667 MB）沒進版控，
 CI 拿不到它就產不出完整的包。要做的話得先決定「從上游下載哪個版本」或「發精簡包」，
