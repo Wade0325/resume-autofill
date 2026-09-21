@@ -327,7 +327,18 @@ cd frontend; npm install; npm run dev
   **開發時不要用這個網址**：它給的是 `frontend/dist` 裡上次 build 的靜態檔，沒有熱更新，
   改了原始碼也不會變。開發一律用 Vite 的 5177。
 - `--reload` 是整個行程重啟；資料都在 SQLite 與檔案裡所以無影響，正式啟動不要帶。
-- llama-server 的 `--ctx-size 16384` 不是隨便訂的：整份文件＋輸出，8192 會在生成中被截斷。
+- llama-server 的 `--ctx-size 16384` 不是隨便訂的。需求由**拆不開的那一次呼叫**決定：
+  勾選題那一輪必須附上整份示意圖（只附題目那一頁時真建築連跑兩輪都少一格）。
+  用 `/tokenize` 量過各成分——示意圖每張 1300、個人資料每項約 16，配上三個夾子
+  （示意圖最多 `MAX_PAGES=4` 張、勾選題一批 `BOX_BATCH=8` 題、位置一批 `BATCH=16` 個），
+  需求是**有天花板的**：表格再大都不會超過約 11600（很厚的履歷配 4 頁表格）。
+  三份考題實際量到的峰值 7637，16384 有約兩倍餘裕。
+
+  所以**更大的 ctx 買不到「能處理更大的表格」**，只買到「配對那一串少重開幾次」。
+  裝不下的機器用 `RESUME_AUTOFILL_LLM_CTX` 調低，但低於 8200 就是有些表格直接送不出去。
+  模型起來之後 `model_manager._check_context()` 會讀 `/props` 的實際 `n_ctx` 來判斷——
+  讀伺服器而不是看設定值，因為 llama.cpp 會往下夾，使用者也可能自己啟動 server。
+
   `--temp 0` 讓判斷可重現；`--reasoning off` 關掉 Qwen 的 thinking 模式。
 - `--n-gpu-layers 999`：整顆模型都放上 GPU。中間一度改成不指定、讓 llama.cpp 自己看
   剩多少 VRAM 決定，因為 log 會少一行 `n_gpu_layers already set by user to 999, abort`。
