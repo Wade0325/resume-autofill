@@ -993,25 +993,40 @@ def ask(batch: List[Slot], fields: Dict[str, str], pages: Pages,
     #
     # attached 收齊這一次附了什麼，交給 chat.ask 在問成之後才記帳：這裡到 ask 之間
     # 要是出了事，這些就不算附過，下一批會重新附上
-    chat.start_over_if_long()
-    attached: List[str] = []
-    user: List[Dict[str, Any]] = []
-    if not chat.seen("fields"):
-        attached.append("fields")
-        user.append({"type": "text", "text": (
-            "個人資料（項目代碼：值）：\n"
-            + "\n".join(f"- {k}{_label(k)}：{v[:60]}" for k, v in fields.items()))})
-    fresh = [i for i in pages.for_addrs({s.addr for s in batch}) if not chat.seen(f"page{i}")]
-    attached += [f"page{i}" for i in fresh]
-    user += pages.parts(fresh)
-    # 已經用掉的資料排在最後（放前面會把提示快取的共同前綴打斷）。沒有這一段的話，
-    # 模型看不到別批的決定：五個問答題配七項回答，每一批都從頭挑一次就會互相搶
-    done = ("\n\n已經填在別的位置的資料項（不要再挑，除非這一格真的也要填同一項）：\n"
-            + "、".join(sorted(set(used.values()))) if used else "")
-    user.append({"type": "text", "text": "這一批要判斷的位置：\n" + "\n".join(
-        f"  {sid}｜{_describe(s)}" for sid, s in zip(ids, batch)) + done})
+    def compose() -> Tuple[List[Dict[str, Any]], List[str]]:
+        attached: List[str] = []
+        user: List[Dict[str, Any]] = []
+        if not chat.seen("fields"):
+            attached.append("fields")
+            user.append({"type": "text", "text": (
+                "個人資料（項目代碼：值）：\n"
+                + "\n".join(f"- {k}{_label(k)}：{v[:60]}" for k, v in fields.items()))})
+        fresh = [i for i in pages.for_addrs({s.addr for s in batch})
+                 if not chat.seen(f"page{i}")]
+        attached += [f"page{i}" for i in fresh]
+        user += pages.parts(fresh)
+        # 已經用掉的資料排在最後（放前面會把提示快取的共同前綴打斷）。沒有這一段的話，
+        # 模型看不到別批的決定：五個問答題配七項回答，每一批都從頭挑一次就會互相搶
+        done = ("\n\n已經填在別的位置的資料項（不要再挑，除非這一格真的也要填同一項）：\n"
+                + "、".join(sorted(set(used.values()))) if used else "")
+        user.append({"type": "text", "text": "這一批要判斷的位置：\n" + "\n".join(
+            f"  {sid}｜{_describe(s)}" for sid, s in zip(ids, batch)) + done})
+        return user, attached
 
-    data = chat.ask(user, schema, label=f"配對:{len(ids)}處", attached=attached)
+    user, attached = compose()
+    if chat.start_over_if_long(user):       # 接上去會超過上下文，重開的那一串要重新附上
+        user, attached = compose()
+    label = f"配對:{len(ids)}處"
+    try:
+        data = chat.ask(user, schema, label=label, attached=attached)
+    except llm.LlmContextFull:
+        # 估的還是不夠、真的撞到了。chat 已經整串重開（見 Chat.ask），這一批在新的一串上
+        # 再問一次——不問的話，這一批最多 16 格只能指望補漏。這一次本來就附著個人資料
+        # 的話，表示本來就是新的一串，重開也一樣塞不下
+        if "fields" in attached:
+            raise
+        user, attached = compose()
+        data = chat.ask(user, schema, label=label + "（重開後重問）", attached=attached)
     back = dict(zip(ids, batch))
     return {back[sid].id: key for sid, key in data.items()
             if sid in back and key in fields}

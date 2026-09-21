@@ -339,6 +339,13 @@ cd frontend; npm install; npm run dev
   模型起來之後 `model_manager._check_context()` 會讀 `/props` 的實際 `n_ctx` 來判斷——
   讀伺服器而不是看設定值，因為 llama.cpp 會往下夾，使用者也可能自己啟動 server。
 
+  配對那一串什麼時候重開也看同一個 `n_ctx`（`llm.Chat.start_over_if_long`）：對話長度用
+  伺服器回報的用量（`usage.prompt_tokens` 是整段提示，快取命中的前綴也算），接上這一批
+  會超過就先重開。真的撞到了（HTTP 400 `exceed_context_size_error`，或回答寫到一半
+  `finish_reason=length`）就整串重開，那一批在新的一串上重問一次。以前門檻寫死 11000、
+  長度用估的，上下文調小時安全閥永遠不開，撞到之後又原樣退回——4 頁的長表格在 8200 下，
+  配對 25 批裡連續失敗 20 批。
+
   `--temp 0` 讓判斷可重現；`--reasoning off` 關掉 Qwen 的 thinking 模式。
 - `--n-gpu-layers 999`：整顆模型都放上 GPU。中間一度改成不指定、讓 llama.cpp 自己看
   剩多少 VRAM 決定，因為 log 會少一行 `n_gpu_layers already set by user to 999, abort`。
