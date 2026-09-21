@@ -15,6 +15,7 @@ llama-server 的提示快取，但也因此多了兩種以前不存在的失敗�
 from __future__ import annotations
 
 import logging
+from contextlib import nullcontext
 
 import pytest
 
@@ -281,6 +282,66 @@ def test_用量是整段提示加回答(monkeypatch):
 def test_沒回報用量就是零(monkeypatch):
     _server(monkeypatch, 200, _reply('{"a": "甲"}'))
     assert _call()[2] == 0
+
+
+# ---------------------------------------------------------------------------
+# issue #6：接著問的時候，拿來判斷有沒有退步的數字要算整串，不能只看最後一則
+# ---------------------------------------------------------------------------
+
+# 第二批：個人資料與兩張示意圖在第一輪，這一輪只接了三個字、沒有重附圖
+_CHAINED = [
+    {"role": "system", "content": "系" * 600},
+    {"role": "user", "content": [{"type": "text", "text": "個人資料" * 50}, _PAGE, _PAGE]},
+    {"role": "assistant", "content": "{}"},
+    {"role": "user", "content": [{"type": "text", "text": "第二批"}]},
+]
+_CHAINED_CHARS = 600 + 200 + 2 + 3
+
+
+def test_log寫的是整串的長度與圖片(monkeypatch, caplog):
+    """只看最後一則的話 log 印「圖片=0」，分不出是正確地沒有重附，還是圖片全掉了。"""
+    _server(monkeypatch, 200, _reply('{"a": "甲"}', usage={
+        "prompt_tokens": 5000, "completion_tokens": 7}))
+    with caplog.at_level(logging.INFO, logger="backend.core.llm"):
+        llm._call(HOST, _CHAINED, {}, "local", "配對")
+
+    line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("模型呼叫"))
+    assert f"提示={_CHAINED_CHARS}字" in line
+    assert "圖片=2（這一輪新附 3字、0張）" in line
+    assert "第2輪" in line and "tokens=5000" in line
+
+
+def test_截斷時說的是整段提示的長度(monkeypatch):
+    """以前只算最後一則：實際送出一萬多 token，訊息卻說提示只有幾百——偏偏在「累積的
+    對話就是原因」的時候。伺服器有報就用伺服器算的。"""
+    _server(monkeypatch, 200, _reply('{"a": "天', "length",
+                                     {"prompt_tokens": 16284, "completion_tokens": 100}))
+    with pytest.raises(llm.LlmContextFull, match="約 16284 tokens"):
+        llm._call(HOST, _CHAINED, {}, "local", "配對")
+
+
+def test_截斷時伺服器沒報就用整串的字數估(monkeypatch):
+    _server(monkeypatch, 200, _reply('{"a": "天', "length"))
+    with pytest.raises(llm.LlmContextFull, match=f"約 {_CHAINED_CHARS // 2} tokens"):
+        llm._call(HOST, _CHAINED, {}, "local", "配對")
+
+
+def test_langfuse記整串的圖片與這一輪新附的(monkeypatch):
+    seen = {}
+
+    class _Generation:
+        def update(self, **kw):
+            pass
+
+    class _Tracer:
+        def start_as_current_generation(self, **kw):
+            seen.update(kw["metadata"])
+            return nullcontext(_Generation())
+
+    monkeypatch.setattr(llm, "_tracer", lambda: _Tracer())
+    _server(monkeypatch, 200, _reply('{"a": "甲"}'))
+    llm._call(HOST, _CHAINED, {}, "local", "配對")
+    assert seen["images"] == 2 and seen["images_new"] == 0
 
 
 # ---------------------------------------------------------------------------
