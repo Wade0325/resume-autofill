@@ -89,9 +89,10 @@ def test_問不到就不判斷(monkeypatch, caplog):
 
 
 def test_門檻蓋得住實測的最壞情況():
-    """三份考題實際峰值 7637；很厚的履歷配 4 頁表格推算約 11600。
+    """4 頁的長表格，勾選題那一次實測 9234（現在的履歷），再加回答約 300；
+    很厚的履歷配 4 頁表格推算約 12800（實測工作經歷等各多兩三倍的是 12148＋回答）。
 
-    改這兩個常數的人要一起改上面那段推導——數字是量出來的，不是抓的。
+    改這兩個常數的人要一起改 model_manager 那段推導——數字是量出來的，不是抓的。
     """
-    assert model_manager.CTX_FLOOR >= 7637
-    assert model_manager.CTX_COMFORTABLE >= 11600
+    assert model_manager.CTX_FLOOR >= 9234 + 300
+    assert model_manager.CTX_COMFORTABLE >= 12800
