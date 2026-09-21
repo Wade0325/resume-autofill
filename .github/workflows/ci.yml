@@ -1,8 +1,7 @@
-# 每次 push 與 PR 跑：Python 的 lint＋測試、前端的型別檢查＋build。
+# 每次 push 與 PR 跑：Python 的 lint＋測試、前端的型別檢查＋build、瀏覽器那一組。
 #
 # 測試不需要顯卡也不需要模型——要模型判斷的地方都換成假的，所以 runner 上跑得完。
-# 瀏覽器那一組（pytest -m browser）刻意沒放進來：要另外裝 chromium、還要先 build 前端，
-# 一次多三四分鐘。等這兩個 job 穩定之後再考慮加，或改成每日跑。
+# 三個 job 是平行的，總時間看最慢的那個（瀏覽器那個約四到五分鐘），不是相加。
 name: CI
 
 on:
@@ -66,3 +65,56 @@ jobs:
       - name: build
         # package.json 的 build 是 `tsc && vite build`，型別檢查已經包含在裡面
         run: npm run build
+
+  browser:
+    # 也跑 Windows：這一組會真的起一個 uvicorn 把 frontend/dist serve 出來再用 chromium 連上去，
+    # 測的就是使用者面前那一套。比另外兩個 job 慢，但三個是平行跑的。
+    name: 瀏覽器測試（Windows）
+    runs-on: windows-latest
+    # 瀏覽器掛住的話不要讓它燒滿預設的六小時
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安裝 Python 相依
+        # playwright 已經在 test 這組裡（見 pyproject），不必另外裝
+        run: pip install -e ".[test]"
+
+      - name: 安裝前端相依
+        working-directory: frontend
+        run: npm ci
+
+      - name: build 前端
+        # dist 是後端 serve 的，沒 build 的話測試會整組跳過而不是失敗
+        working-directory: frontend
+        run: npm run build
+
+      - name: 裝 chromium
+        run: python -m playwright install chromium
+
+      - name: pytest -m browser
+        # 這一組缺 playwright／chromium／frontend/dist 時，conftest 是「跳過」不是「失敗」
+        # （見 tests/browser/conftest.py）——沒人擋的話 CI 會綠得很安心卻一項都沒測到。
+        # 三種缺件都會在 -rs 的摘要裡留下 skipped，所以攔這個字就夠，
+        # 不必自己再寫一套「chromium 在不在」的判斷（那只會跟 conftest 各說各話）。
+        #
+        # run: 的內容會被寫成暫存 .ps1 再執行，所以裡面一律只寫 ASCII，
+        # 中文留在 name 與這些註解（同 CLAUDE.md 第四條的理由）。
+        run: |
+          pytest -m browser -rs --tb=short | Tee-Object -Variable log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (($log -join "`n") -match "skipped") {
+            Write-Host "::error::browser tests were skipped instead of run - see the reasons above"
+            exit 1
+          }

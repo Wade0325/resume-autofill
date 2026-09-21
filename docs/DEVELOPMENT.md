@@ -471,20 +471,30 @@ pytest -m ""                # 全部
 
 ### CI
 
-`.github/workflows/ci.yml`，push 到 main 與所有 PR 都會跑，兩個 job：
+`.github/workflows/ci.yml`，push 到 main 與所有 PR 都會跑，三個 job（平行，總時間看最慢的那個）：
 
 | job | runner | 做什麼 |
 |---|---|---|
 | python | windows-latest | `ruff check` ＋ `pytest`（109 項） |
 | frontend | ubuntu-latest | `npm ci` ＋ `npm run build`（`tsc` 在裡面，等於型別檢查） |
+| browser | windows-latest | `npm run build` ＋ `playwright install chromium` ＋ `pytest -m browser`（18 項） |
 
 **為什麼測試跑 Windows 而不是便宜的 Linux**：`backend/model_manager.py` 有幾處沒有防護的
 Windows 專屬呼叫（`subprocess.CREATE_NO_WINDOW`、`powershell`），產品本身也只出 Windows。
 這個倉庫是公開的，Actions 在所有 runner 上都免費，沒有理由為了省錢冒可攜性的險。
 前端沒有這個問題，所以跑 ubuntu，比較快。
 
-瀏覽器那一組**沒有**放進 CI：要另外裝 chromium、還要先 build 前端，一次多三四分鐘。
-等這兩個 job 穩定之後再考慮加，或改成每日跑。
+**瀏覽器那個 job 有一個陷阱要記得**：`tests/browser/conftest.py` 在缺 playwright、
+缺 chromium 或缺 `frontend/dist` 的時候是**跳過**而不是失敗——那是刻意的，沒裝這些的人
+才跑得完其他測試。但放到 CI 上，「跳過」會讓整個 job 顯示綠色卻一項都沒測到。
+所以那一步跑完會檢查摘要裡有沒有 `skipped`，有就當成失敗。改那一步的時候別把這段拿掉。
+
+檢查刻意只攔 `skipped` 這個字，不自己去判斷「chromium 在不在」：那會變成跟 conftest
+各寫一套解析邏輯，兩邊遲早不一致（已經踩過一次——`launch()` 預設要的瀏覽器版本
+跟 conftest 實際 fallback 用的那份不同）。
+
+它比另外兩個 job 慢（約四到五分鐘，多數花在裝 chromium 與 build 前端），但三個 job 是
+平行的，所以總時間沒有變成相加。哪天覺得太吵，再改成每日排程比較實際。
 
 打包與 Release 也還沒進 CI：`bin/`（llama.cpp ＋ CUDA DLL，約 667 MB）沒進版控，
 CI 拿不到它就產不出完整的包。要做的話得先決定「從上游下載哪個版本」或「發精簡包」，
