@@ -533,7 +533,35 @@ Resume_AutoFill\
 
 ---
 
-## 9. 待討論
+## 9. 網頁表單填寫（雛型）
+
+`tools/cake_fill.py` ＋ `tools/cake_web.py`：把「我的資料」填進求職平台的網頁表單，
+目前只做 Cake 個人檔案。
+
+**這是跟本地 docx 填寫並列的另一個功能，不是它的延伸。** 入口、模組、文件都分開，
+共用的只有「模型只挑一項資料」那一層。docx 那邊每一格有 `t0.r13.c1` 這種穩定位址，
+靠 `cells()` 列出、`apply_fills()` 寫回；網頁沒有格子，對應物是 DOM 節點，所以
+`cake_web.survey()` 相當於 `cells()`、`fill_one()` 相當於 `apply_fills()`。
+
+```powershell
+.venv\Scripts\python.exe tools\cake_fill.py login   # 開瀏覽器，你自己登入
+.venv\Scripts\python.exe tools\cake_fill.py recon   # 只讀：列出頁面上的欄位
+.venv\Scripts\python.exe tools\cake_fill.py fill    # 只填不存
+.venv\Scripts\python.exe tools\cake_fill.py apply   # 真的按下建立／儲存
+```
+
+**密碼不經過這支程式**：`login` 只是把瀏覽器開著等你自己登入，登入狀態留在專用的
+瀏覽器設定檔 `data/cake_profile/`（`/data/` 不進版控），不是你平常那個 Chrome 設定檔。
+身分證字號、家人、推薦人、緊急聯絡人、聲明事項一律不往平台送（`BLOCKED_KEYS`／
+`BLOCKED_ROOTS`）——表格沒問就不給，跟 `filler` 同一條原則。
+
+目前狀態：個人檔案只填不存跑通 8/8，`apply` 存得進去並會回頭確認頁面上看得到。
+兩個區塊存不進去，原因記在 `cake_web.py` 裡：證照要「發照日期」「到期日」，
+求職偏好要「求職階段」「希望職位」「幣別」，這 5 項 `app.db` 裡沒有，照「留白不猜」
+的原則就過不了必填檢查。另外「永久有效」不是真的 checkbox 而是樣式化元件，
+`page.check()` 會失敗，要點外層可點擊的元素。
+
+## 10. 待討論
 
 * 前後端 API 介面定義
 * CPU 推論的打包：CUDA 版 llama-server 在無 NVIDIA 驅動的機器上起不來，

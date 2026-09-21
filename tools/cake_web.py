@@ -128,7 +128,8 @@ LOCATE_JS = r"""
     const pool = poolFor(lab);
     if (!pool.length) return null;
     const gap = pool[0].getBoundingClientRect().top - lab.getBoundingClientRect().bottom;
-    return {lab, pool, score: (lab.tagName === 'LABEL' ? -1000 : 0) + (gap < -8 ? 1e6 : Math.abs(gap))};
+    const bias = lab.tagName === 'LABEL' ? -1000 : 0;
+    return {lab, pool, score: bias + (gap < -8 ? 1e6 : Math.abs(gap))};
   }).filter(Boolean);
   if (!scored.length) return null;
   scored.sort((a, b) => a.score - b.score);
@@ -219,7 +220,11 @@ def errors_on_page(page) -> List[str]:
       const clean = t => (t || '').replace(/\s+/g, ' ').trim();
       const out = new Set();
       document.querySelectorAll('[class*="error"],[class*="Error"],[class*="text-red"],[role=alert]')
-        .forEach(el => { if (vis(el)) { const t = clean(el.innerText); if (t && t.length < 60) out.add(t); } });
+        .forEach(el => {
+          if (!vis(el)) return;
+          const t = clean(el.innerText);
+          if (t && t.length < 60) out.add(t);
+        });
       return [...out].slice(0, 8);
     }""")
 
