@@ -1,5 +1,7 @@
 # Resume AutoFill — 履歷自動填寫
 
+[![CI](https://github.com/Wade0325/resume-autofill/actions/workflows/ci.yml/badge.svg)](https://github.com/Wade0325/resume-autofill/actions/workflows/ci.yml)
+
 **你的資料只填一次，之後任何公司的履歷表都自動填好。**
 
 收到 A 公司的人事資料表、B 公司的應徵登記表？格式都不一樣、欄位名稱五花八門？
