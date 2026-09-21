@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
-"""第三條填寫路線的雛型：把「我的資料」填進網頁表單（先以 Cake 個人檔案為對象）。
+"""網頁表單填寫的雛型：把「我的資料」填進網頁表單（先以 Cake 個人檔案為對象）。
 
-    .venv\\Scripts\\python.exe tools\\cake_fill.py login   # 開瀏覽器，你自己登入（狀態留在專用設定檔）
+    .venv\\Scripts\\python.exe tools\\cake_fill.py login   # 開瀏覽器，你自己登入
     .venv\\Scripts\\python.exe tools\\cake_fill.py recon   # 只讀：列出頁面上的欄位與可加開的區塊
     .venv\\Scripts\\python.exe tools\\cake_fill.py fill    # 只填不存
 
-跟前兩條路線的關係：docx 那邊每一格有 `t0.r13.c1` 這種穩定位址，靠 `cells()` 列出來、
-`apply_fills()` 寫回去。網頁沒有格子，對應物是 DOM 節點，所以這裡要做的是同一件事的
-另一個接頭——`survey()` 相當於 `cells()`，`fill_one()` 相當於 `apply_fills()`，
-中間「模型只挑一項資料」那一層將來可以原封不動接上。
+這是跟本地 docx 填寫**並列的另一個功能**，不是它的延伸：入口、模組、文件都分開，
+共用的只有「模型只挑一項資料」那一層邏輯。docx 那邊每一格有 `t0.r13.c1` 這種穩定
+位址，靠 `cells()` 列出來、`apply_fills()` 寫回去；網頁沒有格子，對應物是 DOM 節點，
+所以這裡是同一件事的另一個接頭——`survey()` 相當於 `cells()`，`fill_one()` 相當於
+`apply_fills()`，中間那一層將來可以原封不動接上。
 
 **密碼不經過這支程式**：`login` 只是把瀏覽器開著等你自己登入，登入狀態留在專用的
 瀏覽器設定檔 `data/cake_profile/`（`/data/` 不進版控），不是你平常那個 Chrome 設定檔。
@@ -28,9 +29,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 for stream in (sys.stdout, sys.stderr):
     stream.reconfigure(encoding="utf-8", errors="replace")
 
-from playwright.sync_api import sync_playwright        # noqa: E402
-
-import cake_web                                        # noqa: E402
+import cake_web  # noqa: E402
+from playwright.sync_api import sync_playwright  # noqa: E402
 
 PROFILE_URL = "https://www.cake.me/dashboard/profile"
 # 專用的瀏覽器設定檔（不是你平常那個 Chrome 設定檔）。登入一次就一直有效：
