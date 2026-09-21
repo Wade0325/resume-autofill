@@ -83,6 +83,37 @@ class TestDerived:
         fields = filler.fields_of({"basic": {"birthday": "不知道"}})
         assert "basic.age" not in fields
 
+    @pytest.mark.parametrize("start,end", [
+        ("2018年", "2020年"),            # 只有年份：DATE_RE 要年＋月
+        ("2018", "2020"),
+        ("民國107年", "民國109年"),
+        ("不知道", "還在職"),
+    ])
+    def test_year_only_dates_do_not_crash(self, start, end):
+        """使用者很自然會打「2018年」。以前 _months 回空字串，divmod 當場拋 TypeError，
+        而 fields_of 在分析與匯出都會跑——等於每一次都當掉。"""
+        fields = filler.fields_of({"experience": [
+            {"company": "虛構公司", "title": "虛構職稱", "start": start, "end": end}]})
+        assert "experience[0].tenure" not in fields    # 算不出來就不寫，不猜
+        assert "basic.total_tenure" not in fields
+
+    def test_total_tenure_skips_rather_than_undercounts(self):
+        """一筆算得出來、一筆算不出來時，總年資要空著而不是只算得出來的那一筆。
+
+        少算的年資會直接寫進履歷而且沒有任何提示，比空著更糟。
+        """
+        both = filler.fields_of({"experience": [
+            {"start": "2018年01月01日", "end": "2019年12月31日"},
+            {"start": "2020年", "end": "2021年"}]})
+        assert "basic.total_tenure" not in both
+
+    def test_row_without_dates_does_not_block_total(self):
+        """整筆沒寫起訖的不算數：那是沒有主張期間，不是算不出來。"""
+        fields = filler.fields_of({"experience": [
+            {"start": "2018年01月01日", "end": "2019年12月31日"},
+            {"company": "還沒填日期的那一筆"}]})
+        assert fields["basic.total_tenure"] == "2年"
+
 
 class TestGating:
     """表格提到才列給模型挑。"""

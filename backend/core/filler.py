@@ -693,10 +693,15 @@ def fields_of(profile: Dict[str, Any]) -> Dict[str, str]:
     if basic.get("military_start") and basic.get("military_end"):
         out["basic.military_period"] = (f"{_canon_date(str(basic['military_start']))}"
                                         f"~{_canon_date(str(basic['military_end']))}")
-    total = sum(_months(str(row.get("start") or ""), str(row.get("end") or ""))
-                for row in (profile.get("experience") or []) if isinstance(row, dict))
-    if total:
-        out["basic.total_tenure"] = _span(total)
+    # 總年資：有寫起訖卻算不出來的那一筆，不能當成 0 個月偷偷少算——那會寫出一個
+    # 比實際短的年資，比空著更糟（同 _tenure 的原則）。整筆沒寫起訖的不算數：
+    # 那是使用者沒有主張期間，不是算不出來
+    dated = [row for row in (profile.get("experience") or [])
+             if isinstance(row, dict)
+             and str(row.get("start") or "").strip() and str(row.get("end") or "").strip()]
+    spans = [_months(str(row["start"]), str(row["end"])) for row in dated]
+    if spans and all(spans):
+        out["basic.total_tenure"] = _span(sum(spans))
     return out
 
 
@@ -717,7 +722,14 @@ def _today() -> date:
 
 
 def _months(start: str, end: str) -> int:
-    """這段期間有幾個月，頭尾都算。認不出來或顛倒就回 0。"""
+    """這段期間有幾個月，頭尾都算。認不出來或顛倒就回 0。
+
+    認不出來的兩條路以前回的是空字串，跟宣告的 int 對不上：呼叫端一個做
+    `divmod(months, 12)`、一個做 `sum(...)`，使用者只要在工作經歷打「2018年」
+    這種只有年份的寫法（`DATE_RE` 要年＋月，而 `_canon_date` 刻意不替使用者猜
+    年份-only 的日期），`fields_of` 就整個拋 TypeError——而它在分析與匯出都會跑，
+    等於每一次都當掉。
+    """
     a = DATE_RE.search(start or "")
     if PRESENT_RE.match(end or ""):
         today = _today()
@@ -725,10 +737,10 @@ def _months(start: str, end: str) -> int:
     else:
         b = DATE_RE.search(end or "")
         if not b:
-            return ""
+            return 0
         end_year, end_month = int(b.group(1)), int(b.group(2))
     if not a:
-        return ""
+        return 0
     months = (end_year * 12 + end_month) - (int(a.group(1)) * 12 + int(a.group(2))) + 1
     return months if months > 0 else 0
 
