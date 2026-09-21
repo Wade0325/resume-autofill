@@ -13,7 +13,7 @@ import secrets
 import time
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import requests
 
@@ -143,7 +143,9 @@ def _call(host: str, messages: List[Dict[str, Any]], schema: Dict[str, Any],
           model: str, label: str) -> Tuple[Dict[str, Any], str]:
     payload = {
         "model": model,
-        "messages": messages,
+        # 複製一份：Chat 傳進來的就是它自己那串對話，回來之後馬上會接上 assistant 訊息。
+        # 直接放進 payload 的話，任何留著 payload 的人（vlm_proof 就是）手上那份會跟著變
+        "messages": list(messages),
         "temperature": 0,
         # Qwen3.5 預設開 thinking，會把輸出預算燒在推理上，
         # 常常還沒吐出 JSON 就撞到長度上限
@@ -251,12 +253,15 @@ class Chat:
         self.messages: List[Dict[str, Any]] = [{"role": "system", "content": system}]
         self._sent: set = set()
 
-    def first_time(self, key: str) -> bool:
-        """這串對話裡還沒附過這個東西（個人資料、某一張示意圖）。"""
-        if key in self._sent:
-            return False
-        self._sent.add(key)
-        return True
+    def seen(self, key: str) -> bool:
+        """這串對話裡已經附過這個東西了嗎（個人資料、某一張示意圖）。
+
+        純查詢，不記帳。附了什麼要等 `ask()` 真的問成才算數，由呼叫端用 `attached`
+        交代——呼叫端是先組好訊息、最後才呼叫 `ask`，中間那一次要是失敗了，
+        記帳早就寫下去的話，下一批會在沒有個人資料、沒有示意圖、連前文都沒有的
+        情況下被問，而文法照樣逼模型從欄位清單裡挑一個，猜出來的值會一路寫進輸出。
+        """
+        return key in self._sent
 
     def tokens(self) -> int:
         """粗估這串對話有多少 token。文字算半個字一個 token，圖片按實測抓 1300。"""
@@ -274,24 +279,25 @@ class Chat:
         """對話長到快撞上下文就重開一串。
 
         接著問省的是提示快取，但代價是提示會一直長。撞到上限的後果（輸出被截斷）
-        比多花一次冷啟動嚴重得多，所以寧可重來。重開之後 `first_time` 會全部重新
-        成立，個人資料與示意圖會再附一次。
+        比多花一次冷啟動嚴重得多，所以寧可重來。重開之後 `seen` 會全部回到 False，
+        個人資料與示意圖會再附一次。
         """
         if self.tokens() > limit:
             log.info("對話已累積約 %d tokens，重開一串", self.tokens())
             del self.messages[1:]
             self._sent.clear()
 
-    def ask(self, user: UserContent, schema: Dict[str, Any], label: str = "") -> Dict[str, Any]:
-        keep = set(self._sent)
+    def ask(self, user: UserContent, schema: Dict[str, Any], label: str = "",
+            attached: Iterable[str] = ()) -> Dict[str, Any]:
+        """問這一批。`attached`＝這一次附上了什麼的代號，問成了才記下來。"""
         self.messages.append({"role": "user", "content": user})
         try:
             data, raw = _call(self.host, self.messages, schema, self.model, label)
         except Exception:
-            # 這一次沒問成：把半截的 user 收回，附過什麼也一併還原，
-            # 不然下一批會接在一個沒有回答的問題後面，而且再也不會附上示意圖
+            # 這一次沒問成：把半截的 user 收回，不然下一批會接在一個沒有回答的
+            # 問題後面。`attached` 還沒記進 _sent，所以下一批會重新附上示意圖
             self.messages.pop()
-            self._sent = keep
             raise
         self.messages.append({"role": "assistant", "content": raw})
+        self._sent.update(attached)
         return data
