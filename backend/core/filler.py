@@ -16,7 +16,7 @@ r"""空白履歷表 ＋ 個人資料（app.db 那份 JSON）→ 填好的履歷�
      列首印著學位的照學位放、有序號欄的照序號、都沒有才由上而下
   4. 其餘位置分批問模型：這裡該填哪一項資料（挑不到就 __無__）。答案被 JSON Schema
      約束成只能挑既有的項目代碼，模型編不出不存在的資料
-  5. 補漏：還空著的位置，只拿名稱相近、還沒用到的幾項資料再問一次
+  5. 補漏：還空著的位置，只拿名稱相近、還沒用到的幾項資料再問一次（一次塞不下才切開）
   6. 過濾與去重：放錯地方的配對擋掉（詞對不上、表格沒提到的別人的資料、選項值
      離開了題目），同一項資料在同一張表只留欄名最像的那一格
   7. 字面對不上的勾選題（資料「無」、表格印「□否」）交給模型判斷意思；
@@ -1948,6 +1948,14 @@ def recall(slots: List[Slot], chosen: Dict[str, str], fields: Dict[str, str],
     反過來問「這幾十項資料各該去哪」也試過：9B 模型把五十幾項全塞進同一個位置。
     改成每個空位置只列出跟它有共同詞的幾項未用資料——選項少、每一項都跟那一格
     沾得上邊，是小得多的一道題。
+
+    一次問完；伺服器說塞不下（`LlmContextFull`）才對半切開各自再問（`_recall_fitting`）。
+    以前一律一次問：空格最多的時候（配對那一輪失敗、表格又長），4 頁的長表格一次要問
+    89 格、提示 13175 token，超過上下文就整輪作廢。但也不能一開始就切——這是一道配對題，
+    哪一項放哪一格要跟其他空格比才選得準。實測配對那一輪整輪失敗、補漏要接手 21～32 格
+    時，一次問的三份考題對 168 格、錯 3 格；固定每 8 格一批反而錯 9 格：緊急聯絡人的電話
+    填成本人的手機，同一項「免役原因」被 9 個位置挑中。所以塞得下就照舊一次問完，
+    送出去的東西跟以前一字不差。
     """
     placed = _placed(slots, chosen, fields)
     left = [k for k in fields if k not in placed]
@@ -1967,7 +1975,44 @@ def recall(slots: List[Slot], chosen: Dict[str, str], fields: Dict[str, str],
             todo.append((s, cands))
     if not todo:
         return {}
+    return _recall_fitting(todo, fields, pages, host, model)
 
+
+def _recall_fitting(todo: List[Tuple[Slot, List[str]]], fields: Dict[str, str],
+                    pages: Pages, host: str, model: str) -> Dict[str, str]:
+    """一次問完；塞不下才切成兩段各自再問，切在格子之間，還塞不下就再切。
+
+    只有「上下文不夠」才切：逾時、服務出錯的話切了也一樣，照舊交給 analyze 記一筆。
+    切開之後其中一段失敗，另一段照收。
+    """
+    try:
+        return _recall_batch(todo, fields, pages, host, model)
+    except llm.LlmContextFull as e:
+        if len(todo) == 1:
+            log.warning("補漏：%s 一格也塞不下，略過：%s", todo[0][0].id, e)
+            return {}
+    cut = _halve(todo)
+    log.info("補漏 %d 格一次塞不下，切成 %d＋%d 格再問", len(todo), cut, len(todo) - cut)
+    out: Dict[str, str] = {}
+    for part in (todo[:cut], todo[cut:]):
+        try:
+            out.update(_recall_fitting(part, fields, pages, host, model))
+        except llm.LlmError as e:
+            log.warning("補漏有一段問失敗：%s", e)
+    return out
+
+
+def _halve(todo: List[Tuple[Slot, List[str]]]) -> int:
+    """對半切的那一刀：離中間最近、又不會把同一格拆開的位置——「優點：」「缺點：」
+    拆到兩邊，模型看不到彼此就容易錯位。整段都在同一格就從中間切。"""
+    mid = len(todo) // 2
+    cuts = [i for i in range(1, len(todo)) if todo[i - 1][0].addr != todo[i][0].addr]
+    return min(cuts, key=lambda i: abs(i - mid)) if cuts else mid
+
+
+def _recall_batch(todo: List[Tuple[Slot, List[str]]], fields: Dict[str, str],
+                  pages: Pages, host: str, model: str) -> Dict[str, str]:
+    """問一批空格：每格從候選裡挑一項，並判斷是不是真的在回答那一格。"""
     ids = [f"s{i}" for i in range(1, len(todo) + 1)]
     # 先挑再判斷「是不是真的在回答那一格」：只挑的話，模型會因為兩邊都有「公司」
     # 就把推薦人的公司填進「您對本公司的了解」——字面對得上，問的卻不是同一家公司
