@@ -45,7 +45,7 @@ UNCHECK_MAP = {"■": "□", "☑": "☐", "◼": "◻"}
 
 def _write_into_cell(grid: List[List[Any]], row: int, col: int,
                      text: str, highlight: bool) -> bool:
-    """整格換成 text（第一段）。格子裡的照片、勾選符號不會被一起清掉。"""
+    """整格換成 text（第一段）。格子裡的圖片、勾選符號不會被一起清掉。"""
     if row >= len(grid) or col >= len(grid[row]):
         return False
     cell = grid[row][col]

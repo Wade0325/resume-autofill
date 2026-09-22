@@ -213,10 +213,7 @@ PDF 取字一定要 NFKC——104 的字型把中文對映到康熙部首區，�
     寫入路徑、內容一樣——黃底是給人核對用的，印出來交出去不該帶著。
   - 收尾掛在 `afterprint`，另外補一個 60 秒的保險：Safari 不一定發這個事件。
 
-- **大頭照**存成 `data/photo.jpg`（不進資料庫：圖片放 JSON 會讓每次讀寫都拖著幾百 KB），
-  寫完文字之後由 `core/photo.py` 貼進照片格（格子裡印著「照片」「脫帽照」那類字）。
-  照片接在該格最後一段後面換行放，不另外開一段——完整性檢查是段落對段落比的，多一段就整份對不上；
-  新的 run 沿用同段的字型設定，否則會被算成「沒有字型的 run」。
+- **大頭照不需要**：不存也不填。
 - **匯入**反過來：已有值的欄位**預設不勾選**，避免上傳一份舊履歷把維護好的資料蓋掉。
   多筆資料（學歷、經歷…）先依名稱找「我的資料」裡的那一筆（`service._entry_targets`）：
   學校、公司名稱不計簡稱、全半形、臺／台與公司後綴；名稱一樣但學位程度或到職年不同算兩筆
@@ -505,9 +502,9 @@ pytest -m ""                # 全部
 
 | job | runner | 做什麼 |
 |---|---|---|
-| python | windows-latest | `ruff check` ＋ `pytest`（109 項） |
+| python | windows-latest | `ruff check` ＋ `pytest`（156 項） |
 | frontend | ubuntu-latest | `npm ci` ＋ `npm run build`（`tsc` 在裡面，等於型別檢查） |
-| browser | windows-latest | `npm run build` ＋ `playwright install chromium` ＋ `pytest -m browser`（18 項） |
+| browser | windows-latest | `npm run build` ＋ `playwright install chromium` ＋ `pytest -m browser`（17 項） |
 
 **為什麼測試跑 Windows 而不是便宜的 Linux**：`backend/model_manager.py` 有幾處沒有防護的
 Windows 專屬呼叫（`subprocess.CREATE_NO_WINDOW`、`powershell`），產品本身也只出 Windows。

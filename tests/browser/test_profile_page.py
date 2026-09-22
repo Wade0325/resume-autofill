@@ -1,22 +1,9 @@
-"""我的資料頁：大頭照、新增的主題分頁、學過的格式清單。"""
+"""我的資料頁：新增的主題分頁、學過的格式清單。"""
 from __future__ import annotations
 
-import io
-
 import pytest
-from PIL import Image
 
 pytestmark = pytest.mark.browser
-
-
-def fake_photo() -> bytes:
-    img = Image.new("RGB", (600, 800), (200, 190, 180))
-    for x in range(0, 600, 40):
-        for y in range(0, 800, 40):
-            img.putpixel((x, y), (60, 60, 60))
-    buf = io.BytesIO()
-    img.save(buf, "PNG")
-    return buf.getvalue()
 
 
 @pytest.fixture
@@ -44,35 +31,8 @@ class TestSections:
         """年齡是算出來的，不該讓人自己填——存著的去年填今年就錯了。"""
         profile_page.get_by_text("基本資料", exact=True).last.click()
         body = profile_page.inner_text("body")
-        assert "大頭照" in body        # 基本資料頁確實開起來了
+        assert "身分證字號" in body    # 基本資料頁確實開起來了
         assert profile_page.get_by_label("年齡").count() == 0
-
-
-class TestPhoto:
-    def test_upload_show_and_remove(self, profile_page, live_server, tmp_path):
-        base, _home = live_server
-        profile_page.get_by_text("基本資料", exact=True).last.click()
-        assert "還沒有照片" in profile_page.inner_text("body")
-
-        path = tmp_path / "me.png"
-        path.write_bytes(fake_photo())
-        profile_page.set_input_files("input[accept*='image']", str(path))
-
-        # 存進後端了才算數，不是只在畫面上預覽
-        for _ in range(60):
-            if profile_page.request.get(base + "/api/profile/photo").status == 200:
-                break
-            profile_page.wait_for_timeout(250)
-        assert profile_page.request.get(base + "/api/profile/photo").status == 200
-        assert "換一張" in profile_page.inner_text("body")
-
-        profile_page.once("dialog", lambda d: d.accept())
-        profile_page.get_by_role("button", name="移除").click()
-        for _ in range(60):
-            if profile_page.request.get(base + "/api/profile/photo").status == 404:
-                break
-            profile_page.wait_for_timeout(250)
-        assert profile_page.request.get(base + "/api/profile/photo").status == 404
 
 
 class TestJobHistory:

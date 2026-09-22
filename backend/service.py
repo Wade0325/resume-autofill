@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import actions, config, db, model_manager, profiles
-from .core import convert, document, filler, llm, photo, planner, reader, writer
+from .core import convert, document, filler, llm, planner, reader, writer
 from .core.document import Slot
 from .core.schema import BY_KEY, PER_JOB_LABELS
 from .schemas import ImportPreviewOut, ImportRow, PlanItem, PlanOut, PlanStats
@@ -270,50 +270,6 @@ def _vlm_anchors(slots: List[Any], decisions: Dict[str, planner.Decision],
 def apply_values(job: Dict[str, Any]) -> Dict[str, str]:
     """這份工作的「這次應徵」：{"job.title": "資深工程師"}。"""
     return {k: str(v) for k, v in (job.get("apply") or {}).items() if str(v).strip()}
-
-
-PHOTO_NAME = "photo.jpg"
-
-
-def photo_path() -> Path:
-    """大頭照存在資料夾裡（不是資料庫）：圖片放進 JSON 只會讓每次讀寫都拖著幾百 KB。"""
-    return config.HOME / PHOTO_NAME
-
-
-def save_photo(content: bytes) -> None:
-    """存大頭照：一律轉成 JPEG——順手丟掉 EXIF（手機拍的照片帶著機型與定位），
-    太大的縮到 1200 px，履歷上的照片格才幾公分寬。"""
-    from PIL import Image, ImageOps
-    try:
-        img = Image.open(io.BytesIO(content))
-        img = ImageOps.exif_transpose(img)      # 直的照片躺下來就是這裡沒處理
-        img = img.convert("RGB")
-        img.thumbnail((1200, 1200))
-        img.save(photo_path(), "JPEG", quality=92)
-    except Exception as e:
-        raise ValueError("這個檔案不是圖片，或是格式不支援") from e
-    log.info("大頭照已更新 %d×%d", *img.size)
-    actions.record("更新大頭照成功")
-
-
-def delete_photo() -> bool:
-    if not photo_path().exists():
-        return False
-    photo_path().unlink()
-    log.info("大頭照已刪除")
-    actions.record("刪除大頭照成功")
-    return True
-
-
-def _paste_photo(path: Path) -> int:
-    """成品與預覽都貼：有照片格就貼，沒有就什麼都不做。"""
-    if not photo_path().exists():
-        return 0
-    try:
-        return photo.insert(path, photo_path())
-    except Exception:
-        log.exception("貼照片失敗（其他內容照樣寫好了）")
-        return 0
 
 
 def typed_values(job: Dict[str, Any]) -> Dict[str, str]:
@@ -816,7 +772,6 @@ def preview_docx(job_id: str, which: str, highlight: bool = True) -> Optional[by
             slots, decisions = _restore(job)
             ops, _ = planner.build_plan(slots, profile, decisions, typed_values(job))
             writer.apply_ops(str(src), str(filled), ops, highlight=highlight)
-        _paste_photo(filled)        # 預覽也要看得到照片貼在哪一格
         return filled.read_bytes()
 
 
@@ -923,10 +878,8 @@ def write_output(job_id: str) -> Optional[Dict[str, Any]]:
         slots, decisions = _restore(job)
         ops, _ = planner.build_plan(slots, profile, decisions, typed_values(job))
         result = writer.apply_ops(str(input_path(job_id)), str(output_path(job_id)), ops)
-    pasted = _paste_photo(output_path(job_id))
-    log.info("寫檔完成 written=%d failed=%d 照片=%d格 耗時=%dms",
-             result["written"], result["failed"], pasted,
-             int((time.perf_counter() - t0) * 1000))
+    log.info("寫檔完成 written=%d failed=%d 耗時=%dms",
+             result["written"], result["failed"], int((time.perf_counter() - t0) * 1000))
     for f in result["fail"]:
         log.warning("寫入失敗 slot=%s error=%s", f.get("slot"), f.get("error"))
     if result["failed"]:

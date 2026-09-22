@@ -26,7 +26,7 @@
 ```bash
 pip install -e ".[test,lint]"
 ruff check backend tools tests
-pytest                    # 109 項，約 50 秒，不需要模型也不需要顯卡
+pytest                    # 156 項，約 50 秒，不需要模型也不需要顯卡
 pytest -m ""              # 加上瀏覽器那一組（要先 npm --prefix frontend run build）
 ```
 

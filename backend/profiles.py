@@ -4,7 +4,6 @@
 """
 from __future__ import annotations
 
-import base64
 import logging
 import re
 from datetime import datetime, timezone
@@ -125,14 +124,9 @@ def restore_version(version_id: int) -> Optional[Dict[str, Any]]:
 
 
 def export() -> Dict[str, Any]:
-    """備份檔。大頭照一起帶（base64）——少了它，換一台電腦還得自己補一次。"""
-    from . import service
-    out = {"format": FORMAT, "version": 1,
-           "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-           "profile": db.get_kv("profile") or {}}
-    if service.photo_path().exists():
-        out["photo"] = base64.b64encode(service.photo_path().read_bytes()).decode()
-    return out
+    return {"format": FORMAT, "version": 1,
+            "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "profile": db.get_kv("profile") or {}}
 
 
 def restore_file(payload: Any) -> Dict[str, Any]:
@@ -148,12 +142,5 @@ def restore_file(payload: Any) -> Dict[str, Any]:
     if why:
         raise ValueError(why)
     save(profile, "file")
-    # 備份檔裡有照片就一起還原；沒有的話保留目前這張，不要默默刪掉人家的
-    if ours and payload.get("photo"):
-        from . import service
-        try:
-            service.save_photo(base64.b64decode(payload["photo"]))
-        except Exception:
-            log.warning("備份檔裡的照片還原失敗，其他資料照樣還原了")
     actions.record("從檔案還原我的資料成功")
     return profile
