@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.webform import dom
 from backend.webform import session as session_mod
 from backend.webform.browser import Browser
 from backend.webform.cake import CakeSite
@@ -142,6 +143,8 @@ def test_等登入_讀清單_存進去(session, fake_cake):
     dumped = json.dumps(state, ensure_ascii=False)
     assert "A123456789" not in dumped and "虛構乙" not in dumped
     assert fake_cake.saved == []                                  # 讀清單不會存任何東西
+    # 使用者還盯著瀏覽器視窗：提示他回到程式那一頁
+    assert "請回到「履歷自動填寫」確認要補的資料" in session.browser.run(_banner(session.browser))
 
     session.run([
         {"id": "experience-1"},
@@ -169,6 +172,8 @@ def test_等登入_讀清單_存進去(session, fake_cake):
         "名稱": "TOEIC", "發照機構": "ETS 台灣", "發照日期": "2020 五月", "永久有效": True}
     assert len(fake_cake.saved) == 3                              # 被拒收的那筆沒有存
 
+    assert "請回到「履歷自動填寫」看結果" in session.browser.run(_banner(session.browser))
+
     # 存完重新讀：剛存進去的變成「已經有了」，被拒收的還在清單上
     items = {i["id"]: i for i in state["items"]}
     assert items["experience-1"]["exists"] and items["education-0"]["exists"]
@@ -192,6 +197,30 @@ def test_使用者關掉視窗(session):
     time.sleep(0.5)
     state = session.snapshot()
     assert state["browser_open"] is False and state["items"]       # 清單留著，重新讀取會再開
+
+
+def test_提示條不擋點擊也不算頁面文字(session):
+    """提示條剛好蓋在按鈕上也點得到；讀「那一區印著什麼」時也讀不到它。"""
+    hit, in_text, shown = session.browser.run(_under_banner(session.browser))
+    assert hit == 1 and in_text is False and shown is True
+
+
+async def _under_banner(browser):
+    page = await browser.page()
+    await page.set_content(
+        '<body style="margin:0"><button id="b" onclick="window.hit = 1" style="position:fixed;'
+        'top:60px;left:0;width:100vw;height:80px">新增</button></body>')
+    await dom.banner(page, "正在自動填寫，請不要操作這個視窗", "busy")
+    await page.click("#b", timeout=3000)
+    return await page.evaluate("""() => [window.hit,
+        document.body.innerText.includes('正在自動填寫'),
+        !!document.getElementById('resume-autofill-banner')]""")
+
+
+async def _banner(browser):
+    page = await browser.page()
+    return await page.evaluate(
+        "() => document.getElementById('resume-autofill-banner')?.textContent || ''")
 
 
 async def _login_cookie(s):

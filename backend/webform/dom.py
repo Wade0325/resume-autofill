@@ -148,6 +148,41 @@ ERRORS_JS = r"""() => {
 }"""
 
 
+# 瀏覽器視窗裡的提示條：告訴盯著那個視窗的使用者下一步做什麼。
+# - 掛在 <html> 底下、不是 <body>：讀「那一區印著什麼」用的是 body.innerText，不會把提示讀進去
+# - pointer-events:none：剛好蓋在「新增」按鈕上時，程式的點擊照樣穿過去
+# - 放在網站頂端導覽列下方的正中間，不遮導覽列，也避開右下角的客服按鈕
+BANNER_JS = r"""
+([text, tone]) => {
+  const id = 'resume-autofill-banner';
+  let el = document.getElementById(id);
+  if (!text) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = id;
+    document.documentElement.appendChild(el);
+  }
+  el.textContent = text;
+  el.style.cssText = [
+    'position:fixed', 'top:72px', 'left:50%', 'transform:translateX(-50%)',
+    'z-index:2147483647', 'pointer-events:none', 'max-width:90vw',
+    'padding:12px 22px', 'border-radius:999px', 'box-shadow:0 6px 24px rgba(0,0,0,.25)',
+    'font:600 16px/1.4 "Microsoft JhengHei","PingFang TC",sans-serif', 'color:#fff',
+    'background:' + (tone === 'busy' ? '#b45309' : '#047857'),
+  ].join(';');
+}
+"""
+
+
+async def banner(page: Any, text: str, tone: str = "done") -> None:
+    """在網站上方掛一條提示（text 空字串＝拿掉）。tone：done 綠色、busy 琥珀色。
+    頁面正在跳轉時會失敗，不要緊：流程的下一步會再掛一次。"""
+    try:
+        await page.evaluate(BANNER_JS, [text, tone])
+    except Exception:
+        pass
+
+
 async def locate(page: Any, label: str, index: int = 0) -> Optional[Dict[str, Any]]:
     return await page.evaluate(LOCATE_JS, [label, index])
 

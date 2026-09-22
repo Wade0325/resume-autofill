@@ -513,7 +513,7 @@ pytest -m ""                # 全部
 |---|---|---|
 | python | windows-latest | `ruff check` ＋ `pytest`（198 項） |
 | frontend | ubuntu-latest | `npm ci` ＋ `npm run build`（`tsc` 在裡面，等於型別檢查） |
-| browser | windows-latest | `npm run build` ＋ `playwright install chromium` ＋ `pytest -m browser`（25 項） |
+| browser | windows-latest | `npm run build` ＋ `playwright install chromium` ＋ `pytest -m browser`（26 項） |
 
 **為什麼測試跑 Windows 而不是便宜的 Linux**：`backend/model_manager.py` 有幾處沒有防護的
 Windows 專屬呼叫（`subprocess.CREATE_NO_WINDOW`、`powershell`），產品本身也只出 Windows。
@@ -648,6 +648,11 @@ Cake 的表單是固定的，每一區送哪幾項直接寫在程式裡。共用
   不會寫回我的資料。
 - **存完要回頭確認**：表單收起來不算數，要在那一區的列表裡看到這一筆才算。
   網站自己印了錯誤訊息就照它說的回報。
+- **瀏覽器視窗裡的提示條**（`dom.banner`）：登入後使用者多半還盯著那個視窗，不知道要回到程式
+  那一頁；存的時候也可能去動它。所以清單讀好時掛綠色的「請回到履歷自動填寫確認」，存的時候
+  每一筆掛琥珀色的「請不要操作這個視窗（第 N／M 筆）」。它掛在 `<html>` 底下而不是 `<body>`
+  （讀「那一區印著什麼」用 `body.innerText`，不會把提示讀進去），而且 `pointer-events:none`
+  （剛好蓋在「新增」按鈕上時程式的點擊照樣穿過去）。登入頁不掛：那可能是 Google 的頁面。
 - **log 不帶值**：只記工作代碼與原因。Playwright 的錯誤訊息可能夾著剛填進去的值，
   所以新增失敗時只記例外的型別，不記 traceback。
 

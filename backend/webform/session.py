@@ -21,6 +21,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from .. import actions
+from . import dom
 from .browser import Browser, BrowserError
 
 log = logging.getLogger(__name__)
@@ -196,6 +197,9 @@ class Session:
             return
         self._set(stage="ready", message="", items=items, notes=notes,
                   results=results or [], progress={"done": 0, "total": 0, "current": ""})
+        # 使用者這時多半還盯著瀏覽器視窗：告訴他下一步要回到程式那一頁
+        await dom.banner(page, "✓ 填完了，請回到「履歷自動填寫」看結果" if results else
+                         f"✓ 已登入 {self.site.label}，請回到「履歷自動填寫」確認要補的資料")
 
     async def _run(self, todo: List[Dict[str, Any]], save: bool) -> None:
         results: List[Dict[str, Any]] = []
@@ -204,6 +208,9 @@ class Session:
             page = await self.browser.page()
             for n, item in enumerate(todo):
                 self._progress(done=n, current=f"{item['section']}：{item['title']}")
+                # 每一筆都重掛一次：上一筆存完網站可能換過頁面，提示條就跟著不見了
+                await dom.banner(
+                    page, f"正在自動填寫，請不要操作這個視窗（第 {n + 1}／{len(todo)} 筆）", "busy")
                 try:
                     ok, why = await self.site.apply(page, item, save=save)
                 except Exception as e:
