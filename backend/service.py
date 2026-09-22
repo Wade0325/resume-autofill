@@ -11,14 +11,13 @@ import re
 import tempfile
 import threading
 import time
-import unicodedata
 import uuid
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import actions, config, db, model_manager, profiles
-from .core import convert, document, filler, llm, planner, reader, writer
+from .core import convert, document, filler, llm, names, planner, reader, writer
 from .core.document import Slot
 from .core.schema import BY_KEY, PER_JOB_LABELS
 from .schemas import ImportPreviewOut, ImportRow, PlanItem, PlanOut, PlanStats
@@ -1088,31 +1087,6 @@ _IDENTITY = {"education": ("school", ("degree", "start")),
              "family": ("name", ()),
              "reference": ("name", ())}
 _PEOPLE = {"family", "reference"}     # 人名要整個一樣：「王明」不是「王明德」
-_NAME_NOISE_RE = re.compile(r"股份有限公司|有限公司|\(股\)|[\s,.。、・·()\-]")
-# 學位只比程度：「學士」「大學」是同一級，「碩士」「研究所」也是
-_DEGREE_LEVELS = (("博士", "phd", "doctor"), ("碩士", "研究所", "master", "mba"),
-                  ("大學", "學士", "二技", "四技", "bachelor"), ("專科", "五專", "二專", "三專"),
-                  ("高中", "高職", "high school"), ("國中",))
-
-
-def _name_key(text: str) -> str:
-    """比對名稱用：全半形、大小寫、臺／台、公司後綴與標點都不算差別。"""
-    text = unicodedata.normalize("NFKC", text or "").lower().replace("臺", "台")
-    return _NAME_NOISE_RE.sub("", text)
-
-
-def _same_name(a: str, b: str, whole: bool = False) -> bool:
-    """公司、學校的簡稱算同一個（「台灣大學」「國立臺灣大學」）；人名 whole 要整個一樣。"""
-    x, y = _name_key(a), _name_key(b)
-    if len(x) < 2 or len(y) < 2:
-        return False
-    return x == y if whole else (x in y or y in x)
-
-
-def _degree_level(text: str) -> Optional[int]:
-    text = unicodedata.normalize("NFKC", text).lower()
-    return next((i for i, words in enumerate(_DEGREE_LEVELS)
-                 if any(w in text for w in words)), None)
 
 
 def _no_conflict(field: str, a: Any, b: Any) -> bool:
@@ -1125,7 +1099,7 @@ def _no_conflict(field: str, a: Any, b: Any) -> bool:
         ya, yb = re.search(r"\d{4}", a), re.search(r"\d{4}", b)
         return not (ya and yb) or ya.group() == yb.group()
     if field == "degree":
-        la, lb = _degree_level(a), _degree_level(b)
+        la, lb = names.degree_level(a), names.degree_level(b)
         return la is None or lb is None or la == lb
     return document.squash(a) == document.squash(b)
 
@@ -1141,7 +1115,7 @@ def _entry_targets(root: str, incoming: List[Any],
         name = str(item.get(name_field) or "") if name_field else ""
         hit = next((i for i, row in enumerate(existing)
                     if i not in taken and isinstance(row, dict)
-                    and _same_name(name, str(row.get(name_field) or ""), root in _PEOPLE)
+                    and names.same_name(name, str(row.get(name_field) or ""), root in _PEOPLE)
                     and all(_no_conflict(f, item.get(f), row.get(f)) for f in secondary)),
                    None) if name else None
         if hit is not None:
