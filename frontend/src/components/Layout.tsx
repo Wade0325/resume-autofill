@@ -10,11 +10,25 @@ export const TABS = [
 ]
 
 export default function Layout() {
+  // 版本問後端要：畫面上看到的一定是正在跑的那一版（回報問題時第一個要問的就是這個）
+  const [version, setVersion] = useState('')
+  useEffect(() => {
+    api
+      .health()
+      .then((h) => setVersion(h.version))
+      .catch(() => {})
+  }, [])
+
   return (
     <div className="min-h-screen">
       <header className="bg-white border-b border-slate-200">
         <div className="max-w-6xl mx-auto px-6 flex items-center gap-8">
-          <span className="font-semibold text-slate-900 py-4">履歷自動填寫</span>
+          <span className="font-semibold text-slate-900 py-4">
+            履歷自動填寫
+            {version && (
+              <span className="ml-2 text-xs font-normal text-slate-400">v{version}</span>
+            )}
+          </span>
           <nav className="flex gap-1 flex-1">
             {TABS.map((t) => (
               <NavLink

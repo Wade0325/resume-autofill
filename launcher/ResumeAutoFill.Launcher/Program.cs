@@ -169,10 +169,13 @@ internal static class Program
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("結束", null, (_, _) => Application.Exit());
 
+        // 圖示用 exe 自己的（csproj 的 ApplicationIcon），版本取 csproj 的 Version
+        var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "";
         using var tray = new NotifyIcon
         {
-            Icon = System.Drawing.SystemIcons.Application,
-            Text = "Resume AutoFill（雙擊開啟介面）",
+            Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath)
+                   ?? System.Drawing.SystemIcons.Application,
+            Text = $"Resume AutoFill {version}（雙擊開啟介面）",
             ContextMenuStrip = menu,
             Visible = true,
         };
