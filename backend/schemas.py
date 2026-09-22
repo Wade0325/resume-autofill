@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from . import __version__
+
 
 class FieldSpecOut(BaseModel):
     key: str
@@ -23,7 +25,8 @@ class LlmStatus(BaseModel):
 
 
 class HealthOut(BaseModel):
-    api: Literal["ok"] = "ok"
+    api: Literal["ok"] = "ok"          # 啟動器靠這個認出是自己的後端，別改
+    version: str = __version__
     db: bool
     llm: LlmStatus
 

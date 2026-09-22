@@ -237,6 +237,7 @@ function postJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 export const api = {
+  health: () => request<{ version: string }>('/health'),
   fields: () => request<FieldSpec[]>('/fields'),
 
   getEngine: () => request<EngineOut>('/engine'),

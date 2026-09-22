@@ -536,25 +536,56 @@ CI 拿不到它就產不出完整的包。要做的話得先決定「從上游�
 
 ```powershell
 .\scripts\build-package.ps1        # 組出 dist\Resume_AutoFill\
-.\scripts\build-package.ps1 -Zip   # 另壓成 zip
+.\scripts\build-package.ps1 -Zip   # 另壓成 dist\Resume_AutoFill-v<版本>.zip ＋ SHA256SUMS.txt
 .\scripts\build-package.ps1 -Quick # 跳過前端重建與 bin 複製（迭代用）
+.\scripts\build-package.ps1 -Bin D:\Resume_AutoFill\bin   # 在 worktree 裡打包時指向主目錄的 bin
 ```
 
 **不用 PyInstaller**：內嵌官方 embeddable Python＋site-packages＋原始碼，
 怎麼開發就怎麼跑——沒有隱藏相依收集的脆弱性，也沒有防毒誤判問題。
-embeddable 版本必須與開發用 Python 同 minor 版（二進位套件才相容）。
+embeddable 版本必須與開發用 Python 同 minor 版（二進位套件才相容），腳本會先檢查。
+
+**發出去的要跟測過的一樣**：
+- Python 套件照 `scripts/package-requirements.txt` 裝（`--no-deps --only-binary=:all:`）。
+  那份是執行期相依連同所有間接相依，版本取自跑過測試與研究迴圈的 `.venv`；
+  `tests/test_package.py` 檢查它涵蓋 pyproject 的每一項、而且符合版本下限
+- 前端用 `npm ci`，照 lock 檔裝
+- 內嵌 Python 的 zip 核對 SHA256 才用（快取裡的也一樣）
+- `bin\` 只帶 llama-server 要的檔案（白名單寫在腳本裡），缺一個就停；`bin\` 裡其他的
+  llama.cpp 工具與舊的空資料夾不帶。用 `llama-server --list-devices` 驗過白名單：
+  DLL 都載得起來、認得到顯示卡
+
+原生程式（npm、pip、dotnet、tar）一律經過 `Invoke-Native`，只看結束碼。PowerShell 5.1
+在輸出被重導時會把它們寫到 stderr 的警告當成錯誤、配上 `Stop` 就中斷；另外設
+`PYTHONUTF8=1`，不然舊版 pip 用 cp950 讀需求檔，碰到中文註解就炸（Microsoft Store 版
+Python 附的 pip 23.3.1 就是這樣）。
 
 產物結構：
 
 ```
 Resume_AutoFill\
-  ResumeAutoFill.exe    啟動器（launcher/，dotnet publish 單檔自足）
-  app\                  backend 原始碼＋frontend/dist＋runtime（內嵌 Python）
-  bin\                  llama-server.exe＋CUDA DLL（約 670 MB）
-  data\                 個人資料（SQLite、上傳暫存、日誌），首次啟動自動建立
-  models\ input\ output\
-  README.txt
+  ResumeAutoFill.exe          啟動器（launcher/，dotnet publish 單檔自足，帶版本與圖示）
+  app\                        backend 原始碼＋frontend/dist＋runtime（內嵌 Python）
+  bin\                        llama-server.exe 與它要的 DLL（含 CUDA 13 runtime，約 660 MB）
+  data\                       個人資料（SQLite、上傳暫存、日誌），一開始是空的
+  models\                     模型，由介面首次下載
+  README.txt  LICENSE.txt  THIRD-PARTY-NOTICES.txt
 ```
+
+`THIRD-PARTY-NOTICES.txt` 由 `tools/third_party_notices.py` 產生：Python 套件讀打包進去的
+site-packages，前端只列 source map 引用到的套件（package.json 裡大半是 Vite 外掛、Tailwind
+編譯器這類建置工具，不在成品裡），llama.cpp 與 .NET runtime 的授權全文存在 `scripts/licenses/`。
+
+### 發佈新版本
+
+1. 版本號改四處：`backend/__init__.py`（以它為準）、`pyproject.toml`、`frontend/package.json`
+   （連同 `package-lock.json` 頂端兩處）、啟動器 csproj 的 `<Version>`——`tests/test_version.py`
+   會擋住沒跟上的。`CHANGELOG.md` 加一節
+2. 走 PR、CI 全綠、合併；從合併後的 main 打包（exe 的產品版本會帶上 commit 編號）
+3. 冒煙測試：zip 解壓到**有中文與空格的路徑**、雙擊啟動器、畫面左上角版本正確、
+   模型啟動、實際填一份 `tools/make_sample.py` 產生的虛構表格並下載
+4. `git tag v<版本>`、推 tag，`gh release create` 上傳 zip 與 `SHA256SUMS.txt`
+5. 從 GitHub 把 zip 下載回來，比對 SHA256、解壓、再啟動一次
 
 模型不隨附（5.3 GB），由介面首次下載。啟動器以 `RESUME_AUTOFILL_ROOT`
 告訴後端根目錄在哪，models/、bin/ 都從它推導。
@@ -594,5 +625,8 @@ Resume_AutoFill\
 ## 10. 待討論
 
 * 前後端 API 介面定義
-* CPU 推論的打包：CUDA 版 llama-server 在無 NVIDIA 驅動的機器上起不來，
-  需同捆 CPU 版二進位並在啟動時偵測選用
+* ~~CPU 推論的打包：CUDA 版 llama-server 在無 NVIDIA 驅動的機器上起不來~~——那是舊版
+  llama.cpp（CUDA 靜態連結進 exe）的情況。現在隨附的 b10153 把 CUDA 後端做成執行時才載入的
+  `ggml-cuda.dll`，載入不了就只剩 CPU 後端。2026-09-22 驗過：把 `ggml-cuda.dll` 拿掉（跟沒有
+  驅動時一樣是 LoadLibrary 失敗），用產品的參數原樣啟動（`-ngl 999`、`--ctx-size 16384`、掛
+  視覺投影檔），9 秒起來、答得出來，log 裡沒有任何 CUDA。不必另外同捆 CPU 版

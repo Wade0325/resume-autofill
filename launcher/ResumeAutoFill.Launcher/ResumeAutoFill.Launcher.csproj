@@ -8,6 +8,12 @@
     <Nullable>enable</Nullable>
     <AssemblyName>ResumeAutoFill</AssemblyName>
     <RootNamespace>ResumeAutoFill.Launcher</RootNamespace>
+    <!-- 版本以 backend/__init__.py 為準，改版本時一起改（tests/test_version.py 會檢查） -->
+    <Version>0.1.0</Version>
+    <Product>Resume AutoFill</Product>
+    <Copyright>Copyright (c) 2026 Wade0325</Copyright>
+    <!-- 由 frontend/public/favicon.svg 產生：python tools/make_icon.py -->
+    <ApplicationIcon>app.ico</ApplicationIcon>
     <!-- 單檔自足：使用者機器不需要裝 .NET runtime -->
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>

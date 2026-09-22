@@ -31,18 +31,27 @@
 | 項目 | 需求 |
 |---|---|
 | 作業系統 | Windows 10 / 11（64 位元） |
-| 顯示卡 | **建議 NVIDIA、8 GB VRAM 以上**。無獨顯也能跑（CPU 推論），但一份表格的分析會從約一分鐘變成數十分鐘 |
-| 硬碟空間 | 約 8 GB（程式 + AI 模型） |
+| 顯示卡 | **建議 NVIDIA、8 GB VRAM 以上**，驅動程式要支援 CUDA 13（見下方）。無獨顯也能跑（CPU 推論），但一份表格的分析會從約一分鐘變成數十分鐘 |
+| 硬碟空間 | 約 7 GB（程式約 0.8 GB＋AI 模型約 6 GB） |
+| 網路 | 只有第一次下載 AI 模型時需要 |
+
+**確認顯示卡驅動**：在「命令提示字元」執行 `nvidia-smi`，右上角的「CUDA Version」是 13.0 以上即可；
+不到的話先到 NVIDIA 官網更新驅動程式。
 
 ---
 
 ## 安裝與啟動
 
-1. 到 [Releases](../../releases) 下載最新的 `Resume_AutoFill.zip`
+1. 到 [Releases](../../releases/latest) 下載最新版的 `Resume_AutoFill-v<版本>.zip`（例如 `Resume_AutoFill-v0.1.0.zip`）
 2. 解壓縮到任何位置（免安裝）
-3. 雙擊 **`ResumeAutoFill.exe`** — 瀏覽器會自動開啟操作介面
+3. 雙擊 **`ResumeAutoFill.exe`** — 瀏覽器會自動開啟操作介面。
+   第一次執行時 Windows 可能跳出「Windows 已保護您的電腦」：這是因為程式沒有數位簽章，
+   按「其他資訊」→「仍要執行」即可
 4. **首次使用**：點右上角「模型未啟動」→ 在 Qwen3.5-9B 按「下載」（約 6 GB，只需一次）→ 下載完按「切換」啟動，等 1～2 分鐘顯示「就緒」即可。
    之後每次開程式會自動把上次用的模型載回來，不必再按一次
+
+（選用）確認下載的檔案完整：在 PowerShell 執行 `Get-FileHash .\Resume_AutoFill-v0.1.0.zip`，
+跟 Release 頁上 `SHA256SUMS.txt` 的值比對，一樣就沒問題。
 
 之後每次使用都只要雙擊 `ResumeAutoFill.exe`。
 要結束程式：工作列右下角系統匣圖示 → 右鍵 → 結束。
@@ -186,7 +195,8 @@ AI 會把裡面的資料逐欄抽出來，
 推論引擎平常不用手動起——介面模型選單按「切換」時後端會自己拉起來。
 
 架構設計、AI 選型理由、處理流程與打包方式見 **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)**。
-打包發佈版：`.\scripts\build-package.ps1 -Zip`。
+打包發佈版：`.\scripts\build-package.ps1 -Zip`，產物是 `dist\Resume_AutoFill-v<版本>.zip` 與 `SHA256SUMS.txt`
+（發佈流程見 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 第 8 節）。改版本時更新 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
