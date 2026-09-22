@@ -589,7 +589,8 @@ site-packages，前端只列 source map 引用到的套件（package.json 裡大
    會擋住沒跟上的。`CHANGELOG.md` 加一節
 2. 走 PR、CI 全綠、合併；從合併後的 main 打包（exe 的產品版本會帶上 commit 編號）
 3. 冒煙測試：zip 解壓到**有中文與空格的路徑**、雙擊啟動器、畫面左上角版本正確、
-   模型啟動、實際填一份 `tools/make_sample.py` 產生的虛構表格並下載
+   模型啟動、實際填一份 `tools/make_sample.py` 產生的虛構表格並下載；網頁填寫按「開啟瀏覽器」
+   跳得出 Edge、停在 Cake 登入頁（內嵌 Python 帶的 Playwright 與 Node 都要動得起來）
 4. `git tag v<版本>`、推 tag，`gh release create` 上傳 zip 與 `SHA256SUMS.txt`
 5. 從 GitHub 把 zip 下載回來，比對 SHA256、解壓、再啟動一次
 
