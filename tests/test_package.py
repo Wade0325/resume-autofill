@@ -41,9 +41,10 @@ def test_打包的相依涵蓋pyproject而且符合版本下限():
 
 def test_ps1都存成UTF8加BOM():
     """PowerShell 5.1 讀沒有 BOM 的檔案會用 ANSI：中文全變亂碼，而且直接 ParserError。"""
-    # 用相對路徑判斷：worktree 本身就在 .claude/worktrees/ 底下
-    files = [p for p in ROOT.glob("**/*.ps1")
-             if not {"node_modules", ".claude", "dist", "build"} & set(p.relative_to(ROOT).parts)]
+    # 用相對路徑判斷：worktree 本身就在 .claude/worktrees/ 底下。
+    # .venv 裡是第三方套件自帶的（playwright 的 install_media_pack.ps1），不歸我們管
+    skip = {"node_modules", ".claude", ".venv", "dist", "build"}
+    files = [p for p in ROOT.glob("**/*.ps1") if not skip & set(p.relative_to(ROOT).parts)]
     assert files
     for p in files:
         assert p.read_bytes().startswith(b"\xef\xbb\xbf"), f"{p.relative_to(ROOT)} 沒有 BOM"
