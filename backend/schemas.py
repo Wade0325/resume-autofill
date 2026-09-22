@@ -185,3 +185,14 @@ class LogEntry(BaseModel):
 
 
 ProfileIn = Dict[str, Any]      # profile 結構由 core.schema 定義，這層不重複驗證
+
+
+class WebFormPick(BaseModel):
+    """清單上勾選的一筆，連同使用者在清單上改過的值。"""
+    id: str
+    values: Dict[str, str] = Field(default_factory=dict)
+    alts: Dict[str, bool] = Field(default_factory=dict)   # 「現任職位」「永久有效」勾不勾
+
+
+class WebFormRunIn(BaseModel):
+    items: List[WebFormPick]

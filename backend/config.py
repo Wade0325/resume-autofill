@@ -30,6 +30,8 @@ HOME = Path(os.environ.get("RESUME_AUTOFILL_HOME", _ROOT / "data"))
 DB_PATH = HOME / "app.db"
 JOBS_DIR = HOME / "jobs"
 LOG_DIR = HOME / "logs"
+# 網頁填寫的專用瀏覽器設定檔：登入狀態留在這裡，不碰使用者平常的瀏覽器
+BROWSER_DIR = HOME / "browser"
 
 API_HOST = os.environ.get("RESUME_AUTOFILL_API_HOST", "127.0.0.1")
 # 8000/8080 常被開發工具佔走（VS Code 就會），選冷門一點的預設值

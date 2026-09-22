@@ -146,6 +146,43 @@ export type ProfileVersion = {
   changed: number // 跟現在相比有幾個欄位不一樣
 }
 
+// ── 網頁填寫（把我的資料補進求職平台）──
+
+export type WebFormField = {
+  key: string
+  label: string
+  kind: 'text' | 'textarea' | 'select' | 'ym' | 'y' // ym＝年/月，y＝只有年
+  value: string
+  required: boolean
+  options?: string[]
+  alt?: string // 「現任職位」「永久有效」：勾了就不必填日期
+  alt_on?: boolean
+}
+
+export type WebFormItem = {
+  id: string
+  section: string
+  title: string
+  exists: boolean // 平台上已經有了，不會重複新增
+  fields: WebFormField[]
+  missing: string[]
+}
+
+export type WebFormResult = { id: string; section: string; title: string; ok: boolean; why: string }
+
+export type WebFormState = {
+  stage: 'closed' | 'login' | 'reading' | 'ready' | 'running'
+  message: string
+  items: WebFormItem[]
+  notes: string[]
+  progress: { done: number; total: number; current: string }
+  results: WebFormResult[]
+  browser_open: boolean
+  site: { name: string; label: string }
+}
+
+export type WebFormPick = { id: string; values: Record<string, string>; alts: Record<string, boolean> }
+
 /** 後端錯誤一律帶 X-Request-Id，附在訊息裡才對得到 log。 */
 class ApiError extends Error {
   requestId: string
@@ -301,6 +338,13 @@ export const api = {
     postJson<{ ok: boolean }>('/templates/forget', { fingerprint }),
   reanalyze: (jobId: string) => postJson<{ ok: boolean }>(`/jobs/${jobId}/reanalyze`, {}),
   cancelJob: (jobId: string) => postJson<{ ok: boolean }>(`/jobs/${jobId}/cancel`, {}),
+
+  webform: (site: string) => request<WebFormState>(`/webform/${site}`),
+  webformOpen: (site: string) => postJson<WebFormState>(`/webform/${site}/open`, {}),
+  webformRefresh: (site: string) => postJson<WebFormState>(`/webform/${site}/refresh`, {}),
+  webformRun: (site: string, items: WebFormPick[]) =>
+    postJson<WebFormState>(`/webform/${site}/run`, { items }),
+  webformClose: (site: string) => postJson<WebFormState>(`/webform/${site}/close`, {}),
 
   logs: ({ level }: { level?: string }) =>
     request<LogEntry[]>(`/logs${level ? `?level=${level}` : ''}`),

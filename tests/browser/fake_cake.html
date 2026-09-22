@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>假的 Cake 個人檔案</title>
+<!--
+  網頁填寫測試用的假 Cake。照真的 Cake 個人檔案頁做出測試要碰到的那幾點：
+  - 區塊標題是 h2、每一筆的職稱／學校是 h3（「同一層」的標題才算區塊結尾）
+  - 「新增」不是彈出視窗，是在區塊底下展開表單；欄名有的是 <label for>、有的只是一段字
+  - 日期是「年」「月」兩個下拉；「現任職位」「永久有效」是藏起真 input 的樣式化勾選框
+  - 「學歷」同時是區塊標題與欄位名稱
+  - 按「建立」會檢查必填；名稱是「壞掉的證照」時假裝網站拒收，表單留在原地並標紅
+  存進去的內容 POST 到 /__save，測試從伺服器那邊檢查；重新整理時由伺服器把存過的放回 __SAVED__。
+-->
+<style>
+  body { font-family: sans-serif; width: 900px; margin: 20px; }
+  .field { margin: 8px 0; }
+  .row { display: flex; gap: 8px; }
+  .error { color: #c00; }
+  .chk input { display: none; }
+  .chk .box { display: inline-block; width: 12px; height: 12px; border: 1px solid #333; }
+  .chk input:checked + .box { background: #2a2; }
+  .card { border-bottom: 1px solid #ddd; padding: 4px 0; }
+</style>
+</head>
+<body>
+<h1>個人檔案</h1>
+<div id="sections"></div>
+<script>
+const years = top => { const a = ['請選擇']; for (let y = top; y >= 1980; y--) a.push(String(y)); return a; };
+const MONTHS = ['請選擇', '一月', '二月', '三月', '四月', '五月', '六月',
+                '七月', '八月', '九月', '十月', '十一月', '十二月'];
+const DEGREES = ['請選擇', '副學士學位', '文學士（BA）', '理學士（BS）', '工學學士（BEng）', '學士學位',
+                 '碩士學位', '哲學博士（PhD）', '醫學博士（MD）'];
+
+const SECTIONS = {
+  '工作經驗': {
+    fields: [
+      {label: '公司名稱', kind: 'text', req: true},
+      {label: '職稱', kind: 'text', req: true},
+      {label: '開始日期', kind: 'ym', req: true, years: years(2026)},
+      {label: '結束日期', kind: 'ym', req: true, years: years(2026), alt: '現任職位'},
+      {label: '工作內容', kind: 'textarea'},
+    ],
+    card: d => [d['職稱'], d['公司名稱'], d['開始日期']],
+  },
+  '學歷': {
+    fields: [
+      {label: '學校', kind: 'text', req: true},
+      {label: '學歷', kind: 'select', req: true, options: DEGREES, bound: true},
+      {label: '主修', kind: 'text', req: true},
+      {label: '開始日期', kind: 'y', years: years(2026)},
+      {label: '結束日期（或預期）', kind: 'y', years: years(2031)},
+    ],
+    card: d => [d['學校'], `${d['學歷']}・${d['主修']}`],
+  },
+  '資格認證': {
+    fields: [
+      {label: '名稱', kind: 'text', req: true},
+      {label: '發照機構', kind: 'text', req: true},
+      {label: '發照日期', kind: 'ym', req: true, years: years(2026)},
+      {label: '到期日', kind: 'ym', req: true, years: years(2036), alt: '永久有效'},
+      {label: '證照編號', kind: 'text'},
+    ],
+    card: d => [d['名稱'], d['發照機構']],
+  },
+};
+
+const EXISTING = {
+  '工作經驗': [{'職稱': '後端工程師', '公司名稱': '虛構科技股份有限公司', '開始日期': '2018 八月'}],
+  '學歷': [],
+  '資格認證': [],
+};
+for (const s of __SAVED__) EXISTING[s.section].push(s.data);
+
+const el = (tag, attrs = {}, ...kids) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  for (const k of kids) e.append(k);
+  return e;
+};
+const select = opts => el('select', {}, ...opts.map(o => el('option', {}, o)));
+
+function card(name, data) {
+  const [title, ...rest] = SECTIONS[name].card(data);
+  return el('div', {class: 'card'}, el('h3', {}, title), ...rest.map(t => el('p', {}, t)));
+}
+
+function openForm(name, slot) {
+  if (slot.firstChild) return;
+  const form = el('div', {class: 'form'});
+  const controls = [];
+  let n = 0;
+  for (const f of SECTIONS[name].fields) {
+    const text = f.label + (f.req ? ' *' : '');
+    const wrap = el('div', {class: 'field'});
+    let inputs;
+    if (f.kind === 'text' || f.kind === 'textarea') {
+      inputs = [el(f.kind === 'text' ? 'input' : 'textarea', f.kind === 'text' ? {type: 'text'} : {})];
+      wrap.append(el('div', {class: 'lbl'}, text), inputs[0]);
+    } else if (f.kind === 'select') {
+      const id = 'f' + (n++);
+      inputs = [select(f.options)];
+      inputs[0].id = id;
+      wrap.append(el('label', {for: id}, text), inputs[0]);
+    } else {
+      inputs = f.kind === 'ym' ? [select(f.years), select(MONTHS)] : [select(f.years)];
+      const row = el('div', {class: 'row'}, ...inputs);
+      wrap.append(el('div', {class: 'lbl'}, text), row);
+    }
+    form.append(wrap);
+    const c = {f, inputs, wrap, alt: null};
+    if (f.alt) {
+      const box = el('input', {type: 'checkbox'});
+      const chk = el('label', {class: 'chk'}, box, el('span', {class: 'box'}), el('span', {}, f.alt));
+      box.addEventListener('change', () => { wrap.style.display = box.checked ? 'none' : ''; });
+      form.append(chk);
+      c.alt = box;
+    }
+    controls.push(c);
+  }
+  const err = el('div', {class: 'error'});
+  const cancel = el('button', {type: 'button'}, '取消');
+  const create = el('button', {type: 'button'}, '建立');
+  cancel.onclick = () => slot.replaceChildren();
+  create.onclick = async () => {
+    const data = {};
+    for (const c of controls) {
+      if (c.alt && c.alt.checked) { data[c.f.alt] = true; continue; }
+      const vals = c.inputs.map(i => i.value.trim());
+      const empty = vals.some(v => !v || v === '請選擇');
+      if (empty) {
+        if (c.f.req) { err.textContent = `${c.f.label}為必填`; return; }
+        continue;
+      }
+      data[c.f.label] = vals.join(' ');
+    }
+    if (data['名稱'] === '壞掉的證照') { err.textContent = '名稱格式不正確'; return; }
+    await fetch('/__save', {method: 'POST', body: JSON.stringify({section: name, data})});
+    slot.previousElementSibling.append(card(name, data));
+    slot.replaceChildren();
+  };
+  form.append(err, el('div', {}, cancel, create));
+  slot.append(form);
+}
+
+for (const name of Object.keys(SECTIONS)) {
+  const add = el('button', {type: 'button'}, '新增');
+  const list = el('div', {class: 'list'}, ...EXISTING[name].map(d => card(name, d)));
+  const slot = el('div', {class: 'slot'});
+  add.onclick = () => openForm(name, slot);
+  document.getElementById('sections').append(
+    el('section', {}, el('div', {class: 'head'}, el('h2', {}, name), add), list, slot));
+}
+</script>
+</body>
+</html>

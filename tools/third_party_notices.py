@@ -10,11 +10,13 @@ build-package.ps1 會呼叫它。三種來源：
   不會出現在成品裡。Tailwind 產生的樣式會進成品，另外列
 - llama.cpp、.NET runtime：授權全文存在 scripts/licenses/（照 GitHub 上對應版本的原文）；
   NVIDIA CUDA runtime、Python 本體附條款出處
+- Playwright 自帶的 Node.js 與驅動程式：不在 .dist-info 裡，授權全文取自 playwright\\driver
 """
 from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from importlib import metadata
 from pathlib import Path
@@ -61,6 +63,35 @@ def _python(site: Path):
     return rows
 
 
+def _playwright_driver(site: Path):
+    """Playwright（網頁填寫用）自帶的 Node.js 與驅動程式。它們不在 .dist-info 裡，要另外列。"""
+    driver = site / "playwright" / "driver"
+    if not driver.exists():
+        return []
+    try:
+        node = subprocess.run([str(driver / "node.exe"), "--version"], capture_output=True,
+                              text=True, timeout=30).stdout.strip().lstrip("v")
+    except OSError:
+        node = ""
+    pkg = driver / "package"
+    notices = "\n\n".join((pkg / n).read_text(encoding="utf-8", errors="replace").strip()
+                          for n in ("LICENSE", "NOTICE", "ThirdPartyNotices.txt")
+                          if (pkg / n).exists())
+    return [
+        ("Node.js（app\\runtime\\Lib\\site-packages\\playwright\\driver\\node.exe，"
+         "Playwright 的執行環境）", node, "MIT（內含元件的授權見全文）", "https://nodejs.org",
+         (driver / "LICENSE").read_text(encoding="utf-8", errors="replace").strip()),
+        ("Playwright 驅動程式（app\\runtime\\Lib\\site-packages\\playwright\\driver\\package）",
+         _dist_version(site, "playwright"), "Apache-2.0", "https://github.com/microsoft/playwright",
+         notices),
+    ]
+
+
+def _dist_version(site: Path, name: str) -> str:
+    return next((d.version for d in metadata.distributions(path=[str(site)])
+                 if d.metadata["Name"].lower() == name), "")
+
+
 def _bundled_js(maps: Path):
     names = set()
     for f in maps.rglob("*.map"):
@@ -84,12 +115,13 @@ def _bundled_js(maps: Path):
 
 def main(site: Path, maps: Path, out: Path) -> None:
     py, js = _python(site), _bundled_js(maps)
+    fixed = [(n, v, lic, url, p.read_text(encoding="utf-8").strip() if p else "")
+             for n, v, lic, url, p in FIXED] + _playwright_driver(site)
     lines = ["Resume AutoFill 隨附的第三方元件", RULE,
              "本程式本身以 MIT 授權發佈（見 LICENSE.txt）。以下是發佈包裡一起散發的第三方元件、",
              "版本與授權；授權全文附在後面。AI 模型不隨附：由使用者在程式內自 Hugging Face 下載，",
-             "授權以該模型頁面為準。", ""]
-    sections = [("執行檔與執行階段", [(n, v, lic, url, p.read_text(encoding="utf-8").strip() if p
-                                      else "") for n, v, lic, url, p in FIXED]),
+             "授權以該模型頁面為準。網頁填寫用的是系統內建的 Edge（或 Chrome），瀏覽器不隨附。", ""]
+    sections = [("執行檔與執行階段", fixed),
                 ("Python 套件（app\\runtime\\Lib\\site-packages）", py),
                 ("前端（打包進 app\\frontend\\dist 的 JavaScript 與 CSS）", js)]
     for title, rows in sections:
@@ -102,7 +134,7 @@ def main(site: Path, maps: Path, out: Path) -> None:
             if body:
                 lines += ["", f"--- {n} {v} ".ljust(78, "-"), "", body]
     out.write_text("\n".join(lines) + "\n", encoding="utf-8-sig")
-    print(f"{out.name}：執行檔 {len(FIXED)}、Python {len(py)}、前端 {len(js)} 項")
+    print(f"{out.name}：執行檔 {len(fixed)}、Python {len(py)}、前端 {len(js)} 項")
 
 
 if __name__ == "__main__":

@@ -17,16 +17,18 @@ dependencies = [
     "requests>=2.31",
     "pypdfium2>=4.30",           # 視覺模式：把 PDF 頁面畫成截圖
     "pillow>=10",                # pypdfium2 輸出點陣圖轉 PNG
+    # 網頁填寫：操作專用的瀏覽器視窗。用系統內建的 Edge，不下載 Playwright 自己的瀏覽器
+    "playwright>=1.49",
 ]
 
 [project.optional-dependencies]
 # 開發用的追蹤。設了 LANGFUSE_* 環境變數才會啟用，打包版不含它
 # 自架的 Langfuse 是 v3 架構，SDK 要跟著留在 v3
 dev = ["langfuse>=3,<4"]
-# 測試。瀏覽器那一組還要 playwright 與已經 build 好的 frontend/dist，
-# 缺任何一樣就自動跳過（見 tests/browser/conftest.py）
+# 測試。瀏覽器那一組還要一份 chromium（playwright install chromium）與已經 build 好的
+# frontend/dist，缺任何一樣就自動跳過（見 tests/browser/conftest.py）
 # httpx2 不是打錯：starlette 的 TestClient 已經改用它，裝舊的 httpx 會一直跳棄用警告
-test = ["pytest>=8", "httpx2", "playwright>=1.49"]
+test = ["pytest>=8", "httpx2"]
 # lint 的版本釘死：ruff 每個小版本都可能多出新規則，浮動版本會讓 CI 無預警變紅，
 # 而且本機與 CI 跑的不是同一套規則就失去意義
 lint = ["ruff==0.9.6"]

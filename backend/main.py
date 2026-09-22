@@ -15,8 +15,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import config, db, model_manager
+from . import config, db, model_manager, webform
 from .api import imports, jobs, logs, meta, models, profile, templates
+from .api import webform as webform_api
 from .logging_setup import request_id_var, setup_logging
 
 log = logging.getLogger(__name__)
@@ -64,6 +65,7 @@ async def lifespan(app: FastAPI):
     purger.cancel()
     with suppress(asyncio.CancelledError):
         await purger
+    await asyncio.to_thread(webform.shutdown)
     log.info("服務關閉")
 
 
@@ -71,9 +73,10 @@ app = FastAPI(title="Resume AutoFill", version="0.1.0", lifespan=lifespan)
 
 # 前端定期輪詢的端點：成功回應多到會洗版，降成 DEBUG；失敗仍照常記 WARNING。
 # 除了固定路徑，分析期間每兩秒一次的進度查詢（GET /api/jobs/{id}、
-# GET /api/imports/{id}）也算——上傳與完成事件另有自己的 log，不會因此消失
+# GET /api/imports/{id}）與網頁填寫每秒一次的狀態查詢（GET /api/webform/{平台}）也算——
+# 上傳、完成與每一步的事件另有自己的 log，不會因此消失
 POLLED_PATHS = {"/api/models", "/api/logs"}
-POLL_RE = re.compile(r"^/api/(jobs|imports)/[^/]+$")
+POLL_RE = re.compile(r"^/api/((jobs|imports)/[^/]+|webform/[^/]+)$")
 
 # 服務只綁 127.0.0.1，但瀏覽器裡的任何網頁都連得到它。以下兩層擋的是「別的網站借你的瀏覽器」：
 # 1. Host 只收本機名稱——DNS rebinding 的網頁把自己的網域解析到 127.0.0.1，
@@ -144,6 +147,7 @@ app.include_router(imports.router, prefix="/api")
 app.include_router(logs.router, prefix="/api")
 app.include_router(models.router, prefix="/api")
 app.include_router(templates.router, prefix="/api")
+app.include_router(webform_api.router, prefix="/api")
 
 # 正式版把 build 好的前端交給同一個服務托管，使用者只會看到一個網址。
 # 開發時 dist 不存在，走 Vite dev server 的 proxy，這裡就跳過。

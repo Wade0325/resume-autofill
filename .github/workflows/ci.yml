@@ -88,7 +88,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: 安裝 Python 相依
-        # playwright 已經在 test 這組裡（見 pyproject），不必另外裝
+        # playwright 是執行期相依（網頁填寫用），這裡就會裝到，不必另外裝
         run: pip install -e ".[test]"
 
       - name: 安裝前端相依

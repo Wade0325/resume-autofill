@@ -44,8 +44,9 @@
 │                │  │   ├─ 標籤錨定引擎     │  │                  │
 │ · 我的資料     │  │   ├─ 保留格式寫回     │  │  Qwen3.5-9B      │
 │ · 填寫履歷     │  │   ├─ 模型下載/切換    │  │  Q4_K_M ~5.3 GB  │
-│ · 匯入履歷     │  │   └─ SQLite          │  │  ＋mmproj 視覺檔  │
-│ · 日誌         │  │                      │  │  GBNF 受限解碼    │
+│ · 匯入履歷     │  │   ├─ 網頁填寫         │  │  ＋mmproj 視覺檔  │
+│ · 網頁填寫     │  │   └─ SQLite          │  │  GBNF 受限解碼    │
+│ · 日誌         │  │                      │  │                  │
 └───────────────┘  └──────────────────────┘  └──────────────────┘
    build 成靜態檔      localhost:8090             localhost:8085
    由 FastAPI 托管     （llama-server 由後端        （僅本機）
@@ -68,6 +69,10 @@ llama-server 的啟動、切換、模型下載都由後端的模型選單管理�
 啟動器把這些藏起來：點兩下，瀏覽器就開好了。single-file self-contained 發佈，
 使用者機器不需要裝 .NET runtime。單一實例（mutex）、port 被占自動退避、
 結束時把後端連同 llama-server 整棵行程樹收掉。
+
+**網頁填寫 Playwright＋系統的 Edge** — 把我的資料補進求職平台（目前是 Cake）。
+Playwright 的 Python 套件自帶 Node.js，隨發佈包出去；瀏覽器用 Windows 內建的 Edge，
+不下載 Playwright 自己的 Chromium。見第 9 節。
 
 ---
 
@@ -495,6 +500,10 @@ pytest -m ""                # 全部
   `window.print = () => {}`）——回傳值無法序列化，後續行為就不對了。結尾補一個
   `window.__ready = true` 之類的就好。
 - `visibility:hidden` 的元素 `innerText` 會回空字串，要驗內容得用 `textContent`。
+- **網頁填寫的整條流程對著本機的假 Cake 跑**（`tests/browser/fake_cake.html`，由測試裡的小型
+  HTTP 伺服器提供，登入用 cookie 模擬）。它自己開一個無頭瀏覽器：有 `chromium-1228` 就用它，
+  沒有就用 `playwright install chromium` 裝的那一份。兩個測試檔不能同名（pytest 預設的
+  匯入方式認檔名），所以瀏覽器那一份叫 `test_webform_flow.py`。
 
 ### CI
 
@@ -502,9 +511,9 @@ pytest -m ""                # 全部
 
 | job | runner | 做什麼 |
 |---|---|---|
-| python | windows-latest | `ruff check` ＋ `pytest`（156 項） |
+| python | windows-latest | `ruff check` ＋ `pytest`（198 項） |
 | frontend | ubuntu-latest | `npm ci` ＋ `npm run build`（`tsc` 在裡面，等於型別檢查） |
-| browser | windows-latest | `npm run build` ＋ `playwright install chromium` ＋ `pytest -m browser`（17 項） |
+| browser | windows-latest | `npm run build` ＋ `playwright install chromium` ＋ `pytest -m browser`（25 項） |
 
 **為什麼測試跑 Windows 而不是便宜的 Linux**：`backend/model_manager.py` 有幾處沒有防護的
 Windows 專屬呼叫（`subprocess.CREATE_NO_WINDOW`、`powershell`），產品本身也只出 Windows。
@@ -591,33 +600,63 @@ site-packages，前端只列 source map 引用到的套件（package.json 裡大
 
 ---
 
-## 9. 網頁表單填寫（雛型）
+## 9. 網頁填寫（Cake）
 
-`tools/cake_fill.py` ＋ `tools/cake_web.py`：把「我的資料」填進求職平台的網頁表單，
-目前只做 Cake 個人檔案。
+`backend/webform/`＋前端「網頁填寫」分頁：把「我的資料」裡 Cake 上還沒有的工作經驗、學歷、
+證照補進 Cake 個人檔案。
 
-**這是跟本地 docx 填寫並列的另一個功能，不是它的延伸。** 入口、模組、文件都分開，
-共用的只有「模型只挑一項資料」那一層。docx 那邊每一格有 `t0.r13.c1` 這種穩定位址，
-靠 `cells()` 列出、`apply_fills()` 寫回；網頁沒有格子，對應物是 DOM 節點，所以
-`cake_web.survey()` 相當於 `cells()`、`fill_one()` 相當於 `apply_fills()`。
+**這是跟本地 docx 填寫並列的另一個功能，不是它的延伸。** 入口、模組、文件都分開，也不用模型：
+Cake 的表單是固定的，每一區送哪幾項直接寫在程式裡。共用的只有比對名稱（`core/names.py`，
+匯入履歷判斷「這一筆是我的資料裡的哪一筆」也是用它）。
 
-```powershell
-.venv\Scripts\python.exe tools\cake_fill.py login   # 開瀏覽器，你自己登入
-.venv\Scripts\python.exe tools\cake_fill.py recon   # 只讀：列出頁面上的欄位
-.venv\Scripts\python.exe tools\cake_fill.py fill    # 只填不存
-.venv\Scripts\python.exe tools\cake_fill.py apply   # 真的按下建立／儲存
-```
+流程（`session.py`）：開瀏覽器 → 使用者自己登入 → 讀出 Cake 上還沒有的幾筆 → 使用者在清單上
+確認、補齊缺的欄位 → 一筆一筆存 → 存完重新讀一次。
 
-**密碼不經過這支程式**：`login` 只是把瀏覽器開著等你自己登入，登入狀態留在專用的
-瀏覽器設定檔 `data/cake_profile/`（`/data/` 不進版控），不是你平常那個 Chrome 設定檔。
-身分證字號、家人、推薦人、緊急聯絡人、聲明事項一律不往平台送（`BLOCKED_KEYS`／
-`BLOCKED_ROOTS`）——表格沒問就不給，跟 `filler` 同一條原則。
+| 檔案 | 做什麼 |
+|---|---|
+| `browser.py` | 專用瀏覽器：系統的 Edge（沒有才用 Chrome）、專用設定檔 `data/browser/`、住在自己的執行緒 |
+| `session.py` | 流程與狀態（closed／login／reading／ready／running），前端每秒輪詢 `snapshot()` |
+| `cake.py` | Cake 專屬：登入判斷、哪些已經有了、排清單、新增一筆 |
+| `dom.py` | 找欄位、填值、勾選、送出、取消——docx 那邊 `cells()`／`apply_fills()` 在網頁上的對應 |
 
-目前狀態：個人檔案只填不存跑通 8/8，`apply` 存得進去並會回頭確認頁面上看得到。
-兩個區塊存不進去，原因記在 `cake_web.py` 裡：證照要「發照日期」「到期日」，
-求職偏好要「求職階段」「希望職位」「幣別」，這 5 項 `app.db` 裡沒有，照「留白不猜」
-的原則就過不了必填檢查。另外「永久有效」不是真的 checkbox 而是樣式化元件，
-`page.check()` 會失敗，要點外層可點擊的元素。
+幾個決定與踩過的坑：
+
+- **不叫使用者裝東西**：Playwright 自帶的 Node.js 隨發佈包出去（授權列在 THIRD-PARTY-NOTICES），
+  瀏覽器用系統的 Edge，不跑 `playwright install`。
+- **密碼不經過程式**：登入是使用者在那個視窗裡自己做的，登入狀態留在 `data/browser/`，
+  不碰使用者平常的瀏覽器。等登入時，人還在登入頁或 Google、Facebook 的授權頁就不動他的頁面——
+  一 goto 就把登入流程打斷了。
+- **`--disable-blink-features=AutomationControlled`**：不加的話 `navigator.webdriver` 是 true，
+  使用者按「用 Google 登入」會被 Google 以「這個瀏覽器可能不安全」擋下。
+- **瀏覽器住在自己的執行緒、自己的 ProactorEventLoop**：Playwright 物件只能在建立它的迴圈裡用；
+  `uvicorn --reload` 會把預設迴圈換成 Selector，那種迴圈開不了子行程，瀏覽器根本起不來。
+  其他地方用 `Browser.submit()`／`run()` 把工作丟過去。
+- **階段在 API 回傳之前就換好**（`Session._start`）：等工作真的開跑才換的話，前端可能先拿到
+  舊的階段、以為沒事就不輪詢了。
+- **只新增、不改動**：名稱對得上的就算已經有了（簡稱、全半形、臺／台、公司後綴不算差別），
+  寧可少補一筆，也不要多出一筆重複的。判斷「那一區印著什麼」時只拿**同一層**的標題當結尾：
+  每一筆的職稱也可能是標題標籤，拿它當結尾會把公司名稱切掉，已經有的就被當成沒有。
+- **只送列出來的欄位**：每一區用我的資料的哪幾項明寫在 `cake.py`，身分證字號、家人這類
+  不在任何一區裡，就送不出去。
+- **學歷**：Cake 用西式名稱（文學士（BA）、工學學士（BEng）…），另外有「學士學位」「碩士學位」
+  這種通稱。同一級只有一個選項、或有通稱時才自動選；博士分 PhD／MD／JD，要看主修，留給使用者挑。
+  選項是打開「新增」表單讀出來再取消的，不寫死。
+- **「現任職位」「永久有效」是樣式化的勾選框**：`page.check()` 會失敗，要點印著字的那一塊，
+  再看藏起來的 input 有沒有勾上。我的資料寫「至今」就勾現任職位，寫「永久」就勾永久有效。
+- **必填欄**：工作經驗要公司、職稱、起訖年月；學歷要學校、學歷、主修；證照要名稱、發照機構、
+  發照日期與到期日（或永久有效）。缺的在清單上標出來、當場補齊；補的值只用在這一次，
+  不會寫回我的資料。
+- **存完要回頭確認**：表單收起來不算數，要在那一區的列表裡看到這一筆才算。
+  網站自己印了錯誤訊息就照它說的回報。
+- **log 不帶值**：只記工作代碼與原因。Playwright 的錯誤訊息可能夾著剛填進去的值，
+  所以新增失敗時只記例外的型別，不記 traceback。
+
+測試都不碰真的 Cake：`tests/test_webform.py` 測清單、學位對照與 API（不開瀏覽器）；
+`tests/browser/test_webform_flow.py` 對著本機的假 Cake（`fake_cake.html`，照真的個人檔案頁做出
+上面那幾個坑）跑整條流程；`tests/browser/test_webform_page.py` 測頁面。
+
+還沒做：基本資料（頭銜、簡介、電話）、求職偏好（必填的求職階段、希望職位我的資料裡沒有）、
+專業背景與語言，以及 Cake 以外的平台。
 
 ## 10. 待討論
 
