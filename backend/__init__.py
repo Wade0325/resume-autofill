@@ -4,4 +4,4 @@
 pyproject.toml、frontend/package.json、啟動器的 csproj 各有一份，改版本時一起改，
 tests/test_version.py 會擋住任何一份沒跟上。
 """
-__version__ = "0.1.0"
+__version__ = "0.1.1"
