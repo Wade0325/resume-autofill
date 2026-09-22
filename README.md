@@ -42,7 +42,7 @@
 
 ## 安裝與啟動
 
-1. 到 [Releases](../../releases/latest) 下載最新版的 `Resume_AutoFill-v<版本>.zip`（例如 `Resume_AutoFill-v0.1.0.zip`）
+1. 到 [Releases](../../releases/latest) 下載最新版的 `Resume_AutoFill-v<版本>.zip`（例如 `Resume_AutoFill-v0.1.1.zip`）
 2. 解壓縮到任何位置（免安裝）
 3. 雙擊 **`ResumeAutoFill.exe`** — 瀏覽器會自動開啟操作介面。
    第一次執行時 Windows 可能跳出「Windows 已保護您的電腦」：這是因為程式沒有數位簽章，
@@ -50,7 +50,7 @@
 4. **首次使用**：點右上角「模型未啟動」→ 在 Qwen3.5-9B 按「下載」（約 6 GB，只需一次）→ 下載完按「切換」啟動，等 1～2 分鐘顯示「就緒」即可。
    之後每次開程式會自動把上次用的模型載回來，不必再按一次
 
-（選用）確認下載的檔案完整：在 PowerShell 執行 `Get-FileHash .\Resume_AutoFill-v0.1.0.zip`，
+（選用）確認下載的檔案完整：在 PowerShell 執行 `Get-FileHash .\Resume_AutoFill-v0.1.1.zip`，
 跟 Release 頁上 `SHA256SUMS.txt` 的值比對，一樣就沒問題。
 
 之後每次使用都只要雙擊 `ResumeAutoFill.exe`。
