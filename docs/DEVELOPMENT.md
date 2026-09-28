@@ -523,7 +523,7 @@ pytest -m "browser or not browser"   # 全部
 
 | job | runner | 做什麼 |
 |---|---|---|
-| python | windows-latest | `ruff check` ＋ `pytest`（216 項） |
+| python | windows-latest | `ruff check` ＋ `pytest`（227 項） |
 | frontend | ubuntu-latest | `npm ci` ＋ `npm run build`（`tsc` 在裡面，等於型別檢查） |
 | browser | windows-latest | `npm run build` ＋ `playwright install chromium` ＋ `pytest -m browser`（26 項） |
 

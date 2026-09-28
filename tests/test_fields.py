@@ -11,7 +11,7 @@ import pytest
 from docx import Document
 
 from backend import db
-from backend.core import document, filler, planner
+from backend.core import document, filler, planner, writer
 
 # 把新欄位都填滿的一份虛構資料——沒填值的欄位本來就不會列出來，
 # 拿沒填的去測「有問就給」等於什麼都沒測
@@ -187,6 +187,79 @@ class TestReadingTextRoute:
         assert r.status_code == 200
         row = next(i for i in r.json()["plan"]["items"] if i["slot_id"] == slot.id)
         assert row["status"] == "skip"
+
+    @pytest.mark.parametrize("printed,expected", [
+        ("就學期間：　　年　　月－　　年　　月", "就學期間： 2014 年 9 月－ 2018 年 6 月"),
+        ("年　　月－　　年　　月", "2014年 9 月－ 2018 年 6 月"),
+        ("自　　年　　月至　　年　　月", "自 2014 年 9 月至 2018 年 6 月"),
+        ("　　年　　月～　　年　　月", " 2014 年 9 月～ 2018 年 6 月"),
+    ])
+    def test_period_into_printed_units(self, printed, expected):
+        """期間值用「~」接起訖，表格印的分隔字不一定是它。以前對不齊，
+        後面的單位被擠進最後一格：「2018 年 6月 月」。"""
+        profile = {"education": [{"start": "2014年09月", "end": "2018年06月"}]}
+        para = Document().add_paragraph(printed)
+        assert writer._fill_print(para, filler.fields_of(profile)["education[0].period"], False)
+        assert para.text == expected
+
+    @pytest.mark.parametrize("printed,value,expected", [
+        ("總年資：　　年　　月", "10個月", "總年資： 0 年 10 月"),
+        ("總年資：　　年　　月", "2年10個月", "總年資： 2 年 10 月"),
+        ("總年資：　　年", "3年", "總年資： 3 年"),
+        ("共　　個月", "2年10個月", "共 34 個月"),
+    ])
+    def test_tenure_into_printed_units(self, printed, value, expected):
+        """年資照表格印的單位寫。以前「10個月」寫成「10 年 個 月」，看起來是十年。"""
+        para = Document().add_paragraph(printed)
+        assert writer._fill_print(para, value, False)
+        assert para.text == expected
+
+    def test_tenure_that_does_not_fit_stays_blank(self):
+        """只印「　年」卻有零頭的月數：寫「2 年」會少報年資，寧可留白。"""
+        para = Document().add_paragraph("總年資：　　年")
+        assert not writer._fill_print(para, "2年10個月", False)
+        assert para.text == "總年資：　　年"
+
+    def test_printed_period_end_to_end(self, tmp_path):
+        """照讀文字那條路實際的順序走到寫檔：「就學期間」由對照表錨定，不必問模型。"""
+        doc = Document()
+        doc.add_table(rows=1, cols=2).cell(0, 0).text = "中文姓名"
+        doc.add_paragraph("")
+        doc.add_table(rows=1, cols=1).cell(0, 0).text = "就學期間：　　年　　月－　　年　　月"
+        src = tmp_path / "form.docx"
+        doc.save(src)
+        parsed = document.ParsedDoc(str(src))
+        _text, slots = parsed.flatten()
+        decisions = planner.decide_by_anchor(parsed.table_texts(), slots,
+                                             "http://127.0.0.1:8099", "虛構模型", {},
+                                             headers=parsed.slot_headers(slots))
+        profile = {"basic": {"name_zh": "虛構甲"},
+                   "education": [{"start": "2014年09月", "end": "2018年06月"}]}
+        ops, _ = planner.build_plan(slots, profile, decisions)
+        out = tmp_path / "out.docx"
+        assert writer.apply_ops(str(src), str(out), ops)["failed"] == 0
+        cell = Document(out).tables[1].cell(0, 0).text
+        assert cell == "就學期間： 2014 年 9 月－ 2018 年 6 月"
+
+    def test_own_age_not_written_into_family_rows(self, tmp_path):
+        """家庭狀況表的「年齡」是家人的年齡，對照表卻不看上下文、把它對到本人的年齡。
+        以前算年齡會當掉，蓋住了這件事；修好之後就變成把本人年齡寫進第一位家人那一列。"""
+        doc = Document()
+        doc.add_table(rows=1, cols=2).cell(0, 0).text = "中文姓名"
+        doc.add_paragraph("")
+        family = doc.add_table(rows=3, cols=4)
+        for c, label in enumerate(["家人稱謂", "家人姓名", "年齡", "家人職業"]):
+            family.cell(0, c).text = label
+        src = tmp_path / "family.docx"
+        doc.save(src)
+        parsed = document.ParsedDoc(str(src))
+        _text, slots = parsed.flatten()
+        decisions = planner.decide_by_anchor(parsed.table_texts(), slots,
+                                             "http://127.0.0.1:8099", "虛構模型", {},
+                                             headers=parsed.slot_headers(slots))
+        in_family = {d.field_key for sid, d in decisions.items() if sid.startswith("tbl1.")}
+        assert "basic.age" not in in_family
+        assert {"family[].relation", "family[].name", "family[].occupation"} <= in_family
 
 
 class TestGating:

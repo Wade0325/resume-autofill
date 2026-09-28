@@ -79,6 +79,13 @@ def _fill_inline(para, text: str, highlight: bool, blank_index: int = 0) -> bool
 
 TOKEN_RE = re.compile(r"\d+|[^\W\d_]+", re.UNICODE)
 
+# 期間（filler.fields_of 算的「2014年9月~2018年6月」）：表格印在兩組日期中間的分隔字
+# 不一定是「~」。印好的「月－」在值裡找不到，就對不齊，後面的單位被擠進最後一格（「6月 月」）
+_PERIOD_RE = re.compile(r"(\d+\s*[年/.\-][^~]*?)\s*~\s*(\S.*)")
+_PERIOD_SEPS = "－～~-—–至到"
+# 年資（filler._span 算的「2年10個月」「10個月」「3年」）
+_SPAN_RE = re.compile(r"(?:(\d+)年)?(?:(\d+)個月)?")
+
 
 def _fill_print(para, value: str, highlight: bool) -> bool:
     """把值插進印好的字裡留的空白：
@@ -105,6 +112,10 @@ def _fill_print(para, value: str, highlight: bool) -> bool:
     # （以前寫出「民國 1996 年」）
     if ROC_BEFORE_RE.search(text[:gaps[0][0]]):
         value = to_roc(value)
+    value = _fit_period(text, gaps, value)
+    value = _fit_span(text, gaps, value)
+    if value is None:
+        return False
     spans = _overlay(text, gaps, value) or _spread(text, gaps, value)
     done = False
     for start, end, new in reversed(spans):
@@ -121,6 +132,36 @@ def _fixed_parts(text: str, gaps: List[Tuple[int, int]]) -> List[Tuple[int, int,
             out.append((cursor, start, chunk.strip()))
         cursor = end
     return out
+
+
+def _fit_period(text: str, gaps: List[Tuple[int, int]], value: str) -> str:
+    """期間值的「~」換成表格印在兩組日期中間的那個字（「－」「至」「～」…），
+    疊合與依序兩種放法才對得上印好的字。第一個空白之前的是標籤或第一個單位，不會是分隔字。"""
+    m = _PERIOD_RE.fullmatch(value.strip())
+    if not m:
+        return value
+    for start, _e, chunk in _fixed_parts(text, gaps):
+        sep = next((ch for ch in chunk if ch in _PERIOD_SEPS), "")
+        if sep and start >= gaps[0][1]:
+            return f"{m.group(1)}{sep}{m.group(2)}"
+    return value
+
+
+def _fit_span(text: str, gaps: List[Tuple[int, int]], value: str) -> Optional[str]:
+    """年資照表格印的單位改寫：「　年　月」＋10個月 →「0年10月」，只印「　個月」就換算成總月數。
+    放不下就回 None 留白——只印「　年」卻有零頭的月數，寫「2 年」會少報年資。
+    整年的（「3年」）照原本的放法就對得上，不動。"""
+    m = _SPAN_RE.fullmatch(value.strip())
+    if not m or not m.group(2):
+        return value
+    years, months = int(m.group(1) or 0), int(m.group(2))
+    units = ["個月" if text.startswith("個月", end) else text[end:end + 1] for _s, end in gaps]
+    month_unit = next((u for u in units if u in ("月", "個月")), "")
+    if "年" in units:
+        return f"{years}年{months}{month_unit}" if month_unit else None
+    if month_unit:
+        return f"{years * 12 + months}{month_unit}"
+    return value
 
 
 def _overlay(text: str, gaps: List[Tuple[int, int]], value: str

@@ -268,6 +268,7 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
     answers = _resolve_labels(unknown, settled, allowed, host, model) if unknown else {}
 
     # self/right/below＝同格自帶 > 右鄰 > 下方，先到先得
+    below_single: set = set()      # 單值欄位從欄首往下錨定的格子，見迴圈後的清單列檢查
     for want in ("self", "right", "below"):
         for label, targets, mode, ctx in anchors:
             if mode != want:
@@ -305,6 +306,7 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
                 head = (targets[0].loc["row"], targets[0].loc["col"])
                 targets = [s for s in targets
                            if (s.loc["row"], s.loc["col"]) == head]
+                below_single.update(s.id for s in targets if s.id not in decisions)
             for s in targets:
                 if s.id not in decisions:
                     decisions[s.id] = Decision(key, 0, source,
@@ -313,6 +315,17 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
                               s.id, key, source, where,
                               label.replace(chr(10), " ")[:18],
                               f"｜{ctx}" if ctx else "")
+
+    # 一列一筆的清單表格（家庭狀況：稱謂｜姓名｜年齡｜職業）裡，欄首碰巧是單值欄位的名稱
+    # 時（對照表不看上下文，「年齡」就是本人的年齡），底下那格其實是某一筆的資料。
+    # 同一列別的格子對到清單欄位，這一列就是清單的一筆——本人的值不該寫進去，留白待人工
+    list_rows = {(s.loc["table"], s.loc["row"]) for s in pending
+                 if "table" in s.loc and s.id in decisions
+                 and "[]" in decisions[s.id].field_key}
+    for s in pending:
+        if s.id in below_single and (s.loc["table"], s.loc["row"]) in list_rows:
+            log.debug("  清單列裡的單值欄位不填 %-24s %s", s.id, decisions[s.id].field_key)
+            decisions[s.id] = Decision("__UNKNOWN__", 0, "rule", decisions[s.id].label)
 
     # 錨不住的一律留白待人工，標籤用機械抽取的給使用者認格子
     for s in pending:
