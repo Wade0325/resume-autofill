@@ -2,6 +2,8 @@
 
 使用者資料存成這份結構；模型只能從 FIELD_KEYS 裡挑，發明不了欄位。
 要加欄位就在 FIELDS 加一筆，前端表單與模型提示都會自動跟上。
+同時要把它加進 filler.ASK_ONLY_IF_MENTIONED：候選清單多一項，研究迴圈的考題就會掉分，
+而且掉的格子跟新欄位毫不相干（見 CLAUDE.md）。
 """
 
 import re
@@ -237,16 +239,6 @@ def describe_fields(include_special: bool = True, skip_derived: bool = False,
         lines.append("- __SKIP__: 這個位置不是求職者要填的（表頭、說明文字、公司自用欄）")
         lines.append("- __UNKNOWN__: 是欄位，但清單裡沒有對應項目")
     return "\n".join(lines)
-
-
-# 由起訖兩欄合成的欄位。表格有時印一欄「就學期間」，有時印「入學年月／畢業年月」，
-# 使用者只需要填後者。
-DERIVED_FROM = {
-    "education[].period": ("education[].start", "education[].end"),
-    "experience[].period": ("experience[].start", "experience[].end"),
-    "basic.military_period": ("basic.military_start", "basic.military_end"),
-    "basic.age": ("basic.birthday",),
-}
 
 # 標籤 → 欄位的確定性對照（squash 後精確比對）。
 # 表格印的字和 FIELDS 的 label 一模一樣時，對映沒有第二種答案，

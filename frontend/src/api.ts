@@ -28,7 +28,7 @@ export type Plan = {
   template_cached: boolean
   llm_available: boolean
   stats: { slots: number; fill: number; skip: number; by_source: Record<string, number> }
-  form_fields: string[] // 模型看過版面後認出這份表格要填的欄位
+  form_fields: string[] // 讀文字那條路由模型列出這份表格要填的欄位；看版面的一律是空的
   items: PlanItem[]
   entries: Record<string, number> // 我的資料裡每一種清單有幾筆（education: 3）
   apply: Record<string, string> // 這份工作的「這次應徵」：應徵職務、工作地點…
@@ -67,7 +67,6 @@ export type ImportState =
   | { status: 'failed'; error: string; filename: string }
   | { status: 'ready'; preview: ImportPreview }
 
-// 填寫紀錄的一列：保留期內都還能重新下載
 /** 批次面板的一列。輪詢用，所以不含計畫內容。 */
 export type BatchStatus = {
   job_id: string
@@ -87,6 +86,7 @@ export type BatchOutput = {
   written: number
 }
 
+// 填寫紀錄的一列：保留期內都還能重新下載
 export type JobHistory = {
   job_id: string
   filename: string

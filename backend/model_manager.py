@@ -27,7 +27,7 @@ from .core import llm
 
 log = logging.getLogger(__name__)
 
-# 可下載的型錄。官方 Qwen 未提供 GGUF，用 unsloth 的量化版（同 README 第 5 節）。
+# 可下載的型錄。官方 Qwen 未提供 Qwen3.5 的 GGUF，用 unsloth 的量化版。
 # 型錄外的模型走 download_url()，貼 Hugging Face 的 .gguf 連結自行下載。
 # mmproj = 視覺投影檔：Qwen3.5 全系列都是多模態，llama-server 掛上它才能吃圖片，
 # 匯入履歷時會附頁面截圖給模型看排版。
@@ -140,8 +140,9 @@ def select(name: str) -> None:
     if not gguf.exists():
         raise ModelError(404, "這顆模型還沒下載")
     if not config.LLAMA_SERVER.exists():
-        raise ModelError(
-            500, f"找不到 {config.LLAMA_SERVER}，請先取得 llama.cpp（見 README 第 5 節）")
+        # 發佈包一定帶著它，少了就是解壓縮不完整；從原始碼跑的開發者見 DEVELOPMENT.md 第 6 節
+        log.warning("找不到推論引擎 %s", config.LLAMA_SERVER)
+        raise ModelError(500, "找不到推論引擎，請重新解壓縮程式的壓縮檔")
     with _lock:
         if _starting:
             raise ModelError(409, f"「{_starting}」正在啟動中，請稍候")
@@ -406,11 +407,16 @@ def _remote_size_gb(url: str) -> float:
         return 0.0
 
 
-def _expected_sha(headers) -> str:
-    """Hugging Face 的檔案 ETag 就是內容的 sha256，拿來驗下載有沒有壞。
-    不是這種格式（一般網站）就不驗。"""
-    for key in ("X-Linked-ETag", "ETag"):
-        value = (headers.get(key) or "").strip('"')
+def _expected_sha(response: requests.Response) -> str:
+    """來源給的 sha256，拿來驗下載有沒有壞；沒給（一般網站）就不驗。
+
+    Hugging Face 的大檔是在 huggingface.co 回的那一跳轉址（302）用 X-Linked-Etag 給 sha256
+    （官方 huggingface_hub 也是停在這一跳讀：「the file metadata is carried by this very
+    response」）。requests 會一路跟到 CDN，最後那一跳的 ETag 是 Xet 雜湊——同樣是 64 位
+    十六進位、卻不是 sha256，以前拿它比對，每個模型下載完都被當成壞檔刪掉。
+    所以只認轉址鏈上的 X-Linked-Etag，不看一般的 ETag。"""
+    for hop in (*response.history, response):
+        value = (hop.headers.get("X-Linked-Etag") or "").removeprefix("W/").strip('"')
         if re.fullmatch(r"[0-9a-f]{64}", value):
             return value
     return ""
@@ -426,7 +432,7 @@ def _sha256(path: Path) -> str:
 
 def _fetch(url: str, dest: Path, name: str, track: bool) -> None:
     """下載到 .part 再改名。斷掉時 .part 留著，下次從斷點續傳；
-    來源有給校驗碼（Hugging Face 的 ETag 就是 sha256）就驗完才改名。"""
+    來源有給校驗碼（Hugging Face 轉址那一跳的 X-Linked-Etag）就驗完才改名。"""
     part = _part_of(dest)
     have = part.stat().st_size if part.exists() else 0
     headers = {"Range": f"bytes={have}-"} if have else {}
@@ -436,7 +442,7 @@ def _fetch(url: str, dest: Path, name: str, track: bool) -> None:
             have = 0                                   # 對方不支援續傳，整個重來
         if not done_already:
             r.raise_for_status()
-        expect = _expected_sha(r.headers)
+        expect = _expected_sha(r)
         if have:
             log.info("續傳 %s：已有 %.1f GB", name, have / 1024 ** 3)
         if not done_already:

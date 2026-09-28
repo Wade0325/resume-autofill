@@ -317,6 +317,11 @@ llama.cpp 把 schema 轉成 **GBNF grammar**，生成的每一步只允許符合
 .\dev.ps1 stop           # 停掉這三個埠上的服務
 ```
 
+`bin\` 沒進版控，從原始碼跑要自己放：到 llama.cpp 的
+[GitHub Releases](https://github.com/ggml-org/llama.cpp/releases) 下載目前隨附的 b10153 的
+`llama-b10153-bin-win-cuda-13.3-x64.zip` 與 `cudart-llama-bin-win-cuda-13.3-x64.zip`，
+兩個都解壓到 `bin\`。模型不用手動抓，從介面的模型選單下載到 `models\`。
+
 `dev.ps1` 只是把下面三行包起來，直接下也一樣：
 
 ```powershell
@@ -381,9 +386,12 @@ cd frontend; npm install; npm run dev
   推論埠上已經有服務在聽就完全不動作——那可能是別的工作階段或使用者自己開的，不該去砍它。
 - 跑在 GPU 還是 CPU：問 `nvidia-smi` 自己生的那個 pid 有沒有被列進「正在用 GPU 的行程」。不去解析 llama-server 的 log
   ——各版本寫法不一樣，這台機器上的 log 根本沒印 CUDA 初始化那幾行。
-- 模型下載會續傳（`.part` ＋ `Range`，斷了不刪），完成後拿來源的 ETag 比對
-  （Hugging Face 的 LFS ETag 就是檔案的 sha256）；壞檔直接刪掉重抓，不會一直續傳到同一個壞結果。
-  開始前先檢查磁碟空間（模型大小＋1 GB 餘裕）。
+- 模型下載會續傳（`.part` ＋ `Range`，斷了不刪），完成後拿來源給的 sha256 比對；
+  壞檔直接刪掉重抓，不會一直續傳到同一個壞結果。sha256 在 huggingface.co 回的那一跳轉址（302）
+  的 `X-Linked-Etag`（官方 `huggingface_hub` 也是停在這一跳讀中繼資料）。**不能用最後一跳的
+  `ETag`**：requests 會跟到 CDN，那裡的 ETag 是 Xet 雜湊，同樣是 64 位十六進位卻不是 sha256——
+  以前就是拿它比，每個模型下載完都被當成壞檔刪掉。
+  開始前先檢查磁碟空間（模型大小＋0.5 GB 餘裕，`DISK_MARGIN_GB`）。
 - 推論引擎有金鑰：後端啟動 llama-server 時用環境變數 `LLAMA_API_KEY` 給 `data/llm.key`
   裡的金鑰（第一次自動產生），`llm.py` 的呼叫帶同一把。不用 `--api-key-file`——它開不了
   中文路徑的檔案。`dev.ps1 llm` 手動起的沒有金鑰，照常可用。
@@ -469,10 +477,14 @@ trace／observation 的工具**（54 個工具都是 prompt、dataset、score、
 ```bash
 pip install -e ".[test,lint]"
 ruff check backend tools tests
-pytest                      # 不需要瀏覽器的那些，約 50 秒
+pytest                      # 不需要瀏覽器的那些，約 60 秒
 npm --prefix frontend run build && pytest -m browser    # 加上瀏覽器那一組
-pytest -m ""                # 全部
+pytest -m "browser or not browser"   # 全部
 ```
+
+全部要寫成 `-m "browser or not browser"`，不要寫 `-m ""`：Windows PowerShell 5.1 呼叫外部程式時
+會把空字串參數丟掉（PowerShell 7.3 才改成保留，見微軟的 about_Parsing），pytest 收到的是沒有值的
+`-m`，直接報錯 `argument -m: expected one argument`。
 
 **ruff 的版本是釘死的**（`lint` extra 寫 `ruff==0.9.6`）。ruff 每個小版本都可能多出新規則，
 浮動版本會讓 CI 無預警變紅，而且本機跟 CI 跑的不是同一套規則就失去意義。
@@ -511,7 +523,7 @@ pytest -m ""                # 全部
 
 | job | runner | 做什麼 |
 |---|---|---|
-| python | windows-latest | `ruff check` ＋ `pytest`（198 項） |
+| python | windows-latest | `ruff check` ＋ `pytest`（216 項） |
 | frontend | ubuntu-latest | `npm ci` ＋ `npm run build`（`tsc` 在裡面，等於型別檢查） |
 | browser | windows-latest | `npm run build` ＋ `playwright install chromium` ＋ `pytest -m browser`（26 項） |
 

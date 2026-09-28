@@ -10,7 +10,8 @@ from pathlib import Path
 import pytest
 from docx import Document
 
-from backend.core import filler
+from backend import db
+from backend.core import document, filler, planner
 
 # 把新欄位都填滿的一份虛構資料——沒填值的欄位本來就不會列出來，
 # 拿沒填的去測「有問就給」等於什麼都沒測
@@ -113,6 +114,79 @@ class TestDerived:
             {"start": "2018年01月01日", "end": "2019年12月31日"},
             {"company": "還沒填日期的那一筆"}]})
         assert fields["basic.total_tenure"] == "2年"
+
+    def test_numeric_dates_do_not_crash(self):
+        """手改或匯入的 JSON 可能把年份存成數字。以前直接拿去跑正規式，整個拋 TypeError。"""
+        fields = filler.fields_of({"experience": [{"start": 2018, "end": 2020}]})
+        assert fields["experience[0].period"] == "2018~2020"
+
+
+def two_column_form(tmp_path: Path, labels: list[str]) -> Path:
+    """左邊印標籤、右邊空著的表格。"""
+    doc = Document()
+    table = doc.add_table(rows=len(labels), cols=2)
+    for i, label in enumerate(labels):
+        table.cell(i, 0).text = label
+    path = tmp_path / "form.docx"
+    doc.save(path)
+    return path
+
+
+class TestReadingTextRoute:
+    """讀文字那條路（planner）取算出來的欄位，要跟 fields_of 同一套算法。
+
+    以前 planner 另有一套合成規則：年齡只有生日一個來源，卻被當成起訖兩欄拆開，
+    表格一印「年齡」整份分析就當掉；存著的舊年齡、舊期間也照用。
+    """
+
+    def test_age_without_birthday_does_not_crash(self):
+        assert planner.get_value({"basic": {}}, "basic.age") == ""
+
+    @pytest.mark.parametrize("key,flat", [
+        ("basic.age", "basic.age"),
+        ("basic.total_tenure", "basic.total_tenure"),
+        ("basic.military_period", "basic.military_period"),
+        ("education[].period", "education[0].period"),
+        ("experience[].period", "experience[0].period"),
+        ("experience[].tenure", "experience[0].tenure"),
+    ])
+    def test_same_as_fields_of(self, key, flat):
+        profile = {**FULL, "education": [{"start": "2014年09月01日", "end": "2018年06月30日"}]}
+        assert planner.get_value(profile, key, 0) == filler.fields_of(profile)[flat]
+
+    def test_stored_values_do_not_count(self):
+        profile = {"basic": {"birthday": "1996年04月15日", "age": "18"},
+                   "education": [{"start": "2014年09月01日", "end": "2018年06月30日",
+                                  "period": "舊的期間"}]}
+        assert planner.get_value(profile, "basic.age") == filler.fields_of(profile)["basic.age"]
+        assert planner.get_value(profile, "education[].period", 0) == "2014年9月1日~2018年6月30日"
+
+    def test_form_printing_age(self, tmp_path):
+        """照讀文字那條路實際的順序走：標籤錨定 → 產生計畫。標籤都在對照表裡，不必問模型。"""
+        parsed = document.ParsedDoc(str(two_column_form(tmp_path, ["中文姓名", "年齡"])))
+        _text, slots = parsed.flatten()
+        decisions = planner.decide_by_anchor(parsed.table_texts(), slots,
+                                             "http://127.0.0.1:8099", "虛構模型", {},
+                                             headers=parsed.slot_headers(slots))
+        assert "basic.age" in {d.field_key for d in decisions.values()}
+
+        ops, skipped = planner.build_plan(slots, {"basic": {"name_zh": "虛構甲"}}, decisions)
+        assert [o.value for o in ops] == ["虛構甲"]          # 沒填生日：年齡留白，其餘照填
+        assert [s.field_key for s in skipped] == ["basic.age"]
+
+        profile = {"basic": {"name_zh": "虛構甲", "birthday": "1996年04月15日"}}
+        ops, _ = planner.build_plan(slots, profile, decisions)
+        assert [o.value for o in ops] == ["虛構甲", filler.fields_of(profile)["basic.age"]]
+
+    def test_plan_page_with_age_but_no_birthday(self, client, make_job):
+        """看版面那條路取不到值時也會退回 planner.get_value，一樣不能當掉。"""
+        db.put_kv("profile", {"basic": {"name_zh": "虛構甲"}})
+        slot = make_job.blanks[0]
+        job_id = make_job(decided={slot.id: ["basic.age", 0, "model", "年齡"]})
+        r = client.get(f"/api/jobs/{job_id}")
+        assert r.status_code == 200
+        row = next(i for i in r.json()["plan"]["items"] if i["slot_id"] == slot.id)
+        assert row["status"] == "skip"
 
 
 class TestGating:

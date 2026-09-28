@@ -15,8 +15,8 @@ $root = Split-Path $PSScriptRoot -Parent
 $exe  = Join-Path $root "bin\llama-server.exe"
 $gguf = Join-Path $root $Model
 
-if (-not (Test-Path $exe))  { throw "找不到 $exe，請先取得 llama.cpp 二進位檔（見 README 第 5 節）" }
-if (-not (Test-Path $gguf)) { throw "找不到模型 $gguf，請先下載 GGUF（見 README 第 5 節）" }
+if (-not (Test-Path $exe))  { throw "找不到 $exe，請先取得 llama.cpp 二進位檔（見 docs\DEVELOPMENT.md 第 6 節）" }
+if (-not (Test-Path $gguf)) { throw "找不到模型 $gguf，請先從介面的模型選單下載" }
 
 Write-Host "模型     : $Model"
 Write-Host "端點     : http://localhost:$Port"

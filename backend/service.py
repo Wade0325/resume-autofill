@@ -277,14 +277,17 @@ def typed_values(job: Dict[str, Any]) -> Dict[str, str]:
 
 
 def _profile_of(job: Dict[str, Any]) -> Dict[str, Any]:
-    """我的資料 ＋ 這份工作的「這次應徵」。面板的值只算這一份，不寫回我的資料。"""
+    """我的資料 ＋ 這份工作的「這次應徵」。面板的值只算這一份，不寫回我的資料。
+
+    我的資料裡若存著應徵職務、工作地點（舊版匯入會誤存進去，我的資料頁看不到也刪不掉），
+    一律不算數：面板沒填就留白，跟看版面那條路一樣。"""
     profile = db.get_kv("profile") or {}
-    values = apply_values(job)
-    if not values:
-        return profile
-    section = {**(profile.get("job") or {}),
-               **{k.split(".", 1)[1]: v for k, v in values.items() if k.startswith("job.")}}
-    return {**profile, "job": section}
+    stored = profile.get("job") or {}
+    section = {k: v for k, v in stored.items()
+               if not getattr(BY_KEY.get(f"job.{k}"), "per_job", False)}
+    section.update({k.split(".", 1)[1]: v for k, v in apply_values(job).items()
+                    if k.startswith("job.")})
+    return profile if section == stored else {**profile, "job": section}
 
 
 def _per_job_key(text: str) -> str:
@@ -533,8 +536,9 @@ def _analyze_worker(job_id: str, filename: str, use_cache: bool = True) -> None:
 
         # 先讓模型整份讀過，列出「這份表格要求填哪些欄位」。逐格判讀是拿
         # 一小段字問語意，看不見整體；哪些欄位這份表格根本沒問，要通篇讀過
-        # 才知道。這份清單接著把逐格判讀的選項收斂到只剩它們（實測 83 個
-        # 欄位縮到 42 個）。範本快取命中就整步跳過。
+        # 才知道。這份清單在逐格判讀時標成★，讓模型優先從裡面挑；沒標★的仍然選得到
+        # （拿它當硬性限制試過，清單漏一個那欄就再也填不進去，見 planner.decide_by_anchor）。
+        # 範本快取命中就整步跳過。
         form_fields: List[str] = []
         if not cached:
             db.update_job(job_id, stage="辨識表格欄位")
@@ -1135,7 +1139,9 @@ def _import_rows(extracted: Dict[str, Any]) -> List[ImportRow]:
             entry_name: str = "") -> None:
         # 舊紀錄的值可能混進 {{id}} 位置標記，顯示與寫入前都剝掉
         text = document.MARKER_RE.sub("", str(value)).strip()
-        if field_key not in BY_KEY or not text:
+        # 應徵職務、工作地點只算那一份工作，不進我的資料：舊履歷上的職務寫進去，
+        # 讀文字那條路之後就會拿它填別家公司的表（見 _profile_of）
+        if field_key not in BY_KEY or BY_KEY[field_key].per_job or not text:
             return
         current = ("" if entry == "new"
                    else str(planner.get_value(profile, field_key, ordinal) or ""))

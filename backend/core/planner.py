@@ -1,8 +1,9 @@
 """決定履歷表上每個位置該填什麼，並產生填寫計畫。
 
 標籤驅動：表格上印的欄位標籤（姓名、行動電話…）是可靠的錨點，
-「值填在標籤右邊或下面」由確定性的幾何規則決定；模型只出場一次，
-處理對照表裡沒有的怪標籤。錨不住的位置留白待人工，不硬猜。
+「值填在標籤右邊或下面」由確定性的幾何規則決定。模型只做兩件事：
+判讀對照表裡沒有的怪標籤（分批問），以及學經歷表每一列對應清單的第幾筆（assign_rows）。
+錨不住的位置留白待人工，不硬猜。
 """
 from __future__ import annotations
 
@@ -11,13 +12,12 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
-from . import document, llm
+from . import document, filler, llm
 from .document import Slot
 from .schema import (
     BLOCKED_LABELS,
     BY_KEY,
     BY_LABEL,
-    DERIVED_FROM,
     FIELD_KEYS,
     LABEL_ALIASES,
     OPTION_SYNONYMS,
@@ -72,7 +72,7 @@ class Decision(NamedTuple):
     """一個位置的對映決策。存進 DB 時仍以四元 list 序列化，格式不變。"""
     field_key: str
     ordinal: int
-    source: str       # rule | model | cache | manual
+    source: str       # rule | model | cache | manual | apply
     label: str
 
 # 舊版由模型照抄標籤，常把 {{tbl1.r2.c6}} 位置標記一起抄回來；
@@ -121,7 +121,7 @@ def decide_by_anchor(texts: List[List[List[str]]], slots: List[Slot],
     但沒標★的仍然選得到——實測拿它當硬性約束（把其他欄位從文法裡拿掉）
     會擋掉真的要填的欄位：清單漏一個，那個欄位就再也填不進去。
 
-    解析順位：內建對照表 → 問模型。
+    解析順位：範本快取 → 內建對照表 → 問模型。
     """
     cached = cached or {}
     headers = headers or {}
@@ -335,7 +335,7 @@ def regions(grid: List[List[str]],
     （「學　歷」一格佔三列），以及橫跨整列的短標題。整段說明文字不算——
     宣告事項那種長問句橫跨整列，當區塊名只會洗掉真正的上下文。
 
-    taken 是使用者填過值的座標：那些格子印的是這個人的資料（「中文：郭韋德」
+    taken 是使用者填過值的座標：那些格子印的是這個人的資料（「中文：王小明」
     也可能垂直合併），不是區塊標題。
     """
     taken = taken or set()
@@ -343,7 +343,7 @@ def regions(grid: List[List[str]],
 
     def is_title(text: str) -> bool:
         """區塊標題長什麼樣：短、而且只有一個名字。
-        「中文：郭韋德」（標籤配值）、「健康狀況：□優 □良」（勾選題）
+        「中文：王小明」（標籤配值）、「健康狀況：□優 □良」（勾選題）
         都是欄位不是區塊——它們一旦被當成區塊名，整區的上下文就被洗掉了。
         """
         return (0 < len(_squash(text)) <= 12
@@ -526,7 +526,7 @@ def align_labels(slots: List[Slot], decisions: Dict[str, Decision],
 
     1. 標籤／欄首與欄位定義的名稱完全一致 → 直接採用那個欄位。
        模型在密集表格常整組位移一格（希望待遇配到可到職日），這裡拉回來。
-    2. 印著白名單外資訊（血型、身高、體重、年制…）的格子 → 一律不填。
+    2. 印著 BLOCKED_LABELS（目前只剩「年制」）的格子 → 一律不填。
     3. 期間欄照版面順序：同一列兩個位置 → 前 start 後 end；只有一個 → period。
        （同一格分兩行印「自　年　月」「至　年　月」也算兩個位置）
     只動模型判的格子；快取與手動修正不碰。
@@ -810,18 +810,12 @@ def _alternatives(squashed: str) -> List[str]:
 
 
 def get_value(profile: Dict[str, Any], key: str, ordinal: int = 0):
-    stored = _stored(profile, key, ordinal)
-    if stored:
-        return stored
-
-    # 表格只印一欄「就學期間」時，用入學與畢業合成
-    parts = DERIVED_FROM.get(key)
-    if parts:
-        start, end = (_stored(profile, p, ordinal) for p in parts)
-        if start and end:
-            return f"{start}－{end}"
-        return start or end
-    return ""
+    # 算出來的欄位（年齡、年資、就學期間…）存的值不算數，跟看版面那條路一樣由
+    # filler.fields_of 算。以前這裡另有一套合成規則，年齡只有一個來源欄位，
+    # 表格一印「年齡」整份分析就當掉
+    if getattr(BY_KEY.get(key), "derived", False):
+        return filler.fields_of(profile).get(key.replace("[]", f"[{ordinal}]"), "")
+    return _stored(profile, key, ordinal) or ""
 
 
 def _stored(profile: Dict[str, Any], key: str, ordinal: int):

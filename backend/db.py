@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS kv (
 );
 CREATE TABLE IF NOT EXISTS template (
     fingerprint TEXT PRIMARY KEY,
-    source_name TEXT NOT NULL DEFAULT '',   -- 純診斷用：這份範本從哪個檔名學來，程式不讀
+    source_name TEXT NOT NULL DEFAULT '',   -- 這份範本從哪個檔名學來，只拿來顯示在「學過的格式」
     mapping     TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 );
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS job (
     status      TEXT NOT NULL,   -- processing | analyzed | failed
     anchors     TEXT NOT NULL,
     decided     TEXT NOT NULL,
-    form_fields TEXT NOT NULL DEFAULT '[]', -- VLM 看版面認出「這份表格要填哪些欄位」
+    form_fields TEXT NOT NULL DEFAULT '[]', -- 讀文字那條路：模型列出「這份表格要填哪些欄位」
     engine      TEXT NOT NULL DEFAULT 'classic', -- 這份是哪一條路填的：classic | vlm
     apply       TEXT NOT NULL DEFAULT '{}',   -- 「這次應徵」：應徵職務、工作地點…只算這一份
     typed       TEXT NOT NULL DEFAULT '{}',   -- 使用者在對映清單自己打的值：{位置代碼: 字}

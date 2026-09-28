@@ -38,7 +38,7 @@ class PlanItem(BaseModel):
     field_key: str
     value: str
     existing: str = ""                # 文件原本就有的內容，非空代表這一格會被覆蓋
-    source: str                       # rule | model | cache | manual
+    source: str                       # rule | model | cache | manual | apply | typed
     status: Literal["fill", "skip"]
     note: str = ""
     ordinal: int = 0                  # 清單欄位（學歷、經歷…）用第幾筆，從 0 起算
@@ -57,7 +57,8 @@ class PlanOut(BaseModel):
     template_cached: bool
     llm_available: bool
     stats: PlanStats
-    # 模型看過版面後認出「這份表格要填哪些欄位」，給使用者對照用（欄位名稱）
+    # 讀文字那條路：模型通篇讀過列出「這份表格要填哪些欄位」，給使用者對照用（欄位名稱）。
+    # 看版面那條路沒有這一步，一律是空的
     form_fields: List[str] = []
     items: List[PlanItem]
     # 我的資料裡每一種清單有幾筆（education: 3），填寫頁的「第幾筆」選單照這個列

@@ -124,3 +124,27 @@ class TestPasteText:
                 return state
             time.sleep(0.25)
         return state
+
+
+class TestPerJobStaysOut:
+    """應徵職務、工作地點只算那一份工作，不進我的資料。
+
+    以前匯入會把舊履歷上的應徵職務寫進我的資料（我的資料頁看不到、刪不掉），
+    讀文字那條路之後就拿它去填別家公司的表。
+    """
+
+    def test_import_does_not_offer_per_job_fields(self):
+        rows = service._import_rows({"job.title": "舊履歷上的職務", "job.location": "虛構市",
+                                     "job.expected_salary": "面議"})
+        keys = {r.field_key for r in rows}
+        assert not keys & {"job.title", "job.location"}
+        assert "job.expected_salary" in keys          # 希望待遇是我的資料，照常可以匯入
+
+    def test_stored_per_job_value_is_not_used(self, profile):
+        profile["job"]["title"] = "以前誤存的職務"
+        db.put_kv("profile", profile)
+        job = service._profile_of({"apply": {}})["job"]
+        assert "title" not in job
+        assert job["expected_salary"] == "面議"
+        panel = service._profile_of({"apply": {"job.title": "這次的職務"}})["job"]
+        assert panel["title"] == "這次的職務"
