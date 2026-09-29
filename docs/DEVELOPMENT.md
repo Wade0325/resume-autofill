@@ -161,7 +161,9 @@ PDF 取字一定要 NFKC——104 的字型把中文對映到康熙部首區，�
 - **這次應徵**（應徵職務、工作地點…）跟著那一份工作走，存在 `job.apply`，不進「我的資料」：
   每間公司都不一樣，存成全域值只會填錯。看版面把這些位置標上 `Slot.job_field`，
   值一律由面板決定（模型挑的、舊快取記的都不算）；位置另外編號（`#0.j1`）、也不算進格式指紋，
-  學過的格式才不會因為多了這個功能全部要重學。讀文字靠 `LABEL_MAP` 認同一批欄名。
+  學過的格式才不會因為多了這個功能全部要重學。讀文字靠 `LABEL_MAP` 認同一批欄名，
+  計畫、預覽、下載都經過 `service._classic_per_job`。我的資料一律不收這些欄位
+  （`schema.PER_JOB_KEYS`）：存檔時 `profiles.save` 拿掉、匯入不抽，舊版誤存的在 `db._v5` 清掉。
 - **自己打的值**（對映清單的「將填入」欄）存在 `job.typed`，跟著那一份工作，比任何判斷都優先。
   寫入時照原樣寫：日期拆進年月日、同一項攤到連續空格、一格一個字、單位前只收數字這些規則
   都是為了「從我的資料推出該寫什麼」，手打的不必再推一次（勾選框例外，打字＝勾那個選項）。
@@ -468,7 +470,8 @@ trace／observation 的工具**（54 個工具都是 prompt、dataset、score、
   已經發出去的步驟不要改。加欄位用 `_add_column`（已經有就跳過），不要 try/except 吞錯誤——
   以前這樣寫，連「資料庫被鎖住」都一起吞掉。
 - 寫「我的資料」一律經過 `profiles.save()`，才會留版本；結構由 `profiles.problem()` 把關
-  （認得的區塊形狀要對，不認得的照留）。
+  （認得的區塊形狀要對，不認得的照留；日期不收小數）。存之前 `profiles.clean()` 整理一次：
+  日期統一寫法、整數年份轉成字（數字會讓我的資料頁當掉）、拿掉「這次應徵」的欄位。
 
 ---
 
@@ -523,7 +526,7 @@ pytest -m "browser or not browser"   # 全部
 
 | job | runner | 做什麼 |
 |---|---|---|
-| python | windows-latest | `ruff check` ＋ `pytest`（227 項） |
+| python | windows-latest | `ruff check` ＋ `pytest`（241 項） |
 | frontend | ubuntu-latest | `npm ci` ＋ `npm run build`（`tsc` 在裡面，等於型別檢查） |
 | browser | windows-latest | `npm run build` ＋ `playwright install chromium` ＋ `pytest -m browser`（26 項） |
 

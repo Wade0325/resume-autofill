@@ -740,6 +740,7 @@ def build_plan(slots: List[Slot], profile: Dict[str, Any],
     by_id = {s.id: s for s in slots}
     ops: List[FillOp] = []
     skipped: List[FillOp] = []
+    fields: Optional[Dict[str, str]] = None      # filler.fields_of(profile)，用到才算、只算一次
 
     # 使用者自己打的值最大：連原本判斷不填的格子也照他的意思寫
     for sid, text in typed.items():
@@ -757,7 +758,16 @@ def build_plan(slots: List[Slot], profile: Dict[str, Any],
             skipped.append(FillOp(slot, key, "", source, label, reason, ordinal))
             continue
 
-        value = get_value(profile, key, ordinal)
+        spec = BY_KEY[key]
+        if spec.derived or spec.kind == "date":
+            # 算出來的欄位與日期跟看版面那條路取同一份值：日期換成同一種寫法
+            # （「民國109年3月」→「2020年3月」、生日曆制是民國的換成西元），不然印好的
+            # 「至　年　月」會寫成「至 民國 年 1093 月」
+            if fields is None:
+                fields = filler.fields_of(profile)
+            value = fields.get(key.replace("[]", f"[{ordinal}]"), "")
+        else:
+            value = get_value(profile, key, ordinal)
         if value in (None, ""):
             skipped.append(FillOp(slot, key, "", source, label,
                                   "個人資料中此欄位為空", ordinal))

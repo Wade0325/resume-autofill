@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from . import actions, db
-from .core.schema import BY_KEY, FIELDS
+from .core.schema import BY_KEY, FIELDS, PER_JOB_KEYS
 
 log = logging.getLogger(__name__)
 
@@ -47,7 +47,26 @@ def problem(profile: Any) -> Optional[str]:
                 return f"「{root}」應該是一筆一筆的清單"
         elif not isinstance(value, shape):
             return f"「{root}」的格式不對"
+    # 日期要是字（整數年份存檔時會自動轉）。小數不收：「2018.10」讀進來已經是 2018.1，
+    # 存下去就變成一月，填進表格也是錯的
+    for key, value in _date_values(profile):
+        if value is not None and not isinstance(value, str) and (
+                isinstance(value, bool) or not isinstance(value, int)):
+            return f"「{BY_KEY[key].label}」的日期要用文字寫，例如 2018年10月"
     return None
+
+
+def _date_values(profile: Dict[str, Any]):
+    """整份資料裡 schema 標成日期的 (欄位代碼, 值)。"""
+    for root, value in profile.items():
+        rows = value if isinstance(value, list) else [value]
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            for k, v in row.items():
+                key = f"{root}[].{k}" if isinstance(value, list) else f"{root}.{k}"
+                if key in _DATE_KEYS:
+                    yield key, v
 
 
 # 日期寫法百百種：手選的是「1996年04月15日」，匯入的常是「1996/4/15」「1996-04-15」。
@@ -59,7 +78,15 @@ _DATE_KEYS = {k for k, f in BY_KEY.items() if f.kind == "date"}
 
 def _one_date(value: Any) -> Any:
     """認得出年月（日）就寫成同一種；「至今」「民國85年」這種認不出來的原樣保留。
-    不換算曆制：存的是民國年就還是民國年，由 basic.birthday_era 決定怎麼解讀。"""
+    不換算曆制：存的是民國年就還是民國年，由 basic.birthday_era 決定怎麼解讀。
+
+    手改的備份或直接呼叫 API 可能把年份存成數字：我的資料頁與填寫都只認字，數字
+    會讓我的資料頁整頁當掉（連還原的按鈕都按不到）。整數轉成字；小數存檔前就擋掉了
+    （見 problem），舊資料裡的原樣轉成字、不當日期整理，看得出是怪值才會去改"""
+    if isinstance(value, float):
+        return str(value)
+    if isinstance(value, int) and not isinstance(value, bool):
+        value = str(value)
     if not isinstance(value, str):
         return value
     m = _DATE_RE.fullmatch(value)
@@ -83,12 +110,31 @@ def normalize_dates(profile: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def save(profile: Dict[str, Any], reason: str) -> None:
-    """reason 是被什麼換掉：save | import | restore | file，版本紀錄照這個顯示。"""
-    profile = normalize_dates(profile)
+def _without_per_job(profile: Dict[str, Any]) -> Dict[str, Any]:
+    """應徵職務、工作地點只算那一份工作（「這次應徵」），不進我的資料。以前匯入會誤存進去，
+    我的資料頁看不到也刪不掉，看版面那條路還會把它列給模型挑；我的資料頁存檔時又會
+    原封不動送回來，備份檔也帶著走。"""
+    job = profile.get("job")
+    if not isinstance(job, dict):
+        return profile
+    kept = {k: v for k, v in job.items() if f"job.{k}" not in PER_JOB_KEYS}
+    return profile if len(kept) == len(job) else {**profile, "job": kept}
+
+
+def clean(profile: Dict[str, Any]) -> Dict[str, Any]:
+    """存進我的資料之前整理一次：日期統一寫法、拿掉只算那一份工作的欄位。
+    所有寫入（存檔、匯入、還原版本、從檔案還原）都走 save，升級時也拿它整理舊資料（db._v5）。"""
+    return _without_per_job(normalize_dates(profile))
+
+
+def save(profile: Dict[str, Any], reason: str) -> Dict[str, Any]:
+    """reason 是被什麼換掉：save | import | restore | file，版本紀錄照這個顯示。
+    回傳實際存進去的那一份（整理過的）。"""
+    profile = clean(profile)
     kept = db.put_profile(profile, reason)
     # 只記結構規模，不記內容——profile 裡全是個資
     log.info("我的資料已更新 原因=%s 留版本=%s 區塊=%d", reason, kept, len(profile))
+    return profile
 
 
 def _flatten(value: Any, path: str = "") -> Dict[str, str]:
@@ -118,9 +164,9 @@ def restore_version(version_id: int) -> Optional[Dict[str, Any]]:
     value = db.get_profile_version(version_id)
     if value is None:
         return None
-    save(value, "restore")
+    saved = save(value, "restore")
     actions.record("還原我的資料成功")
-    return value
+    return saved
 
 
 def export() -> Dict[str, Any]:
@@ -141,6 +187,6 @@ def restore_file(payload: Any) -> Dict[str, Any]:
         why = "檔案裡沒有我的資料"      # 隨便一個 JSON（例如設定檔）不能蓋掉我的資料
     if why:
         raise ValueError(why)
-    save(profile, "file")
+    saved = save(profile, "file")
     actions.record("從檔案還原我的資料成功")
-    return profile
+    return saved

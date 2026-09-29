@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import actions, config, db, model_manager, profiles
 from .core import convert, document, filler, llm, names, planner, reader, writer
 from .core.document import Slot
-from .core.schema import BY_KEY, PER_JOB_LABELS
+from .core.schema import BY_KEY, PER_JOB_KEYS, PER_JOB_LABELS
 from .schemas import ImportPreviewOut, ImportRow, PlanItem, PlanOut, PlanStats
 
 log = logging.getLogger(__name__)
@@ -279,15 +279,14 @@ def typed_values(job: Dict[str, Any]) -> Dict[str, str]:
 def _profile_of(job: Dict[str, Any]) -> Dict[str, Any]:
     """我的資料 ＋ 這份工作的「這次應徵」。面板的值只算這一份，不寫回我的資料。
 
-    我的資料裡若存著應徵職務、工作地點（舊版匯入會誤存進去，我的資料頁看不到也刪不掉），
-    一律不算數：面板沒填就留白，跟看版面那條路一樣。"""
+    我的資料裡的應徵職務、工作地點一律不算數：面板沒填就留白，跟看版面那條路一樣。
+    （存檔時就會擋掉，舊版匯入誤存的也在升級時清掉，見 profiles.save；這裡再擋一次）"""
     profile = db.get_kv("profile") or {}
-    stored = profile.get("job") or {}
-    section = {k: v for k, v in stored.items()
-               if not getattr(BY_KEY.get(f"job.{k}"), "per_job", False)}
+    section = {k: v for k, v in (profile.get("job") or {}).items()
+               if f"job.{k}" not in PER_JOB_KEYS}
     section.update({k.split(".", 1)[1]: v for k, v in apply_values(job).items()
                     if k.startswith("job.")})
-    return profile if section == stored else {**profile, "job": section}
+    return {**profile, "job": section}
 
 
 def _per_job_key(text: str) -> str:
@@ -414,7 +413,7 @@ def _vlm_render(job: Dict[str, Any], cached: bool, slots: List[Any],
     job_id, filename = job["id"], job["filename"]
     apply, typed = apply_values(job), typed_values(job)
     profile = _profile_of(job)
-    # filler 自己算出來的值（年資、英文姓氏）planner 不認得，先查 filler 那一份
+    # 跟 filler 寫的時候同一份攤平，算出來的欄位（年齡、年資、英文姓氏）也在裡面
     values = filler.fields_of(profile)
     items, by_source = [], {}
     for slot in slots:
@@ -423,8 +422,11 @@ def _vlm_render(job: Dict[str, Any], cached: bool, slots: List[Any],
         value = typed.get(slot.id, "")
         source = "typed" if value else (d.source if d else "")
         if not value and d and d.field_key and d.field_key not in _NOT_FILLED:
-            value = (values.get(_join_key(d.field_key, d.ordinal))
-                     or str(planner.get_value(profile, d.field_key, d.ordinal) or ""))
+            value = values.get(_join_key(d.field_key, d.ordinal), "")
+            # 攤平時沒有的只剩清單型的值（興趣存成「羽球、游泳」那種），照存的值串起來。
+            # 算出來的欄位攤平時就有，沒有就是算不出來，不必再算一次
+            if not value and not getattr(BY_KEY.get(d.field_key), "derived", False):
+                value = str(planner.get_value(profile, d.field_key, d.ordinal))
         fill = bool(value)
         if fill:
             by_source[source] = by_source.get(source, 0) + 1
@@ -773,6 +775,7 @@ def preview_docx(job_id: str, which: str, highlight: bool = True) -> Optional[by
                          highlight=highlight, typed=typed_values(job))
         else:
             slots, decisions = _restore(job)
+            decisions = _classic_per_job(decisions, apply_values(job))
             ops, _ = planner.build_plan(slots, profile, decisions, typed_values(job))
             writer.apply_ops(str(src), str(filled), ops, highlight=highlight)
         return filled.read_bytes()
@@ -879,7 +882,10 @@ def write_output(job_id: str) -> Optional[Dict[str, Any]]:
         result = {"written": written, "failed": 0, "fail": []}
     else:
         slots, decisions = _restore(job)
-        ops, _ = planner.build_plan(slots, profile, decisions, typed_values(job))
+        # 「這次應徵」跟計畫頁（_render）同一套：以前只有計畫頁套，計畫說會填，
+        # 下載的檔案卻是空的。範本照舊記原本的決策，面板的值不是這份格式學來的
+        ops, _ = planner.build_plan(slots, profile, _classic_per_job(decisions, apply_values(job)),
+                                    typed_values(job))
         result = writer.apply_ops(str(input_path(job_id)), str(output_path(job_id)), ops)
     log.info("寫檔完成 written=%d failed=%d 耗時=%dms",
              result["written"], result["failed"], int((time.perf_counter() - t0) * 1000))
@@ -918,6 +924,14 @@ def _render(job: Dict[str, Any], cached: bool, slots: List[Slot],
 
     items = [_item(o, "fill") for o in ops] + [_item(s, "skip") for s in skipped]
     items.sort(key=lambda i: _slot_order(i.slot_id))
+    # 應徵職務、工作地點的值只來自「這次應徵」：註記照看版面那條路寫，面板才會展開、
+    # 提醒還有幾格沒填。「個人資料中此欄位為空」會把人帶去我的資料，那裡沒有這兩個欄位
+    for item in items:
+        if item.field_key in PER_JOB_KEYS:
+            if item.status == "fill":
+                item.note = item.note or "這次應徵"
+            elif item.note == "個人資料中此欄位為空":
+                item.note = "這次應徵沒填"
 
     by_source: Dict[str, int] = {}
     for o in ops:
@@ -1140,11 +1154,11 @@ def _import_rows(extracted: Dict[str, Any]) -> List[ImportRow]:
         # 舊紀錄的值可能混進 {{id}} 位置標記，顯示與寫入前都剝掉
         text = document.MARKER_RE.sub("", str(value)).strip()
         # 應徵職務、工作地點只算那一份工作，不進我的資料：舊履歷上的職務寫進去，
-        # 讀文字那條路之後就會拿它填別家公司的表（見 _profile_of）
-        if field_key not in BY_KEY or BY_KEY[field_key].per_job or not text:
+        # 讀文字那條路之後就會拿它填別家公司的表（見 _profile_of）。抽取時已經不問這兩個
+        # 欄位了，這裡擋的是修正以前抽出來、還沒套用的那些匯入紀錄
+        if field_key not in BY_KEY or field_key in PER_JOB_KEYS or not text:
             return
-        current = ("" if entry == "new"
-                   else str(planner.get_value(profile, field_key, ordinal) or ""))
+        current = "" if entry == "new" else str(planner.get_value(profile, field_key, ordinal))
         rows.append(ImportRow(
             row_id=f"{field_key}#{ordinal}", field_key=field_key, ordinal=ordinal,
             current=current, incoming=text, default_checked=not current,

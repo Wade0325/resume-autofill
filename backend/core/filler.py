@@ -676,12 +676,16 @@ def fields_of(profile: Dict[str, Any]) -> Dict[str, str]:
         for i, row in enumerate(profile.get(root) or []):
             if not isinstance(row, dict):
                 continue
-            # 匯入或手改的 JSON 可能把年份存成數字（2018），先轉字串，不然正規式當場拋錯
+            # 手改過的備份或直接呼叫 API 存進來的年份可能是數字（2018），先轉字串，
+            # 不然正規式當場拋錯
             start, end = str(row.get("start") or ""), str(row.get("end") or "")
             if start and end:
-                out[f"{root}[{i}].period"] = f"{_canon_date(start)}~{_canon_date(end)}"
-                if root == "experience" and _tenure(start, end):
-                    out[f"{root}[{i}].tenure"] = _tenure(start, end)
+                # 年資也用換過寫法的日期算：「民國105年09月」換成西元才能跟「至今」相減
+                start, end = _canon_date(start), _canon_date(end)
+                out[f"{root}[{i}].period"] = f"{start}~{end}"
+                tenure = _tenure(start, end) if root == "experience" else ""
+                if tenure:
+                    out[f"{root}[{i}].tenure"] = tenure
     basic = profile.get("basic") or {}
     # 生日曆制＝民國：存的「85年04月15日」是民國年，換成西元（見 _canon_date）
     birthday = str(basic.get("birthday") or "").strip()
@@ -704,7 +708,8 @@ def fields_of(profile: Dict[str, Any]) -> Dict[str, str]:
     dated = [row for row in (profile.get("experience") or [])
              if isinstance(row, dict)
              and str(row.get("start") or "").strip() and str(row.get("end") or "").strip()]
-    spans = [_months(str(row["start"]), str(row["end"])) for row in dated]
+    spans = [_months(_canon_date(str(row["start"])), _canon_date(str(row["end"])))
+             for row in dated]
     if spans and all(spans):
         out["basic.total_tenure"] = _span(sum(spans))
     return out
@@ -746,7 +751,13 @@ def _months(start: str, end: str) -> int:
         end_year, end_month = int(b.group(1)), int(b.group(2))
     if not a:
         return 0
-    months = (end_year * 12 + end_month) - (int(a.group(1)) * 12 + int(a.group(2))) + 1
+    start_year = int(a.group(1))
+    # 一端是沒寫民國的兩三位數年份（「110年01月」），另一端是西元或至今：直接相減會差出
+    # 1911 年，寫出「1916年9個月」。是哪一種曆不猜（見 _canon_date），當成算不出來。
+    # 兩端都是民國年時相減的結果一樣，照算
+    if (start_year < 1000) != (end_year < 1000):
+        return 0
+    months = (end_year * 12 + end_month) - (start_year * 12 + int(a.group(2))) + 1
     return months if months > 0 else 0
 
 
@@ -758,7 +769,7 @@ def _span(months: int) -> str:
 def _tenure(start: str, end: str) -> str:
     """年資：頭尾兩個月都算，跟 104、LinkedIn 的算法一樣（2023年7月～2026年4月＝2年10個月）。
     還在職（訖是「至今」）就算到這個月。
-    認不出日期、或起訖顛倒就不算——寧可空著，不寫一個錯的年資。"""
+    認不出日期、起訖顛倒、或兩端的曆對不上就不算——寧可空著，不寫一個錯的年資。"""
     return _span(_months(start, end))
 
 

@@ -148,3 +148,10 @@ class TestPerJobStaysOut:
         assert job["expected_salary"] == "面議"
         panel = service._profile_of({"apply": {"job.title": "這次的職務"}})["job"]
         assert panel["title"] == "這次的職務"
+
+    def test_extraction_does_not_ask_for_them(self):
+        """抽取時就不問：抽了也會被丟掉，模型還可能把履歷上的希望職稱放進應徵職務、
+        而不是放進期望職務。"""
+        props = reader._schema()["properties"]
+        assert "job.title" not in props and "job.location" not in props
+        assert "job.expected_salary" in props
