@@ -222,7 +222,7 @@ class ParsedDoc:
         return out
 
 
-# load() 加在可填位置上的 {{id}} 標記
+# ParsedDoc.flatten() 加在可填位置上的 {{id}} 標記
 MARKER_RE = re.compile(r"\{\{[^{}]*\}\}")
 
 # 「使用者填過的值」的高置信長相。訊號刻意保守：

@@ -48,7 +48,9 @@ MODELS_DIR = Path(os.environ.get("RESUME_AUTOFILL_MODELS_DIR", _ROOT / "models")
 LLAMA_SERVER = Path(os.environ.get("RESUME_AUTOFILL_LLAMA_SERVER",
                                    _ROOT / "bin" / "llama-server.exe"))
 
-# 空＝讓 llama.cpp 自己看剩多少 VRAM 決定放幾層（寫死的話它會放棄自動配置）
+# 空＝999，整顆放上 GPU（model_manager 啟動時補）。不要改成讓 llama.cpp 自動配置：
+# 8 GB 顯卡上它會挑 CPU／GPU 混合，慢 40%，跑約 40 分鐘後崩潰（DEVELOPMENT.md 第 6 節）。
+# 裝不下的機器設層數，0＝純 CPU
 GPU_LAYERS = os.environ.get("RESUME_AUTOFILL_GPU_LAYERS", "")
 # 開程式時自動把上次用的模型載回來；開發時不想等就設 0
 AUTOSTART_MODEL = os.environ.get("RESUME_AUTOFILL_AUTOSTART", "1") != "0"

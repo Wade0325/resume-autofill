@@ -17,7 +17,7 @@ import JobHistory from '../components/JobHistory'
 import LearnedFormats from '../components/LearnedFormats'
 import { PageShell, FooterBar, OverwriteBadge } from '../components/common'
 
-// pdf.js 佔了主 bundle 一半以上，等真的要顯示預覽時再載
+// Word 預覽要用的 docx-preview（連同 JSZip）約 170 KB，快是主 bundle 的一半，等真的要顯示時再載
 const DocxCompare = lazy(() => import('../components/DocxCompare'))
 
 // 值是插進原本的字裡的，不會蓋掉表格印好的內容

@@ -10,14 +10,6 @@ type Polled =
   | { status: 'ready' }
 
 /**
- * 「上傳檔案 → 後端背景分析 → 輪詢到結果」的整套狀態機，填寫與匯入共用。
- * 工作 id 存 sessionStorage，切到別頁再回來能接續，不必重傳檔案重跑模型。
- *
- * error 也給頁面其他失敗共用（欄位載入、套用），顯示位置是同一個 ErrorBox。
- * onDiscard 在「換了新檔／放棄追蹤／重來」時呼叫，頁面清自己的附帶狀態
- * （匯入頁存的勾選）。
- */
-/**
  * 分析要一兩分鐘，多數人會先去做別的事。完成時把分頁標題改掉（回到這一頁就還原），
  * 使用者答應過通知就再發一則。沒答應就不主動問——跳權限視窗比沒通知還煩。
  */
@@ -36,6 +28,14 @@ function notifyDone() {
   }
 }
 
+/**
+ * 「上傳檔案 → 後端背景分析 → 輪詢到結果」的整套狀態機，填寫與匯入共用。
+ * 工作 id 存 sessionStorage，切到別頁再回來能接續，不必重傳檔案重跑模型。
+ *
+ * error 也給頁面其他失敗共用（欄位載入、套用），顯示位置是同一個 ErrorBox。
+ * onDiscard 在「換了新檔／放棄追蹤／重來」時呼叫，頁面清自己的附帶狀態
+ * （匯入頁存的勾選）。
+ */
 export function useBackgroundUpload<S extends Polled>(opts: {
   storageKey: string
   start: (file: File, onProgress: (pct: number) => void) => Promise<string>

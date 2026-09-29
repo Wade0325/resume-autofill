@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS kv (
 );
 CREATE TABLE IF NOT EXISTS template (
     fingerprint TEXT PRIMARY KEY,
-    source_name TEXT NOT NULL DEFAULT '',   -- 純診斷用：這份範本從哪個檔名學來，程式不讀
+    source_name TEXT NOT NULL DEFAULT '',   -- 這份範本從哪個檔名學來，只拿來顯示在「學過的格式」
     mapping     TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 );
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS job (
     status      TEXT NOT NULL,   -- processing | analyzed | failed
     anchors     TEXT NOT NULL,
     decided     TEXT NOT NULL,
-    form_fields TEXT NOT NULL DEFAULT '[]', -- VLM 看版面認出「這份表格要填哪些欄位」
+    form_fields TEXT NOT NULL DEFAULT '[]', -- 讀文字那條路：模型列出「這份表格要填哪些欄位」
     engine      TEXT NOT NULL DEFAULT 'classic', -- 這份是哪一條路填的：classic | vlm
     apply       TEXT NOT NULL DEFAULT '{}',   -- 「這次應徵」：應徵職務、工作地點…只算這一份
     typed       TEXT NOT NULL DEFAULT '{}',   -- 使用者在對映清單自己打的值：{位置代碼: 字}
@@ -93,6 +93,21 @@ def _add_column(conn: sqlite3.Connection, table: str, column: str) -> None:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
 
 
+def _v5(conn: sqlite3.Connection) -> None:
+    # 我的資料照現在的存檔規則整理一次（profiles.clean）：舊版匯入誤存的應徵職務、工作地點
+    # 看不到也刪不掉，還會被看版面那條路列給模型挑；手改備份存進的數字年份會讓我的資料頁當掉
+    from . import profiles  # profiles 反過來 import db，只能用到時才載入
+    row = conn.execute("SELECT value FROM kv WHERE key = 'profile'").fetchone()
+    if row is None:
+        return
+    old = json.loads(row["value"])
+    new = profiles.clean(old) if isinstance(old, dict) else old
+    if new != old:
+        conn.execute("UPDATE kv SET value = ?, updated_at = ? WHERE key = 'profile'",
+                     (json.dumps(new, ensure_ascii=False), _now()))
+        log.info("我的資料已照新的存檔規則整理")
+
+
 def _v4(conn: sqlite3.Connection) -> None:
     # 匯入的提醒（掃描檔）
     _add_column(conn, "import_job", "note TEXT NOT NULL DEFAULT ''")
@@ -123,7 +138,7 @@ def _v1(conn: sqlite3.Connection) -> None:
 
 # 資料庫版本記在 PRAGMA user_version：第 n 步做完就記成 n，下次從沒做過的那步接著做。
 # 新表寫在 SCHEMA 就好；改舊表（加欄位、搬資料）才要在這裡加一步，已經發出去的步驟不要改
-MIGRATIONS = [_v1, _v2, _v3, _v4]
+MIGRATIONS = [_v1, _v2, _v3, _v4, _v5]
 
 
 def init() -> None:

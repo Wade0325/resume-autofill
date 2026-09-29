@@ -26,8 +26,9 @@
 ```bash
 pip install -e ".[test,lint]"
 ruff check backend tools tests
-pytest                    # 198 項，約 50 秒，不需要模型也不需要顯卡
-pytest -m ""              # 加上瀏覽器那一組（要先 npm --prefix frontend run build）
+pytest                    # 241 項，約 60 秒，不需要模型也不需要顯卡
+pytest -m "browser or not browser"   # 加上瀏覽器那一組（要先 npm --prefix frontend run build）
+                          # 不要寫 -m ""：PowerShell 5.1 會把空字串丟掉，pytest 直接報錯
 ```
 
 CI（`.github/workflows/ci.yml`）跑的就是這些。動到填寫邏輯的話，光有測試還不夠，

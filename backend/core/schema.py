@@ -2,6 +2,8 @@
 
 使用者資料存成這份結構；模型只能從 FIELD_KEYS 裡挑，發明不了欄位。
 要加欄位就在 FIELDS 加一筆，前端表單與模型提示都會自動跟上。
+同時要把它加進 filler.ASK_ONLY_IF_MENTIONED：候選清單多一項，研究迴圈的考題就會掉分，
+而且掉的格子跟新欄位毫不相干（見 CLAUDE.md）。
 """
 
 import re
@@ -221,13 +223,13 @@ BY_KEY = {f.key: f for f in FIELDS}
 
 
 def describe_fields(include_special: bool = True, skip_derived: bool = False,
-                    mark: Optional[Collection[str]] = None) -> str:
+                    mark: Optional[Collection[str]] = None, skip_per_job: bool = False) -> str:
     """mark 給定時，在那些欄位後面加★——通篇讀過覺得這份表格有問的欄位。
     只是提示不是過濾：清單漏掉的欄位仍然選得到（實測拿它當硬性約束會擋掉
-    真的要填的欄位）。"""
+    真的要填的欄位）。skip_per_job 給匯入用：應徵職務、工作地點不進我的資料，不必抽。"""
     lines = []
     for f in FIELDS:
-        if skip_derived and f.derived:
+        if (skip_derived and f.derived) or (skip_per_job and f.per_job):
             continue
         extra = f" 選項={f.choices}" if f.choices else ""
         hint = f" — {f.hint}" if f.hint else ""
@@ -237,16 +239,6 @@ def describe_fields(include_special: bool = True, skip_derived: bool = False,
         lines.append("- __SKIP__: 這個位置不是求職者要填的（表頭、說明文字、公司自用欄）")
         lines.append("- __UNKNOWN__: 是欄位，但清單裡沒有對應項目")
     return "\n".join(lines)
-
-
-# 由起訖兩欄合成的欄位。表格有時印一欄「就學期間」，有時印「入學年月／畢業年月」，
-# 使用者只需要填後者。
-DERIVED_FROM = {
-    "education[].period": ("education[].start", "education[].end"),
-    "experience[].period": ("experience[].start", "experience[].end"),
-    "basic.military_period": ("basic.military_start", "basic.military_end"),
-    "basic.age": ("basic.birthday",),
-}
 
 # 標籤 → 欄位的確定性對照（squash 後精確比對）。
 # 表格印的字和 FIELDS 的 label 一模一樣時，對映沒有第二種答案，
@@ -317,6 +309,9 @@ PER_JOB_LABELS = {
     "應徵職缺": "job.title",
     "工作地點": "job.location",
 }
+# 只算那一份工作的欄位：不進我的資料（存檔、匯入都擋），值只從「這次應徵」來。
+# 要跟上面的欄名表一致（tests/test_fields.py 會檢查），漏一邊就會有一邊照舊存進我的資料
+PER_JOB_KEYS = frozenset(f.key for f in FIELDS if f.per_job)
 
 # 勾選題是拿個人資料的值去比對表單上印出來的選項字串，同義不同字就整格填不進去：
 # 表單印「□是 □否」而資料存「無」、印「□退伍」而資料存「役畢」、

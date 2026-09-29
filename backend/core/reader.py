@@ -112,7 +112,7 @@ def read(text: str, host: str, model: str,
     log.debug("read: text_len=%d images=%d closed=%s sections=%s",
               len(text), len(images or []), sorted(closed),
               {r: len(t) for r, t in sections.items()})
-    fields = describe_fields(include_special=False, skip_derived=True)
+    fields = describe_fields(include_special=False, skip_derived=True, skip_per_job=True)
     user = f"可抽取的欄位：\n{fields}\n\n履歷全文：\n{text}"
     if images:
         content: List[Dict[str, Any]] = [{"type": "text", "text": user}]
@@ -185,8 +185,10 @@ def _schema(closed: set = frozenset()) -> Dict[str, Any]:
     rows: Dict[str, Dict[str, Any]] = {}
 
     for f in FIELDS:
-        # 合成欄位（就學期間＝入學＋畢業）由起訖兩欄算出來，抽了也進不了表單
-        if f.derived:
+        # 合成欄位（就學期間＝入學＋畢業）由起訖兩欄算出來，抽了也進不了表單。
+        # 應徵職務、工作地點只算那一份工作，不進我的資料：抽了也會被丟掉，
+        # 模型還可能把履歷上的「希望職稱」放進這裡，而不是放進期望職務
+        if f.derived or f.per_job:
             continue
         if f.key.split("[].")[0].split(".")[0] in closed:
             continue

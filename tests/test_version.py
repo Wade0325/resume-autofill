@@ -43,3 +43,10 @@ def test_health回報版本而且啟動器認得出來(client):
     r = client.get("/api/health")
     assert r.json()["version"] == backend.__version__
     assert '"api":"ok"' in r.text
+
+
+def test_API文件跟著一致():
+    """/docs 顯示的版本。以前寫死 0.1.0，發到 0.2.0 還是 0.1.0。"""
+    from backend.main import app
+
+    assert app.version == backend.__version__

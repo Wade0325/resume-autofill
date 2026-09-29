@@ -5,7 +5,8 @@ r"""空白履歷表 ＋ 個人資料（app.db 那份 JSON）→ 填好的履歷�
 另一條路是 planner.py（規則錨定＋純文字模型），兩條都在，由 service 決定用哪一條。
 
 這個檔案同時是研究對象：claude_code_in_agent/ 那套評分與研究迴圈跑的就是它，
-改進填寫效果就是改這裡。介面只有三個：analyze()、write()、solve()。
+改進填寫效果就是改這裡。研究迴圈用的是 analyze()、write()、solve()；產品（service.py）
+另外還用 parse()、fields_of()、printed_text()、form_slots()，改這些要兩邊一起看。
 
 作法：程式決定「哪裡能寫、怎麼寫」，模型只決定「這個位置放哪一項資料」。
 
@@ -16,11 +17,12 @@ r"""空白履歷表 ＋ 個人資料（app.db 那份 JSON）→ 填好的履歷�
      列首印著學位的照學位放、有序號欄的照序號、都沒有才由上而下
   4. 其餘位置分批問模型：這裡該填哪一項資料（挑不到就 __無__）。答案被 JSON Schema
      約束成只能挑既有的項目代碼，模型編不出不存在的資料
-  5. 補漏：還空著的位置，只拿名稱相近、還沒用到的幾項資料再問一次（一次塞不下才切開）
+  5. 字面對不上的勾選題（資料「無」、表格印「□否」）交給模型判斷意思；
+     是非題只讓模型判斷相不相關，勾哪個由程式決定
   6. 過濾與去重：放錯地方的配對擋掉（詞對不上、表格沒提到的別人的資料、選項值
      離開了題目），同一項資料在同一張表只留欄名最像的那一格
-  7. 字面對不上的勾選題（資料「無」、表格印「□否」）交給模型判斷意思；
-     是非題只讓模型判斷相不相關，勾哪個由程式決定
+  7. 補漏：還空著的位置，只拿名稱相近、還沒用到的幾項資料再問一次（一次塞不下才切開），
+     補完再去重一次
   8. 程式把值寫進去：日期照單位拆格、西元換民國、期間由起訖重算。
      原本印在表格上的字一個都不會動
 
@@ -28,7 +30,7 @@ r"""空白履歷表 ＋ 個人資料（app.db 那份 JSON）→ 填好的履歷�
 憑空捏造沒有的資料、順手改掉原本印的標點（40 格只對 13 格，另外多填 68 格）。
 位置與寫法收回程式手上之後，這三類錯誤從結構上消失。
 
-實測結果與每一項修正的效果見同目錄的 notes.md。
+實測結果與每一項修正的效果見 claude_code_in_agent/notes.md（研究資料夾，沒進版控）。
 
 單獨試跑一份與逐格評分：claude_code_in_agent/README.md
 """
@@ -100,7 +102,7 @@ UNITS = ("公分", "公斤", "cm", "kg", "年", "月", "日", "時", "分", "秒
 DATE_UNITS = ("年", "月", "日", "時", "分", "秒")
 # 單位後面可以再接的字：「＿月＿日後」的「日」一樣是單位
 UNIT_SUFFIX = "後前起"
-# 台灣的市話區碼，長的排前面（「(　　)＿＿」要把 0224596466 拆成 02 與 24596466）
+# 台灣的市話區碼，長的排前面（「(　　)＿＿」要把 0223456789 拆成 02 與 23456789）
 AREA_CODES = ("0836", "0826", "089", "082", "049", "037",
               "02", "03", "04", "05", "06", "07", "08")
 DATE_RE = re.compile(r"(\d{2,4})\s*[年/.\-]\s*(\d{1,2})(?:\s*[月/.\-]\s*(\d{1,2}))?")
@@ -672,11 +674,18 @@ def fields_of(profile: Dict[str, Any]) -> Dict[str, str]:
            if not getattr(_spec(k), "derived", False)}
     for root in ("education", "experience"):
         for i, row in enumerate(profile.get(root) or []):
-            if isinstance(row, dict) and row.get("start") and row.get("end"):
-                out[f"{root}[{i}].period"] = (f"{_canon_date(row['start'])}"
-                                              f"~{_canon_date(row['end'])}")
-                if root == "experience" and _tenure(row["start"], row["end"]):
-                    out[f"{root}[{i}].tenure"] = _tenure(row["start"], row["end"])
+            if not isinstance(row, dict):
+                continue
+            # 手改過的備份或直接呼叫 API 存進來的年份可能是數字（2018），先轉字串，
+            # 不然正規式當場拋錯
+            start, end = str(row.get("start") or ""), str(row.get("end") or "")
+            if start and end:
+                # 年資也用換過寫法的日期算：「民國105年09月」換成西元才能跟「至今」相減
+                start, end = _canon_date(start), _canon_date(end)
+                out[f"{root}[{i}].period"] = f"{start}~{end}"
+                tenure = _tenure(start, end) if root == "experience" else ""
+                if tenure:
+                    out[f"{root}[{i}].tenure"] = tenure
     basic = profile.get("basic") or {}
     # 生日曆制＝民國：存的「85年04月15日」是民國年，換成西元（見 _canon_date）
     birthday = str(basic.get("birthday") or "").strip()
@@ -699,7 +708,8 @@ def fields_of(profile: Dict[str, Any]) -> Dict[str, str]:
     dated = [row for row in (profile.get("experience") or [])
              if isinstance(row, dict)
              and str(row.get("start") or "").strip() and str(row.get("end") or "").strip()]
-    spans = [_months(str(row["start"]), str(row["end"])) for row in dated]
+    spans = [_months(_canon_date(str(row["start"])), _canon_date(str(row["end"])))
+             for row in dated]
     if spans and all(spans):
         out["basic.total_tenure"] = _span(sum(spans))
     return out
@@ -741,7 +751,13 @@ def _months(start: str, end: str) -> int:
         end_year, end_month = int(b.group(1)), int(b.group(2))
     if not a:
         return 0
-    months = (end_year * 12 + end_month) - (int(a.group(1)) * 12 + int(a.group(2))) + 1
+    start_year = int(a.group(1))
+    # 一端是沒寫民國的兩三位數年份（「110年01月」），另一端是西元或至今：直接相減會差出
+    # 1911 年，寫出「1916年9個月」。是哪一種曆不猜（見 _canon_date），當成算不出來。
+    # 兩端都是民國年時相減的結果一樣，照算
+    if (start_year < 1000) != (end_year < 1000):
+        return 0
+    months = (end_year * 12 + end_month) - (start_year * 12 + int(a.group(2))) + 1
     return months if months > 0 else 0
 
 
@@ -753,12 +769,12 @@ def _span(months: int) -> str:
 def _tenure(start: str, end: str) -> str:
     """年資：頭尾兩個月都算，跟 104、LinkedIn 的算法一樣（2023年7月～2026年4月＝2年10個月）。
     還在職（訖是「至今」）就算到這個月。
-    認不出日期、或起訖顛倒就不算——寧可空著，不寫一個錯的年資。"""
+    認不出日期、起訖顛倒、或兩端的曆對不上就不算——寧可空著，不寫一個錯的年資。"""
     return _span(_months(start, end))
 
 
-# 國語羅馬拼音的音節（威妥瑪、漢語、通用拼音混著收）。護照全名存成「KUOWEITE」這種
-# 沒有分隔的寫法時，要靠它切出「KUO WEI TE」才知道姓氏是哪一段
+# 國語羅馬拼音的音節（威妥瑪、漢語、通用拼音混著收）。護照全名存成「WANGHSIAOMING」這種
+# 沒有分隔的寫法時，要靠它切出「WANG HSIAO MING」才知道姓氏是哪一段
 _SYLLABLE_RE = re.compile(
     r"(?:CH|SH|ZH|TS|TZ|HS|SZ|SS|[BPMFDTNLGKHJQXZCSRWY])?"
     r"(?:IUNG|IANG|IONG|UANG|UENG|ANG|ENG|ING|ONG|UNG|IAN|IAO|IEN|IEH|UAI|UAN|UEI|UEN|UEH"
@@ -768,8 +784,8 @@ _SYLLABLE_RE = re.compile(
 def _surname_en(passport: str, name_zh: str) -> str:
     """護照全名裡的姓氏拼音。
 
-    有分隔的（「KUO, WEI-TE」「KUO WEI TE」）取第一段；只有兩段而其中一段帶連字號
-    （「WEI-TE KUO」），帶連字號的是名字，另一段才是姓。沒有分隔的（「KUOWEITE」）
+    有分隔的（「WANG, HSIAO-MING」「WANG HSIAO MING」）取第一段；只有兩段而其中一段帶連字號
+    （「HSIAO-MING WANG」），帶連字號的是名字，另一段才是姓。沒有分隔的（「WANGHSIAOMING」）
     照中文姓名的字數切音節——三個字就要剛好切成三個音節，所有切法的第一個音節都
     相同才採用，切得出兩種姓氏就不猜。四個字的名字當成複姓（歐陽、司馬）。
     """
@@ -1122,12 +1138,12 @@ def _area_code(slot: Slot, value: str) -> str:
     """
     text = (value or "").strip()
     digits = re.sub(r"\D", "", text)
-    given = re.match(r"\(?(0\d{1,3})\)?[\s\-)]", text)      # 值自己就分好了：02-24596466
+    given = re.match(r"\(?(0\d{1,3})\)?[\s\-)]", text)      # 值自己就分好了：02-23456789
     code = (given.group(1) if given
             else next((c for c in AREA_CODES if digits.startswith(c)), ""))
     if not code or digits.startswith("09") or len(digits) < 9:
         return ""
-    # 括號裡不留空白：「(02)24596466」，跟一般寫電話的樣子一樣
+    # 括號裡不留空白：「(02)23456789」，跟一般寫電話的樣子一樣
     return code + slot.filler[-1] + digits[len(code):]
 
 

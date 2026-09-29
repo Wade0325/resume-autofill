@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import config, db, model_manager, webform
+from . import __version__, config, db, model_manager, webform
 from .api import imports, jobs, logs, meta, models, profile, templates
 from .api import webform as webform_api
 from .logging_setup import request_id_var, setup_logging
@@ -69,7 +69,7 @@ async def lifespan(app: FastAPI):
     log.info("服務關閉")
 
 
-app = FastAPI(title="Resume AutoFill", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Resume AutoFill", version=__version__, lifespan=lifespan)
 
 # 前端定期輪詢的端點：成功回應多到會洗版，降成 DEBUG；失敗仍照常記 WARNING。
 # 除了固定路徑，分析期間每兩秒一次的進度查詢（GET /api/jobs/{id}、
